@@ -1,0 +1,888 @@
+{
+  "name": "Receive approve/ reject/ flag submission interactivity from Slack via Webhook",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "f165c45d-6d3d-47c3-b1bd-0a4a7449ee9d",
+        "options": {}
+      },
+      "id": "104a0025-d2a4-4d8e-9e85-93b00f3ba1ac",
+      "name": "Receive Slack Button Click",
+      "type": "n8n-nodes-base.webhook",
+      "position": [
+        1136,
+        816
+      ],
+      "typeVersion": 2,
+      "webhookId": "f165c45d-6d3d-47c3-b1bd-0a4a7449ee9d"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a493fcd6-0bf3-4887-bd69-4026c14c3d22",
+              "name": "payload",
+              "type": "object",
+              "value": "={{ JSON.parse($json.body.payload) }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8a48a3a1-6f73-4155-9e1c-8044ead21e01",
+      "name": "Parse Slack Payload",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        1408,
+        816
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "leftValue": "={{ $json.decision }}",
+                    "rightValue": "approve",
+                    "id": "d6a36a61-e745-44e9-8ec0-4a5197868129"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Approved"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "leftValue": "={{ $json.decision }}",
+                    "rightValue": "reject",
+                    "id": "f1e56a5f-8d8a-4c45-9555-be87ea88d89b"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Rejected"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "leftValue": "={{ $json.decision }}",
+                    "rightValue": "flag",
+                    "id": "e8c225cd-056d-428d-900f-322f42fb31d9"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Flagged"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "9cb6dc52-ac5c-4407-99e0-7d11cc7c58c8",
+      "name": "Route: Approved / Rejected / Flagged",
+      "type": "n8n-nodes-base.switch",
+      "position": [
+        1952,
+        800
+      ],
+      "typeVersion": 3.2
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0BGP49944R",
+          "mode": "list",
+          "cachedResultName": "all-threecupteacom"
+        },
+        "text": "=✅ *The return/ refund request Approved*\nThe refund/ request id: *{{ $('Route: Approved / Rejected / Flagged').item.json.refund_request_id }}* of *${{ $('Route: Approved / Rejected / Flagged').item.json.refund_amount }}* by *{{ $('Route: Approved / Rejected / Flagged').item.json.customer_name }}* was\n*Approved by:* {{ $('Route: Approved / Rejected / Flagged').item.json.decided_by }}\n{{ $('Route: Approved / Rejected / Flagged').item.json.decision_reason.trim() ? \"*Reason:* \" + $('Route: Approved / Rejected / Flagged').item.json.decision_reason.trim() : \"\" }}\n---------------------------------------------------------------------------------------------------------",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "id": "40eb101f-d6e5-4a62-86aa-86c5f7793ad9",
+      "name": "Slack DM: Approved ✅",
+      "type": "n8n-nodes-base.slack",
+      "position": [
+        2576,
+        608
+      ],
+      "typeVersion": 2.3,
+      "webhookId": "4a7246ae-4bf6-496e-a2e3-8a3edc9a5ce7",
+      "credentials": {
+        "slackApi": {
+          "id": "pq0cnkzxYiAACCAZ",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0BGP49944R",
+          "mode": "list",
+          "cachedResultName": "all-threecupteacom"
+        },
+        "text": "=🚩 *The return/ refund request Flagged for Review*\nThe refund/ request id: *{{ $('Route: Approved / Rejected / Flagged').item.json.refund_request_id }}* of *${{ $('Route: Approved / Rejected / Flagged').item.json.refund_amount }}* by *{{ $('Route: Approved / Rejected / Flagged').item.json.customer_name }}* was\n*Flagged by:* {{ $('Route: Approved / Rejected / Flagged').item.json.decided_by }}\n{{ $('Route: Approved / Rejected / Flagged').item.json.decision_reason.trim() ? \"*Reason:* \" + $('Route: Approved / Rejected / Flagged').item.json.decision_reason.trim() : \"\" }}\n⚠️ Please review this invoice manually and follow up with the customer.\n---------------------------------------------------------------------------------------------------------",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "id": "fa345aeb-9caf-4ea3-be8c-ffffabfa287b",
+      "name": "Slack DM: Flagged 🚩",
+      "type": "n8n-nodes-base.slack",
+      "position": [
+        2576,
+        1024
+      ],
+      "typeVersion": 2.3,
+      "webhookId": "695fbf6d-fa2c-4632-a72a-c1ff6f3bfbdc",
+      "credentials": {
+        "slackApi": {
+          "id": "pq0cnkzxYiAACCAZ",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "# 📥 Refund  Request Approval Handler\n(Slack Button Listener)\n\n## What This Workflow Does\nListens for button clicks from the **Request → Slack Approval** workflow. When someone clicks Approve, Reject, or Flag on a refund request in Slack, this workflow captures that decision and rthe reason if any, update  them on **Google Sheets**, and sends a confirmation notification.\n\n## How It Works\n1. **Webhook Trigger** – Receives POST request from Slack when a button is clicked\n2. **Parse Payload** – Decode JSON payload from Slack's request body\n3. **Extract Action Data** – Extract decision, user info, and refund request details from the message\n4. **Route by Decision** – Branches to Approved, Rejected, or Flagged path\n5. **Update to Sheets** – Update the decision and its reason and who decided\n6. **Notify via Slack** – Sends confirmation DM to the approver\n\n## Action Routes\n- ✅ **Approved** → Logs to \"Approved\" sheet → DM confirmation\n- ❌ **Rejected** → Logs to \"Rejected\" sheet → DM confirmation\n- 🚩 **Flagged** → Logs to \"Flagged\" sheet → DM for manual review\n\n---\n\n## Setup Guide\n\n### 1. Create Google Sheet\n1. Create a Master Google Sheet \n2. Add needed column headers to the master sheet. In my case \n   - refund_request_id\n   - order_number\n   - refund_amount\n   - customer_name\n   - delivery_date\n   - decision\n   - decided_by\n   - decision_reason\n\n### 2. Connect the Nodes in n8n\n1. Add your **Google Sheets OAuth2** credential to all three  google sheet nodes\n2. Update the **Document ** in each Google Sheets node to your Sheet\n3. Add your **Slack API** credential to all three notification nodes\n4. Update the **Channel** in the notification nodes\n\n### 3. Configure Slack Interactivity\n1. Go to **api.slack.com/apps** → your app → **Interactivity & Shortcuts**\n2. Set the Request URL to this workflow's production webhook URL \n3. Check Slack API to see what permission are needed for Slack bot interactivity\n4. Update and save changes. \n\n### 4. Activate & Test\n1. Publish and execute workflow of the Listener \n2. Trigger the Approval workflow to send a Slack message\n3. Click a button in Slack\n4. Check Google Sheets and Slack for results\n\nSlack can integrate with apps in Socket mode : False (HTTP request) or  Socket mode : True (WebSocket). n8n offcially only support Socket mode : False.   You can install WebSocket community node in self-hosted n8n instance.  \n\nYour app can integrate with Slack either way.  Take the followings into consideraion.\n\n1. WebSocket is using `ws` or `wss` protocol.  The former transports data in plain text . HTTP POST is url-encoded.  \n2. It is not easy to scale out using `ws` or `wss` .  It's very easy to scale out in `HTTP` or `HTTPS`.\n3. However, a public URL which local environment lacks  is required to integrate with Slack using HTTP request.   You need  [ngrok](https://ngrok.com/) to spin up a public ngURL so that  Slack can send WebHook message.  \n\nHave a fun!! \n",
+        "height": 1520,
+        "width": 672
+      },
+      "id": "0fc8cec7-d485-4e4d-b1bb-fb5815a79d2b",
+      "name": "Sticky Note6",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        368,
+        144
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ecc7c2a7-85a2-4bb6-8213-06b409ab9281",
+              "name": "decision",
+              "type": "string",
+              "value": "={{ $json.payload.actions[0].value }}"
+            },
+            {
+              "id": "d6f8aad0-508f-4a38-99ed-00eb76bcd7f8",
+              "name": "decided_by",
+              "type": "string",
+              "value": "={{ $json.payload.user.name }}"
+            },
+            {
+              "id": "224e0814-6d1f-4ff8-90d5-a08bb05da837",
+              "name": "message_ts",
+              "type": "string",
+              "value": "={{ $json.payload.message.ts }}"
+            },
+            {
+              "id": "77880789-6396-4058-8824-a16d617395fe",
+              "name": "decision_reason",
+              "value": "={{ $json.payload.state.values.reason_input.reason_value.value }}",
+              "type": "string"
+            },
+            {
+              "id": "5c45794a-a975-4548-8921-dc24d8633ae0",
+              "name": "refund_request_id",
+              "value": "={{ $json.payload.actions[0].block_id.split(\"|\")[0] }}",
+              "type": "string"
+            },
+            {
+              "id": "dccc735a-22ec-44e8-8046-c0964e64e0c3",
+              "name": "refund_amount",
+              "value": "={{ $json.payload.actions[0].block_id.split(\"|\")[1] }}",
+              "type": "number"
+            },
+            {
+              "id": "140363e5-ff26-4822-b35a-c8ea506f9c6a",
+              "name": "customer_name",
+              "value": "={{ $json.payload.actions[0].block_id.split(\"|\")[2] }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4a900b96-54a7-4b19-8db5-ac30ed8f522e",
+      "name": "Extract Action & Request, and Order Data",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        1680,
+        816
+      ],
+      "typeVersion": 3.4,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0BGP49944R",
+          "mode": "list",
+          "cachedResultName": "all-threecupteacom"
+        },
+        "text": "=❌ *The return/ refund request Rejected*\nThe refund/ request id: *{{ $('Route: Approved / Rejected / Flagged').item.json.refund_request_id }}* of *${{ $('Route: Approved / Rejected / Flagged').item.json.refund_amount }}* by *{{ $('Route: Approved / Rejected / Flagged').item.json.customer_name }}* was\n*Rejected by:* {{ $('Route: Approved / Rejected / Flagged').item.json.decided_by }}\n{{ $('Route: Approved / Rejected / Flagged').item.json.decision_reason.trim() ? \"*Reason:* \" + $('Route: Approved / Rejected / Flagged').item.json.decision_reason.trim() : \"\" }}\n---------------------------------------------------------------------------------------------------------",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "id": "0c2c38f5-30a6-431b-aa78-c4dd24e50638",
+      "name": "Slack DM: Rejected ❌",
+      "type": "n8n-nodes-base.slack",
+      "position": [
+        2592,
+        816
+      ],
+      "typeVersion": 2.3,
+      "webhookId": "4a7246ae-4bf6-496e-a2e3-8a3edc9a5ce7",
+      "credentials": {
+        "slackApi": {
+          "id": "pq0cnkzxYiAACCAZ",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1NBu8u9woNh1fq4lypsXTP_7GtvUSdix5z_FlnY4uGM8",
+          "mode": "list",
+          "cachedResultName": "Refund/ return requests",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1NBu8u9woNh1fq4lypsXTP_7GtvUSdix5z_FlnY4uGM8/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Master",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1NBu8u9woNh1fq4lypsXTP_7GtvUSdix5z_FlnY4uGM8/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "refund_request_id": "={{ $json.refund_request_id }}",
+            "status": "manual_approve",
+            "decision_reason": "={{ $json.decision_reason }}",
+            "decided_by": "={{ $json.decided_by }}"
+          },
+          "matchingColumns": [
+            "refund_request_id"
+          ],
+          "schema": [
+            {
+              "id": "refund_request_id",
+              "displayName": "refund_request_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "order_number",
+              "displayName": "order_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "refund_amount",
+              "displayName": "refund_amount",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "customer_name",
+              "displayName": "customer_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "delivery_date",
+              "displayName": "delivery_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "refund_request_date",
+              "displayName": "refund_request_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "require_manual_approval",
+              "displayName": "require_manual_approval",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "decided_by",
+              "displayName": "decided_by",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "decision_reason",
+              "displayName": "decision_reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "832ec953-c314-461b-ad4c-0a33a6d4dad2",
+      "name": "Update to  Sheets: Approved ✅",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [
+        2320,
+        608
+      ],
+      "typeVersion": 4.5,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "nsPKnigi9aCm2MbK",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1NBu8u9woNh1fq4lypsXTP_7GtvUSdix5z_FlnY4uGM8",
+          "mode": "list",
+          "cachedResultName": "Refund/ return requests",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1NBu8u9woNh1fq4lypsXTP_7GtvUSdix5z_FlnY4uGM8/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Master",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1NBu8u9woNh1fq4lypsXTP_7GtvUSdix5z_FlnY4uGM8/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "refund_request_id": "={{ $json.refund_request_id }}",
+            "status": "manual_reject",
+            "decision_reason": "={{ $json.decision_reason }}",
+            "decided_by": "={{ $json.decided_by }}"
+          },
+          "matchingColumns": [
+            "refund_request_id"
+          ],
+          "schema": [
+            {
+              "id": "refund_request_id",
+              "displayName": "refund_request_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "order_number",
+              "displayName": "order_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "refund_amount",
+              "displayName": "refund_amount",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "customer_name",
+              "displayName": "customer_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "delivery_date",
+              "displayName": "delivery_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "refund_request_date",
+              "displayName": "refund_request_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "require_manual_approval",
+              "displayName": "require_manual_approval",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "decided_by",
+              "displayName": "decided_by",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "decision_reason",
+              "displayName": "decision_reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "2841586e-c7fa-4c3d-aaf7-0fc89f4d52f4",
+      "name": "Update to Sheets: Rejected ❌",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [
+        2320,
+        816
+      ],
+      "typeVersion": 4.5,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "nsPKnigi9aCm2MbK",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1NBu8u9woNh1fq4lypsXTP_7GtvUSdix5z_FlnY4uGM8",
+          "mode": "list",
+          "cachedResultName": "Refund/ return requests",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1NBu8u9woNh1fq4lypsXTP_7GtvUSdix5z_FlnY4uGM8/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Master",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1NBu8u9woNh1fq4lypsXTP_7GtvUSdix5z_FlnY4uGM8/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "refund_request_id": "={{ $json.refund_request_id }}",
+            "status": "manual_flag",
+            "decision_reason": "={{ $json.decision_reason }}",
+            "decided_by": "={{ $json.decided_by }}"
+          },
+          "matchingColumns": [
+            "refund_request_id"
+          ],
+          "schema": [
+            {
+              "id": "refund_request_id",
+              "displayName": "refund_request_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "order_number",
+              "displayName": "order_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "refund_amount",
+              "displayName": "refund_amount",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "customer_name",
+              "displayName": "customer_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "delivery_date",
+              "displayName": "delivery_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "refund_request_date",
+              "displayName": "refund_request_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "require_manual_approval",
+              "displayName": "require_manual_approval",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "decided_by",
+              "displayName": "decided_by",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "decision_reason",
+              "displayName": "decision_reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "374c2372-b90a-4e68-a85b-0a3cac139e12",
+      "name": "Update to Sheets: Flagged 🚩",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [
+        2320,
+        1024
+      ],
+      "typeVersion": 4.5,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "nsPKnigi9aCm2MbK",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Parse Slack Payload": {
+      "main": [
+        [
+          {
+            "node": "Extract Action & Request, and Order Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Receive Slack Button Click": {
+      "main": [
+        [
+          {
+            "node": "Parse Slack Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route: Approved / Rejected / Flagged": {
+      "main": [
+        [
+          {
+            "node": "Update to  Sheets: Approved ✅",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update to Sheets: Rejected ❌",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update to Sheets: Flagged 🚩",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Action & Request, and Order Data": {
+      "main": [
+        [
+          {
+            "node": "Route: Approved / Rejected / Flagged",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update to  Sheets: Approved ✅": {
+      "main": [
+        [
+          {
+            "node": "Slack DM: Approved ✅",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update to Sheets: Rejected ❌": {
+      "main": [
+        [
+          {
+            "node": "Slack DM: Rejected ❌",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update to Sheets: Flagged 🚩": {
+      "main": [
+        [
+          {
+            "node": "Slack DM: Flagged 🚩",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "050c1182-5694-4fd8-b601-33d3520c438d",
+  "meta": {
+    "templateId": "14515",
+    "templateCredsSetupCompleted": true,
+    "instanceId": "fd57f82ccd2d5fb57186ab9032d650d2a64b07e7cdbed13cf86ab788b8084c66"
+  },
+  "nodeGroups": [],
+  "id": "phEtC4kpE6js4vaL",
+  "tags": []
+}

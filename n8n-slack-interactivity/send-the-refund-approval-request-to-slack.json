@@ -1,0 +1,285 @@
+{
+  "name": "Send the refund Approval request to Slack",
+  "nodes": [
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://hooks.slack.com/services/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",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "slackApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"text\":\"HITL Approval Required\",\"blocks\":[{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"*HITL Approval required for refund request*\\n\\n*Refund request id:* {{ $json.refund_request_id }}\\n*Original order number:* {{ $json.order_number }}\\n*Refund amount:* ${{ $json.refund_amount }}\\n*Customer name:* {{ $json.customer_name.toSentenceCase() }}\\n *Delivery date:* {{ $json.delivery_date }}\"}},{\"type\":\"input\",\"block_id\":\"reason_input\",\"optional\":true,\"element\":{\"type\":\"plain_text_input\", \"action_id\":\"reason_value\",\"placeholder\":{\"type\":\"plain_text\",\"text\":\"Elaborate the reason for your decision if needed...\"},\"multiline\":false},\"label\":{ \"type\":\"plain_text\",\"text\":\"Reason (Optional):\"}},{\"type\":\"actions\",\"block_id\":\"{{ $json.refund_request_id }}|{{ $json.refund_amount }}|{{ $json.customer_name.toSentenceCase() }}\",\"elements\":[{\"type\":\"button\",\"text\":{\"type\":\"plain_text\",\"text\":\"✅ Approve'\"}, \"style\":\"primary\",\"action_id\":\"approve_action\",\"value\":\"approve\"},{\"type\":\"button\",\"text\":{\"type\":\"plain_text\",\"text\":\"❌ Reject\"},\"style\":\"danger\",\"action_id\":\"reject_action\",\"value\":\"reject\"},{\"type\":\"button\",\"text\":{\"type\":\"plain_text\",\"text\":\"⚠️ Flag\"},\"action_id\":\"flag_action\",\"value\":\"flag\"}] }]}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        592,
+        96
+      ],
+      "id": "6dd22864-3164-4aab-aba7-52bacdc786d6",
+      "name": "HTTP Request with optional input",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "ynAHhCVeJpbvZxxc",
+          "name": "Slack OAuth2 API"
+        },
+        "slackApi": {
+          "id": "pq0cnkzxYiAACCAZ",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        80,
+        96
+      ],
+      "id": "7d4736f2-b48b-4a01-85b5-9c28831abf40",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1NBu8u9woNh1fq4lypsXTP_7GtvUSdix5z_FlnY4uGM8",
+          "mode": "list",
+          "cachedResultName": "Refund/ return requests",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1NBu8u9woNh1fq4lypsXTP_7GtvUSdix5z_FlnY4uGM8/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Master",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1NBu8u9woNh1fq4lypsXTP_7GtvUSdix5z_FlnY4uGM8/edit#gid=0"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "require_manual_approval",
+              "lookupValue": "Y"
+            },
+            {
+              "lookupColumn": "status",
+              "lookupValue": "pending"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        288,
+        96
+      ],
+      "id": "eecc3d5b-333f-4d04-8f9c-d58c8f627ca2",
+      "name": "Get row(s) in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "nsPKnigi9aCm2MbK",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1NBu8u9woNh1fq4lypsXTP_7GtvUSdix5z_FlnY4uGM8",
+          "mode": "list",
+          "cachedResultName": "Refund/ return requests",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1NBu8u9woNh1fq4lypsXTP_7GtvUSdix5z_FlnY4uGM8/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Master",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1NBu8u9woNh1fq4lypsXTP_7GtvUSdix5z_FlnY4uGM8/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "refund_request_id",
+              "displayName": "refund_request_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "order_number",
+              "displayName": "order_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "refund_amount",
+              "displayName": "refund_amount",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "customer_name",
+              "displayName": "customer_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "delivery_date",
+              "displayName": "delivery_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "refund_request_date",
+              "displayName": "refund_request_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "require_manual_approval",
+              "displayName": "require_manual_approval",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "decided_by",
+              "displayName": "decided_by",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "decision_reason",
+              "displayName": "decision_reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        96,
+        -176
+      ],
+      "id": "6701bd28-ff14-49c8-8cea-cfc0177ffcaf",
+      "name": "Append row in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "nsPKnigi9aCm2MbK",
+          "name": "Google Sheets OAuth2 API"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "content": "## Refund  request approval business use case integrating with Slack interactivity\n\nThere are bi-directional workflows.  This is the workflow to send request to Slack. The workflow 'Receive approve/ reject/ flag submission interactivity from Slack via Webhook' listens, processes and sends the confirmation message to Slack.\n\nFor your reference\n[The Slack bot approval interactivity screenshot ](https://github.com/threecuptea/customer-support-agents/blob/main/n8n-slack-interactivity/slack-screenshot-screenshot-refund-request-approval.png). \n\nn8n provides a Slack 'Send a message' convenient component which only need Slack API credential and does not require POST URL.  I need to customize to have\n1) decision_reason input box\n2) There can be Slack interactivities from multiple refund requests.  I encode  `refund_request_id` in the 'block_id' so that   'Receive approve/ reject/ flag submission interactivity from Slack via Webhook' workflow can parse and locate the correct row of `refund_request_id`  on the Google sheet then update it accordingly.\n3) I also need `refund_amount` and `customer_name` as part of the confirmation message sent to Slack.  All of them are encoded in 'block_id' and delimited with '|'.\n \nHTTP Request component requires a POST URL which comes from the `Webhook URL` of `Incoming Webhooks`  of Slack configuration.  Bear in mind that a new `Webhook URL` will be added every time we updated the Bot permission.  We need to keep  POST URL in sync with it.\n\nPOST message basically has  `text` and `blocks` attributes and Slack provide [Slack Block Kit Builder Templates](https://app.slack.com/block-kit-builder/T0BHFGFMTJL/templates) and you can download or copy and modify from there.  Notice.  Slack blocks is using `mrkdwn` instead of `markdown` type.  Check out its syntax.  \n\nIt's easy for me to test using manual trigger.  You should swap `Append row in sheet` with two components `When clicking 'Execute workflow'` as well as `Get row(s) in sheet`   ",
+        "height": 1232,
+        "width": 400
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -704,
+        -656
+      ],
+      "typeVersion": 1,
+      "id": "8ae8536c-9cf5-4516-8c31-c9549f673fc3",
+      "name": "Sticky Note"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Get row(s) in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s) in sheet": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request with optional input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "a4d2cc7b-33ac-41e8-ae5e-157f9c267933",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "fd57f82ccd2d5fb57186ab9032d650d2a64b07e7cdbed13cf86ab788b8084c66"
+  },
+  "nodeGroups": [],
+  "id": "J8LaNJVuB3ltPIR1",
+  "tags": []
+}
