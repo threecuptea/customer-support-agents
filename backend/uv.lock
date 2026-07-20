@@ -400,7 +400,7 @@ wheels = [
 ]
 
 [[package]]
-name = "custom-support-agents-backend"
+name = "customer-support-agents"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

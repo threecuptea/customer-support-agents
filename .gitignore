@@ -113,3 +113,11 @@ terraform.tfvars
 #Exceptions
 memory
 data
+
+# temporary files
+*.swp
+docker-compose.yml.bak
+Dockerfile.bak
+
+# LangGraph durable checkpoint DB (runtime artifact, see CHECKPOINT_DB)
+backend/checkpoints.sqlite

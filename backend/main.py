@@ -19,11 +19,13 @@ import logging
 import os
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from langgraph.checkpoint.memory import MemorySaver
@@ -74,6 +76,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- Static frontend (Next.js `output: "export"` build) ---------------------
+# In the single-container image, `frontend/out` is copied next to this file
+# (see Dockerfile). It won't exist when running the backend standalone in dev
+# (`npm run dev` serves the frontend separately in that case).
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend" / "out"
+
+if (FRONTEND_DIR / "_next").is_dir():
+    app.mount("/_next", StaticFiles(directory=FRONTEND_DIR / "_next"), name="next-static")
+
 
 # --- Request models ---------------------------------------------------------
 class AgentStart(BaseModel):
@@ -110,7 +121,7 @@ def _interrupt_info(result) -> tuple[bool, str | None]:
     return False, None
     
 
-@app.get("/health")
+@app.get("/api/health")
 async def health():
     return {"status": "ok"}
 
@@ -131,7 +142,7 @@ def _approval_payload(state, result) -> dict:
     }
 
 
-@app.post("/approval/start")
+@app.post("/api/approval/start")
 async def approval_start(data: ApprovalStart, request: Request):
     """Draft content for a task and pause for human review."""
     graph = request.app.state.approval_graph
@@ -157,7 +168,7 @@ async def approval_start(data: ApprovalStart, request: Request):
         raise HTTPException(status_code=500, detail=f"Error starting approval: {exc}")
 
 
-@app.post("/approval/decide")
+@app.post("/api/approval/decide")
 async def approval_decide(data: ApprovalDecision, request: Request):
     """Resume the approval workflow with approve / edit / reject."""
     graph = request.app.state.approval_graph
@@ -179,7 +190,7 @@ async def approval_decide(data: ApprovalDecision, request: Request):
         raise HTTPException(status_code=500, detail=f"Error in approval decision: {exc}")
 
 
-# --- Agent engine (create_agent + HITL middleware) --------------------------
+# --- Agent engine (create_agent + HITL middleware), this only for reference only and most likely will be cleaned up later --------------------------
 def _sse(generator) -> StreamingResponse:
     async def body():
         async for chunk in generator:
@@ -192,7 +203,7 @@ def _sse(generator) -> StreamingResponse:
     )
 
 
-@app.post("/agent/start")
+@app.post("/api/agent/start")
 async def agent_start(data: AgentStart, request: Request):
     """Start (or continue) an agentic run; streams progress, tokens, approvals."""
     graph = request.app.state.agent_graph
@@ -227,13 +238,45 @@ async def agent_start(data: AgentStart, request: Request):
     return _sse(gen())
 
 
-@app.post("/agent/decide")
+@app.post("/api/agent/decide")
 async def agent_decide(data: AgentDecision, request: Request):
     """Resume the agent with approve / edit / reject / respond decisions."""
     graph = request.app.state.agent_graph
     config = {"configurable": {"thread_id": data.thread_id}}
     command = Command(resume={"decisions": data.decisions})
     return _sse(stream_agent_response(graph, data.thread_id, command, config))
+
+
+# --- Static frontend catch-all ----------------------------------------------
+# Registered last so every /api/* route above always wins the match first.
+# Guards against shadowing /api/* explicitly too, in case that ordering ever
+# changes.
+@app.get("/{full_path:path}")
+async def serve_frontend(full_path: str):
+    if full_path == "api" or full_path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    root = FRONTEND_DIR.resolve()
+
+    def _resolve(*parts: str) -> Path | None:
+        candidate = (root.joinpath(*parts)).resolve()
+        if candidate.is_relative_to(root) and candidate.is_file():
+            return candidate
+        return None
+
+    for candidate in (
+        _resolve(full_path) if full_path else None,
+        _resolve(f"{full_path}.html") if full_path else None,
+        _resolve(full_path, "index.html") if full_path else None,
+        _resolve("index.html") if not full_path else None,
+    ):
+        if candidate is not None:
+            return FileResponse(candidate)
+
+    not_found = _resolve("404.html")
+    if not_found is not None:
+        return FileResponse(not_found, status_code=404)
+    raise HTTPException(status_code=404, detail="Not Found")
 
 
 if __name__ == "__main__":

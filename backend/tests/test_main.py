@@ -22,7 +22,7 @@ def client():
 
 
 def test_health(client):
-    response = client.get("/health")
+    response = client.get("/api/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
 
@@ -41,7 +41,7 @@ def _sse(client, method, url, **kwargs):
 
 # --- Approval workflow ------------------------------------------------------
 def test_approval_start_drafts_and_pauses(client):
-    start = client.post("/approval/start", json={"task": "Write a welcome email"})
+    start = client.post("/api/approval/start", json={"task": "Write a welcome email"})
     assert start.status_code == 200
     data = start.json()
     assert data['requires_input'] is True
@@ -51,9 +51,9 @@ def test_approval_start_drafts_and_pauses(client):
 
 
 def test_approval_approve_sends(client):
-    thread_id = client.post("/approval/start", json={"task": "Write a note"}).json()["thread_id"]
+    thread_id = client.post("/api/approval/start", json={"task": "Write a note"}).json()["thread_id"]
     decide = client.post(
-        "/approval/decide",
+        "/api/approval/decide",
         json={"thread_id": thread_id, "action": "approve"},
     )
     assert decide.status_code == 200
@@ -64,10 +64,10 @@ def test_approval_approve_sends(client):
 
 
 def test_approval_edit_uses_user_content(client):
-    thread_id = client.post("/approval/start", json={"task": "Write a note"}).json()["thread_id"]
+    thread_id = client.post("/api/approval/start", json={"task": "Write a note"}).json()["thread_id"]
     edited = "This is my hand-edited final version."
     decide = client.post(
-        "/approval/decide",
+        "/api/approval/decide",
         json={"thread_id": thread_id, "action": "edit", "content": edited},
     )
     assert decide.status_code == 200
@@ -77,9 +77,9 @@ def test_approval_edit_uses_user_content(client):
 
 
 def test_approval_reject_redrafts_and_pauses_again(client):
-    thread_id = client.post("/approval/start", json={"task": "Write a note"}).json()["thread_id"]
+    thread_id = client.post("/api/approval/start", json={"task": "Write a note"}).json()["thread_id"]
     decide = client.post(
-        "/approval/decide",
+        "/api/approval/decide",
         json={"thread_id": thread_id, "action": "reject", "feedback": "Make it shorter"},
     )
     assert decide.status_code == 200
@@ -93,7 +93,7 @@ def test_approval_reject_redrafts_and_pauses_again(client):
 
 # --- Agent engine (create_agent + HITL middleware) --------------------------
 def test_agent_start_pauses_for_tool_approval(client):
-    events = _sse(client, "POST", "/agent/start", json={"message": "research fuel cells"})
+    events = _sse(client, "POST", "/api/agent/start", json={"message": "research fuel cells"})
     assert any(e["type"] == "thread" for e in events)
     state = next(e for e in events if e["type"] == "state")
     assert state["requires_input"] is True
@@ -102,12 +102,12 @@ def test_agent_start_pauses_for_tool_approval(client):
 
 
 def test_agent_approve_completes(client):
-    events = _sse(client, "POST", "/agent/start", json={"message": "research wind"})
+    events = _sse(client, "POST", "/api/agent/start", json={"message": "research wind"})
     thread_id = next(e["thread_id"] for e in events if e["type"] == "thread")
     resumed = _sse(
         client,
         "POST",
-        "/agent/decide",
+        "/api/agent/decide",
         json={"thread_id": thread_id, "decisions": [{"type": "approve"}]},
     )
     state = next(e for e in resumed if e["type"] == "state")
@@ -116,12 +116,12 @@ def test_agent_approve_completes(client):
 
 
 def test_agent_edit_tool_args(client):
-    events = _sse(client, "POST", "/agent/start", json={"message": "research solar"})
+    events = _sse(client, "POST", "/api/agent/start", json={"message": "research solar"})
     thread_id = next(e["thread_id"] for e in events if e["type"] == "thread")
     resumed = _sse(
         client,
         "POST",
-        "/agent/decide",
+        "/api/agent/decide",
         json={
             "thread_id": thread_id,
             "decisions": [
