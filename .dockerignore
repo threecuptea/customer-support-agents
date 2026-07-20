@@ -1,0 +1,25 @@
+.git
+.gitignore
+
+# Frontend build artifacts / deps (installed fresh inside the image)
+frontend/node_modules
+frontend/.next
+frontend/out
+
+# Backend virtualenv / caches / runtime data (installed fresh, or a local artifact)
+backend/.venv
+backend/__pycache__
+backend/**/__pycache__
+backend/checkpoints.sqlite
+backend/.pytest_cache
+
+# Local reference/backup files, not needed in the image
+*.bak
+*.swp
+
+# Local persisted data volume
+data/
+
+# Env files (passed via env_file/--env-file at run time, not baked into the image)
+.env
+.env.local

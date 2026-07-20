@@ -14,8 +14,9 @@ import {
   CheckCircle2,
 } from "lucide-react";
 
-// Backend API base URL — override with NEXT_PUBLIC_API_URL at build/run time.
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// Backend API base URL — defaults to same-origin (single-container deploy).
+// Override with NEXT_PUBLIC_API_URL at build time for other setups.
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "/api";
 
 type Status =
   | "idle"
