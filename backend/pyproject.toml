@@ -1,5 +1,5 @@
 [project]
-name = "customer-support-agents"
+name = "customer-support-agents-backend"
 version = "0.1.0"
 description = "custom-support-agents V1 backend — FastAPI app serving the static-exported frontend and (later) AI-driven document workflows."
 readme = "README.md"
