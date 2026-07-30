@@ -12,7 +12,7 @@ so the graph still runs in LangGraph Studio / tests without a configured store.
 from __future__ import annotations
 
 import logging
-import uuid
+from datetime import datetime, UTC
 from typing import Optional
 
 from langgraph.store.base import BaseStore
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 def _namespace(user_id: str) -> tuple[str, str]:
-    return ("memories", user_id)
+    return ("users", user_id)
 
 
 def get_active_store() -> Optional[BaseStore]:
@@ -48,7 +48,7 @@ async def load_user_memory(
     notes = [i.value.get("text", "") for i in items if i.value.get("text")]
     return "\n".join(f"- {n}" for n in notes)
 
-
+# Need to summarize the conversation and how to summarize the conversation.
 async def save_user_memory(
     store: Optional[BaseStore], user_id: Optional[str], text: str
 ) -> None:
@@ -56,6 +56,7 @@ async def save_user_memory(
     if not store or not user_id or not text:
         return
     try:
-        await store.aput(_namespace(user_id), str(uuid.uuid4()), {"text": text})
+        # So that we know when the conversation happened, we will store the timestamp of the conversation as well.
+        await store.aput(_namespace(user_id), "conversation",  {"text": text, "timestamp": datetime.now(UTC).isoformat(timespec="seconds")})
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("Memory save failed: %s", exc)
