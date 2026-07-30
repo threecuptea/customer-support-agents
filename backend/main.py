@@ -1,13 +1,5 @@
 """FastAPI server exposing the LangGraph human-in-the-loop research workflow.
 
-The graph is compiled at startup with a checkpointer chosen from the
-environment:
-
-- ``CHECKPOINT_DB=checkpoints.sqlite`` → durable, resumable state via
-  ``AsyncSqliteSaver`` (survives server restarts — LangGraph's durable
-  execution feature).
-- unset → in-memory state via ``MemorySaver`` (great for local dev).
-
 No secrets are hardcoded here; configure everything through environment
 variables (see ``.env.example``).
 """
@@ -32,6 +24,7 @@ from workflow.agent import build_agent
 from workflow.approval import build_approval_graph
 from routes.approval import router as approval_router  # noqa: E402
 from routes.agent import router as agent_router  # noqa: E402
+from routes.chat import router as chat_router # noqa: E402
 
 
 load_dotenv()
@@ -46,27 +39,48 @@ async def lifespan(app: FastAPI):
     store = InMemoryStore()
     app.state.store = store
 
-    checkpoint_db = os.getenv("CHECKPOINT_DB")
-    if checkpoint_db:
+    demo_mode = os.getenv("DEMO_MODE", "false").lower() == "true" # we are using demo mode in dev environment.
+    persistence_path = os.getenv("PERSISTENCE_PATH")
+    connection_url = os.getenv("CONNECTION_URL")
+    if demo_mode and persistence_path:
+        # We are not persistinh any business entities in demo_mode (local)
         from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+        from langgraph.store.sqlite.aio import AsyncSqliteStore
+        async with AsyncSqliteSaver.from_conn_string(f'{persistence_path}/checkpointer') as saver:
+            async with AsyncSqliteStore.from_conn_string(f'{persistence_path}/store') as store:
+                logger.info("In demo mode, initializing durable AsyncSqliteSaver at %s", f'{persistence_path}/checkpointer')
+                logger.info("In demo mode, initializing durable AsyncSqliteStore at %s", f'{persistence_path}/store')
+                app.state.approval_graph = build_approval_graph(checkpointer=saver)
+                app.state.agent_graph = build_agent(checkpointer=saver, store=store)
+                yield
 
-        logger.info("Using durable AsyncSqliteSaver at %s", checkpoint_db)
-        async with AsyncSqliteSaver.from_conn_string(checkpoint_db) as saver:
-            app.state.approval_graph = build_approval_graph(checkpointer=saver)
-            app.state.agent_graph = build_agent(checkpointer=saver, store=store)
-            yield
+    elif not demo_mode and connection_url:
+        from langgraph.checkpoint.postgres import AsyncPostgresSaver
+        from langgraph.store.postgres import AsyncPostgresStore
+        # not testing the connection here in production
+        async with AsyncPostgresSaver.from_conn_string(f'{connection_url}/checkpointer') as saver:
+            async with AsyncPostgresStore.from_conn_string(f'{connection_url}/store') as store:
+                logger.info("In production, initializing durable AsyncPostgresSaver at %s", f'{persistence_path}/checkpointer')
+                logger.info("In production, initializing durable AsyncPostgresStore at %s", f'{persistence_path}/store')
+                app.state.approval_graph = build_approval_graph(checkpointer=saver)
+                app.state.agent_graph = build_agent(checkpointer=saver, store=store)
+                yield
+
     else:
-        logger.info("Using in-memory MemorySaver (set CHECKPOINT_DB for durability)")
+        logger.info("Using in-memory MemorySaver and InMemoryStore")
         saver = MemorySaver()
         app.state.approval_graph = build_approval_graph(checkpointer=saver)
         app.state.agent_graph = build_agent(checkpointer=saver, store=store)
         yield
 
-
+# FastAPI lifespan manages application startup and shutdown logic. 
+# It uses a single asynchronous context manager where code before yield statement runs when the app starts, 
+# and code after the yield runs when the app stops.
 app = FastAPI(title="Custom Support Agent", lifespan=lifespan)
 # not app.add_route(...)
 app.include_router(approval_router)
 app.include_router(agent_router)
+app.include_router(chat_router)
 
 
 _allowed_origins = os.getenv("CORS_ORIGINS", "*").split(",")
