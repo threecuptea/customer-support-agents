@@ -31,11 +31,16 @@ async def validate_populate_context(request: AuthRequest) -> AuthResponse:
             return AuthResponse(email_addr = request.email_addr, is_auth = True, role = "csr")
     else:
         raise HTTPException(status_code=500, detail="Missing CSR (Customer Support Representatives) configuration")
+    if demo_mode:
+        return load_from_demo_data(request.email_addr)
+    else:
+        raise HTTPException(status_code=500, detail="Non-demo mode is not yet implemented.  Please use demo mode for now.")
     
 def load_from_demo_data(email_addr: str) -> AuthResponse:
-    obj = demo_customers.get(email_addr)
-    if obj:
-        customer_context = CustomerContext.model_validate(obj)
+    d = demo_customers.get(email_addr)
+    if d:
+        customer_context = CustomerContext.model_validate(d) # CustomerContext(**d) or model_validate or model_validate_json
+        # The model_validate method takes a dictionary as input, while model_validate_json takes a JSON string as input.
         # need to retrieve conversation, do some research on summarize messages
         return AuthResponse(email_addr = email_addr, is_auth = True, role = "customer", 
                             customer_context = customer_context)

@@ -9,7 +9,7 @@ from main import app
 
 @pytest.fixture()
 def client():
-    # `with` triggers the FastAPI lifespan so app.state.approval_graph is built.
+    # `with` triggers the FastAPI lifespan so app.state.approval_graph is built. app instead of router should be the entry point.
     with TestClient(app) as test_client:
         yield test_client
 

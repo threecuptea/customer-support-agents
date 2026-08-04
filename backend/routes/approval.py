@@ -7,6 +7,7 @@ import os
 import uuid
 from helper import parse_interrupt_info
 from langgraph.types import Command
+from typing import Literal
 
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -21,7 +22,7 @@ class ApprovalStart(BaseModel):
 
 class ApprovalDecision(BaseModel):
     thread_id: str
-    action: str  # "approve" | "edit" | "reject"
+    action: str = Literal["approve", "edit", "reject"]
     content: str | None = None  # edited draft, when action == "edit"
     feedback: str | None = None  # change request, when action == "reject"
 

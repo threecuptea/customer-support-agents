@@ -64,6 +64,7 @@ class Order(BaseModel):
     status: Literal["delivered", "transit", "pending", "returned", "partial_returned"]
     notes: str | None
     ship_date: datetime | None
+    estimated_delivery_date: datetime | None
     tracking_number: str | None
     items: list[OrderItem]
 
@@ -91,6 +92,7 @@ class RefundRequest(BaseModel):
 
 # This comes from long-term memory value dictionary     
 class Conversation(BaseModel):
+    thread_id: str
     chat_date: datetime
     summary: str
 
@@ -104,12 +106,12 @@ class CustomerContext(BaseModel):
     last_name: str
     email: str
     # How many orders: 3 do I need and how many conversation: 5, hard code for now, configurable later 
-    latest_orders = list[Order] | None
+    latest_orders: list[Order] | None
     latest_conversations: list[Conversation] | None
     
 
 class ChatConversation(BaseModel):
-    messages: list[ChatMessage] = Field(..., max_length=MAX_MESSAGES) | None
+    messages: list[ChatMessage] = Field(..., max_length=MAX_MESSAGES, min_length=0)
     context: CustomerContext
     intent_for_return_refund: bool = False
     refund_request: Optional[RefundRequest] = None
@@ -126,12 +128,12 @@ class AuthRequest(BaseModel):
 # retrieve product info using product_id.  However, in demo-mode, we can short-cut to use business objects themselves
 # The `role` is used for multi-tenant management.  Customers (role: 'customer) will go to customer-support AI Agent chat screen
 # We will provide CustomerContext so that AI will know what are previous conversation between the customer and AI assistant and 
-# and what are customer latest order
+# and what are customer latest orders
 class AuthResponse(BaseModel):
     email_addr: str
     is_auth: bool = False
     role: Literal["csr", "customer"] # customer-support-representative, or customer
-    customer_context: Optional[CustomerContext] = None # CustomerContext exists if customer
+    customer_context: Optional[CustomerContext] = None # CustomerContext exists if the role is customer
     
 
 

@@ -40,16 +40,19 @@ async def lifespan(app: FastAPI):
     app.state.store = store
 
     demo_mode = os.getenv("DEMO_MODE", "false").lower() == "true" # we are using demo mode in dev environment.
-    persistence_path = os.getenv("PERSISTENCE_PATH")
+    checkpoint_db = os.getenv("CHECKPOINT_DB")
+    store_db = os.getenv("STORE_DB")
     connection_url = os.getenv("CONNECTION_URL")
-    if demo_mode and persistence_path:
+    if demo_mode and checkpoint_db and store_db:
         # We are not persistinh any business entities in demo_mode (local)
         from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
         from langgraph.store.sqlite.aio import AsyncSqliteStore
-        async with AsyncSqliteSaver.from_conn_string(f'{persistence_path}/checkpointer') as saver:
-            async with AsyncSqliteStore.from_conn_string(f'{persistence_path}/store') as store:
-                logger.info("In demo mode, initializing durable AsyncSqliteSaver at %s", f'{persistence_path}/checkpointer')
-                logger.info("In demo mode, initializing durable AsyncSqliteStore at %s", f'{persistence_path}/store')
+        # root data dir is the default folder for the sqlite db files.
+        async with AsyncSqliteSaver.from_conn_string(checkpoint_db) as saver:
+            # I have to use ../data/stores.sqlite to point to the correct path. 
+            async with AsyncSqliteStore.from_conn_string(store_db) as store:
+                logger.info("In demo mode, initializing durable AsyncSqliteSaver at %s", checkpoint_db)
+                logger.info("In demo mode, initializing durable AsyncSqliteStore at %s", store_db)
                 app.state.approval_graph = build_approval_graph(checkpointer=saver)
                 app.state.agent_graph = build_agent(checkpointer=saver, store=store)
                 yield
@@ -73,10 +76,13 @@ async def lifespan(app: FastAPI):
         app.state.agent_graph = build_agent(checkpointer=saver, store=store)
         yield
 
-# FastAPI lifespan manages application startup and shutdown logic. 
-# It uses a single asynchronous context manager where code before yield statement runs when the app starts, 
-# and code after the yield runs when the app stops.
-app = FastAPI(title="Custom Support Agent", lifespan=lifespan)
+# FastAPI lifespan manages application startup (before taking the first request)and shutdown logic (after taking the final request). 
+# It requires an asynchronouscontextmanager where code before yield statement runs when the app starts, 
+# and code after the yield runs when the app stops. . Under the hood, FastAPI relies on Starlettet which expects this object to 
+# implement the standard Python async context manager protocol (having __aenter__ and __aexit__ methods)
+# FastAPI depends upon lifespan. lifespan depends upon FastAPI parameter app. 
+# Without from __future__ import annotations, the app parameter would be evaluated at runtime, which would cause a circular import error.
+app = FastAPI(title="Custom Support Agent", lifespan=lifespan)  # noqa: E402
 # not app.add_route(...)
 app.include_router(approval_router)
 app.include_router(agent_router)
