@@ -12,7 +12,7 @@
       "type": "n8n-nodes-base.webhook",
       "position": [
         1136,
-        816
+        800
       ],
       "typeVersion": 2,
       "webhookId": "f165c45d-6d3d-47c3-b1bd-0a4a7449ee9d"
@@ -35,8 +35,8 @@
       "name": "Parse Slack Payload",
       "type": "n8n-nodes-base.set",
       "position": [
-        1408,
-        816
+        1360,
+        800
       ],
       "typeVersion": 3.4
     },
@@ -124,83 +124,23 @@
       "name": "Route: Approved / Rejected / Flagged",
       "type": "n8n-nodes-base.switch",
       "position": [
-        1952,
-        800
+        1808,
+        784
       ],
       "typeVersion": 3.2
     },
     {
       "parameters": {
-        "select": "channel",
-        "channelId": {
-          "__rl": true,
-          "value": "C0BGP49944R",
-          "mode": "list",
-          "cachedResultName": "all-threecupteacom"
-        },
-        "text": "=✅ *The return/ refund request Approved*\nThe refund/ request id: *{{ $('Route: Approved / Rejected / Flagged').item.json.refund_request_id }}* of *${{ $('Route: Approved / Rejected / Flagged').item.json.refund_amount }}* by *{{ $('Route: Approved / Rejected / Flagged').item.json.customer_name }}* was\n*Approved by:* {{ $('Route: Approved / Rejected / Flagged').item.json.decided_by }}\n{{ $('Route: Approved / Rejected / Flagged').item.json.decision_reason.trim() ? \"*Reason:* \" + $('Route: Approved / Rejected / Flagged').item.json.decision_reason.trim() : \"\" }}\n---------------------------------------------------------------------------------------------------------",
-        "otherOptions": {
-          "includeLinkToWorkflow": false
-        }
-      },
-      "id": "40eb101f-d6e5-4a62-86aa-86c5f7793ad9",
-      "name": "Slack DM: Approved ✅",
-      "type": "n8n-nodes-base.slack",
-      "position": [
-        2576,
-        608
-      ],
-      "typeVersion": 2.3,
-      "webhookId": "4a7246ae-4bf6-496e-a2e3-8a3edc9a5ce7",
-      "credentials": {
-        "slackApi": {
-          "id": "pq0cnkzxYiAACCAZ",
-          "name": "Slack account"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "select": "channel",
-        "channelId": {
-          "__rl": true,
-          "value": "C0BGP49944R",
-          "mode": "list",
-          "cachedResultName": "all-threecupteacom"
-        },
-        "text": "=🚩 *The return/ refund request Flagged for Review*\nThe refund/ request id: *{{ $('Route: Approved / Rejected / Flagged').item.json.refund_request_id }}* of *${{ $('Route: Approved / Rejected / Flagged').item.json.refund_amount }}* by *{{ $('Route: Approved / Rejected / Flagged').item.json.customer_name }}* was\n*Flagged by:* {{ $('Route: Approved / Rejected / Flagged').item.json.decided_by }}\n{{ $('Route: Approved / Rejected / Flagged').item.json.decision_reason.trim() ? \"*Reason:* \" + $('Route: Approved / Rejected / Flagged').item.json.decision_reason.trim() : \"\" }}\n⚠️ Please review this invoice manually and follow up with the customer.\n---------------------------------------------------------------------------------------------------------",
-        "otherOptions": {
-          "includeLinkToWorkflow": false
-        }
-      },
-      "id": "fa345aeb-9caf-4ea3-be8c-ffffabfa287b",
-      "name": "Slack DM: Flagged 🚩",
-      "type": "n8n-nodes-base.slack",
-      "position": [
-        2576,
-        1024
-      ],
-      "typeVersion": 2.3,
-      "webhookId": "695fbf6d-fa2c-4632-a72a-c1ff6f3bfbdc",
-      "credentials": {
-        "slackApi": {
-          "id": "pq0cnkzxYiAACCAZ",
-          "name": "Slack account"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "content": "# 📥 Refund  Request Approval Handler\n(Slack Button Listener)\n\n## What This Workflow Does\nListens for button clicks from the **Request → Slack Approval** workflow. When someone clicks Approve, Reject, or Flag on a refund request in Slack, this workflow captures that decision and rthe reason if any, update  them on **Google Sheets**, and sends a confirmation notification.\n\n## How It Works\n1. **Webhook Trigger** – Receives POST request from Slack when a button is clicked\n2. **Parse Payload** – Decode JSON payload from Slack's request body\n3. **Extract Action Data** – Extract decision, user info, and refund request details from the message\n4. **Route by Decision** – Branches to Approved, Rejected, or Flagged path\n5. **Update to Sheets** – Update the decision and its reason and who decided\n6. **Notify via Slack** – Sends confirmation DM to the approver\n\n## Action Routes\n- ✅ **Approved** → Logs to \"Approved\" sheet → DM confirmation\n- ❌ **Rejected** → Logs to \"Rejected\" sheet → DM confirmation\n- 🚩 **Flagged** → Logs to \"Flagged\" sheet → DM for manual review\n\n---\n\n## Setup Guide\n\n### 1. Create Google Sheet\n1. Create a Master Google Sheet \n2. Add needed column headers to the master sheet. In my case \n   - refund_request_id\n   - order_number\n   - refund_amount\n   - customer_name\n   - delivery_date\n   - decision\n   - decided_by\n   - decision_reason\n\n### 2. Connect the Nodes in n8n\n1. Add your **Google Sheets OAuth2** credential to all three  google sheet nodes\n2. Update the **Document ** in each Google Sheets node to your Sheet\n3. Add your **Slack API** credential to all three notification nodes\n4. Update the **Channel** in the notification nodes\n\n### 3. Configure Slack Interactivity\n1. Go to **api.slack.com/apps** → your app → **Interactivity & Shortcuts**\n2. Set the Request URL to this workflow's production webhook URL \n3. Check Slack API to see what permission are needed for Slack bot interactivity\n4. Update and save changes. \n\n### 4. Activate & Test\n1. Publish and execute workflow of the Listener \n2. Trigger the Approval workflow to send a Slack message\n3. Click a button in Slack\n4. Check Google Sheets and Slack for results\n\nSlack can integrate with apps in Socket mode : False (HTTP request) or  Socket mode : True (WebSocket). n8n offcially only support Socket mode : False.   You can install WebSocket community node in self-hosted n8n instance.  \n\nYour app can integrate with Slack either way.  Take the followings into consideraion.\n\n1. WebSocket is using `ws` or `wss` protocol.  The former transports data in plain text . HTTP POST is url-encoded.  \n2. It is not easy to scale out using `ws` or `wss` .  It's very easy to scale out in `HTTP` or `HTTPS`.\n3. However, a public URL which local environment lacks  is required to integrate with Slack using HTTP request.   You need  [ngrok](https://ngrok.com/) to spin up a public ngURL so that  Slack can send WebHook message.  \n\nHave a fun!! \n",
-        "height": 1520,
-        "width": 672
+        "content": "# 📥 Refund  Request Approval Handler\n(Slack Button Listener)\n\n## What This Workflow Does\nListens for button clicks from the **Request → Slack Approval** workflow. When someone clicks Approve, Reject, or Flag on a refund request in Slack, this workflow captures that decision and rthe reason if any, update  them on **Google Sheets**, and sends a confirmation notification.\n\n## How It Works\n1. **Webhook Trigger** – Receives POST request from Slack when a button is clicked\n2. **Parse Payload** – Decode JSON payload from Slack's request body\n3. **Extract Action Data** – Extract decision, user info, and refund request details from the message\n4. **Route by Decision** – Branches to Approved, Rejected, or Flagged path\n5. **Update to Sheets** – Update the decision and its reason and who decided\n6. **Notify via Slack** – Sends confirmation DM to the approver\n\n## Action Routes\n- ✅ **Approved** → Logs to \"Master\" sheet with 'manual_approve\"→ Slack confirmation\n- ❌ **Rejected** → Logs to \"Rejected\" sheet with 'manual_reject' → Slack confirmation\n- 🚩 **Flagged** → Logs to \"Flagged\" sheet with manual_flag → Slack manual review\n\n---",
+        "height": 912,
+        "width": 576
       },
       "id": "0fc8cec7-d485-4e4d-b1bb-fb5815a79d2b",
       "name": "Sticky Note6",
       "type": "n8n-nodes-base.stickyNote",
       "position": [
-        368,
-        144
+        -384,
+        64
       ],
       "typeVersion": 1
     },
@@ -258,41 +198,11 @@
       "name": "Extract Action & Request, and Order Data",
       "type": "n8n-nodes-base.set",
       "position": [
-        1680,
-        816
+        1584,
+        800
       ],
       "typeVersion": 3.4,
       "alwaysOutputData": true
-    },
-    {
-      "parameters": {
-        "select": "channel",
-        "channelId": {
-          "__rl": true,
-          "value": "C0BGP49944R",
-          "mode": "list",
-          "cachedResultName": "all-threecupteacom"
-        },
-        "text": "=❌ *The return/ refund request Rejected*\nThe refund/ request id: *{{ $('Route: Approved / Rejected / Flagged').item.json.refund_request_id }}* of *${{ $('Route: Approved / Rejected / Flagged').item.json.refund_amount }}* by *{{ $('Route: Approved / Rejected / Flagged').item.json.customer_name }}* was\n*Rejected by:* {{ $('Route: Approved / Rejected / Flagged').item.json.decided_by }}\n{{ $('Route: Approved / Rejected / Flagged').item.json.decision_reason.trim() ? \"*Reason:* \" + $('Route: Approved / Rejected / Flagged').item.json.decision_reason.trim() : \"\" }}\n---------------------------------------------------------------------------------------------------------",
-        "otherOptions": {
-          "includeLinkToWorkflow": false
-        }
-      },
-      "id": "0c2c38f5-30a6-431b-aa78-c4dd24e50638",
-      "name": "Slack DM: Rejected ❌",
-      "type": "n8n-nodes-base.slack",
-      "position": [
-        2592,
-        816
-      ],
-      "typeVersion": 2.3,
-      "webhookId": "4a7246ae-4bf6-496e-a2e3-8a3edc9a5ce7",
-      "credentials": {
-        "slackApi": {
-          "id": "pq0cnkzxYiAACCAZ",
-          "name": "Slack account"
-        }
-      }
     },
     {
       "parameters": {
@@ -443,7 +353,7 @@
       "name": "Update to  Sheets: Approved ✅",
       "type": "n8n-nodes-base.googleSheets",
       "position": [
-        2320,
+        2032,
         608
       ],
       "typeVersion": 4.5,
@@ -603,8 +513,8 @@
       "name": "Update to Sheets: Rejected ❌",
       "type": "n8n-nodes-base.googleSheets",
       "position": [
-        2320,
-        816
+        2032,
+        800
       ],
       "typeVersion": 4.5,
       "credentials": {
@@ -764,14 +674,119 @@
       "name": "Update to Sheets: Flagged 🚩",
       "type": "n8n-nodes-base.googleSheets",
       "position": [
-        2320,
-        1024
+        2032,
+        992
       ],
       "typeVersion": 4.5,
       "credentials": {
         "googleSheetsOAuth2Api": {
           "id": "nsPKnigi9aCm2MbK",
           "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Setup Guide\n\n### 1. Create Google Sheet\n1. Create a Master Google Sheet \n2. Add needed column headers to the master sheet. In my case \n   - refund_request_id\n   - order_number\n   - refund_amount\n   - customer_name\n   - status\n   - delivery_date\n   - decided_by\n   - decision_reason\n\n### 2. Connect the Nodes in n8n\n1. Add your **Google Sheets OAuth2** credential to google master sheet\n2. Add your **Slack API** credential to all three notification nodes\n3. Update the **Channel** in the notification nodes\n\n### 3. Configure Slack Interactivity\n1. Go to **api.slack.com/apps** → your app → **Interactivity & Shortcuts**\n2. Set the Request URL to this workflow's production webhook URL \n3. Check Slack API to see what permission are needed for Slack bot interactivity\n4. Update and save changes. \n\n### 4. Activate & Test\n1. Publish and execute workflow of the Listener \n2. Trigger the Approval workflow to send a Slack message\n3. Click a button in Slack\n4. Check Google Sheets and Slack for results\n\nSlack can integrate with apps in Socket mode : False (HTTP request) or  Socket mode : True (WebSocket). n8n offcially only support Socket mode : False.   You can install WebSocket community node in self-hosted n8n instance.  \n\nYour app can integrate with Slack either way.  Take the followings into consideraion.\n\n1. WebSocket is using `ws` or `wss` protocol.  The former transports data in plain text . HTTP POST is url-encoded.  \n2. It is not easy to scale out using `ws` or `wss` .  It's very easy to scale out in `HTTP` or `HTTPS`.\n3. However, a public URL which local environment lacks  is required to integrate with Slack using HTTP request.   You need  [ngrok](https://ngrok.com/) to spin up a public ngURL so that  Slack can send WebHook message.  \n\nHave a fun!! ",
+        "height": 1376,
+        "width": 640
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        336,
+        64
+      ],
+      "typeVersion": 1,
+      "id": "54500776-d483-461c-81b7-6c6a59da40de",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0BGP49944R",
+          "mode": "list",
+          "cachedResultName": "all-threecupteacom"
+        },
+        "text": "=✅ *The return/ refund request Approved*\nThe refund/ request id: *{{ $('Route: Approved / Rejected / Flagged').item.json.refund_request_id }}* of *${{ $('Route: Approved / Rejected / Flagged').item.json.refund_amount }}* by *{{ $('Route: Approved / Rejected / Flagged').item.json.customer_name }}* was\n*Approved by:* {{ $('Route: Approved / Rejected / Flagged').item.json.decided_by }}\n{{ $('Route: Approved / Rejected / Flagged').item.json.decision_reason.trim() ? \"*Reason:* \" + $('Route: Approved / Rejected / Flagged').item.json.decision_reason.trim() : \"\" }}\n---------------------------------------------------------------------------------------------------------",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "id": "40eb101f-d6e5-4a62-86aa-86c5f7793ad9",
+      "name": "Confirmation: Approved ✅",
+      "type": "n8n-nodes-base.slack",
+      "position": [
+        2256,
+        608
+      ],
+      "typeVersion": 2.3,
+      "webhookId": "4a7246ae-4bf6-496e-a2e3-8a3edc9a5ce7",
+      "credentials": {
+        "slackApi": {
+          "id": "pq0cnkzxYiAACCAZ",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0BGP49944R",
+          "mode": "list",
+          "cachedResultName": "all-threecupteacom"
+        },
+        "text": "=🚩 *The return/ refund request Flagged for Review*\nThe refund/ request id: *{{ $('Route: Approved / Rejected / Flagged').item.json.refund_request_id }}* of *${{ $('Route: Approved / Rejected / Flagged').item.json.refund_amount }}* by *{{ $('Route: Approved / Rejected / Flagged').item.json.customer_name }}* was\n*Flagged by:* {{ $('Route: Approved / Rejected / Flagged').item.json.decided_by }}\n{{ $('Route: Approved / Rejected / Flagged').item.json.decision_reason.trim() ? \"*Reason:* \" + $('Route: Approved / Rejected / Flagged').item.json.decision_reason.trim() : \"\" }}\n⚠️ Please review this invoice manually and follow up with the customer.\n---------------------------------------------------------------------------------------------------------",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "id": "fa345aeb-9caf-4ea3-be8c-ffffabfa287b",
+      "name": "Confirmation: Flagged 🚩",
+      "type": "n8n-nodes-base.slack",
+      "position": [
+        2256,
+        992
+      ],
+      "typeVersion": 2.3,
+      "webhookId": "695fbf6d-fa2c-4632-a72a-c1ff6f3bfbdc",
+      "credentials": {
+        "slackApi": {
+          "id": "pq0cnkzxYiAACCAZ",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0BGP49944R",
+          "mode": "list",
+          "cachedResultName": "all-threecupteacom"
+        },
+        "text": "=❌ *The return/ refund request Rejected*\nThe refund/ request id: *{{ $('Route: Approved / Rejected / Flagged').item.json.refund_request_id }}* of *${{ $('Route: Approved / Rejected / Flagged').item.json.refund_amount }}* by *{{ $('Route: Approved / Rejected / Flagged').item.json.customer_name }}* was\n*Rejected by:* {{ $('Route: Approved / Rejected / Flagged').item.json.decided_by }}\n{{ $('Route: Approved / Rejected / Flagged').item.json.decision_reason.trim() ? \"*Reason:* \" + $('Route: Approved / Rejected / Flagged').item.json.decision_reason.trim() : \"\" }}\n---------------------------------------------------------------------------------------------------------",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "id": "0c2c38f5-30a6-431b-aa78-c4dd24e50638",
+      "name": "Confirmation: Rejected ❌",
+      "type": "n8n-nodes-base.slack",
+      "position": [
+        2256,
+        800
+      ],
+      "typeVersion": 2.3,
+      "webhookId": "4a7246ae-4bf6-496e-a2e3-8a3edc9a5ce7",
+      "credentials": {
+        "slackApi": {
+          "id": "pq0cnkzxYiAACCAZ",
+          "name": "Slack account"
         }
       }
     }
@@ -840,7 +855,7 @@
       "main": [
         [
           {
-            "node": "Slack DM: Approved ✅",
+            "node": "Confirmation: Approved ✅",
             "type": "main",
             "index": 0
           }
@@ -851,7 +866,7 @@
       "main": [
         [
           {
-            "node": "Slack DM: Rejected ❌",
+            "node": "Confirmation: Rejected ❌",
             "type": "main",
             "index": 0
           }
@@ -862,7 +877,7 @@
       "main": [
         [
           {
-            "node": "Slack DM: Flagged 🚩",
+            "node": "Confirmation: Flagged 🚩",
             "type": "main",
             "index": 0
           }
@@ -876,7 +891,7 @@
     "binaryMode": "separate",
     "availableInMCP": false
   },
-  "versionId": "050c1182-5694-4fd8-b601-33d3520c438d",
+  "versionId": "3b1f70d5-12c9-4b64-89a4-1959c6703b1e",
   "meta": {
     "templateId": "14515",
     "templateCredsSetupCompleted": true,
