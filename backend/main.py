@@ -63,8 +63,6 @@ async def lifespan(app: FastAPI):
         # not testing the connection here in production
         async with AsyncPostgresSaver.from_conn_string(f'{connection_url}/checkpointer') as saver:
             async with AsyncPostgresStore.from_conn_string(f'{connection_url}/store') as store:
-                logger.info("In production, initializing durable AsyncPostgresSaver at %s", f'{persistence_path}/checkpointer')
-                logger.info("In production, initializing durable AsyncPostgresStore at %s", f'{persistence_path}/store')
                 app.state.approval_graph = build_approval_graph(checkpointer=saver)
                 app.state.agent_graph = build_agent(checkpointer=saver, store=store)
                 yield
