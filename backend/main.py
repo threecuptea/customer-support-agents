@@ -25,9 +25,10 @@ from workflow.approval import build_approval_graph
 from routes.approval import router as approval_router  # noqa: E402
 from routes.agent import router as agent_router  # noqa: E402
 from routes.chat import router as chat_router # noqa: E402
+from routes.auth import router as auth_router # noqa: E402
 
 
-load_dotenv()
+load_dotenv(override=True)
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,7 @@ app = FastAPI(title="Custom Support Agent", lifespan=lifespan)  # noqa: E402
 app.include_router(approval_router)
 app.include_router(agent_router)
 app.include_router(chat_router)
+app.include_router(auth_router)
 
 
 _allowed_origins = os.getenv("CORS_ORIGINS", "*").split(",")
@@ -115,7 +117,7 @@ async def health():
 # Registered last so every /api/* route above always wins the match first.
 # Guards against shadowing /api/* explicitly too, in case that ordering ever
 # changes.
-@app.get("/{full_path:path}")
+@app.get("/{full_path:path}", include_in_schema=False)
 async def serve_frontend(full_path: str):
     if full_path == "api" or full_path.startswith("api/"):
         raise HTTPException(status_code=404, detail="Not Found")
