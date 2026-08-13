@@ -7,6 +7,8 @@ from typing import Literal, Annotated
 MAX_MESSAGE_CHARS = 4_000
 MAX_MESSAGES = 100
 
+MAX_REASON_CHARS = 500
+
 
 #############################################
 #
@@ -54,12 +56,16 @@ class RefundRequest(BaseModel):
     refund_request_id: Annotated[int, Field(gt=0)]
     request_date: datetime
     status: Literal["pending", "auto_approve", "auto_reject", "manaul_approve", "manaul_reject", "manual_flag"] = 'pending'
-    expected_amount_refund_incl_tax: Annotated[float, Field(gt=0)]
+    expected_amount_refund_incl_tax: Annotated[float, Field(gt=0)] # copied from the ReturnedOrder initially
+    decided_by: Annotated[str, Field(min_length=1)]
+    decision_reason: Annotated[str, Field(min_length=1, max_length=MAX_REASON_CHARS)]
+    decided_date: datetime
     reference: ReturnedOrder
     
 
 # This comes from long-term memory value dictionary     
 class Conversation(BaseModel):
+    customer_id: Annotated[str, Field(min_length=1)]
     thread_id: Annotated[str, Field(min_length=1)]
     chat_date: datetime
     summary: Annotated[str, Field(min_length=1)]
