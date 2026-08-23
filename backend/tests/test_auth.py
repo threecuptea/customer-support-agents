@@ -88,7 +88,7 @@ def test_a_pending_order(client):
     assert not order['estimated_delivery_date'] # an optional field
 
 def test_an_order_missing_required(client):
-    # An order that is at 
+    # An order that is missing required fields
     email_addr = "harry.enten@cnn.com"
     resp = client.post("/api/auth", json={"email_addr": email_addr})
     assert resp.status_code == 401

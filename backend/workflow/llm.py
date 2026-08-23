@@ -202,6 +202,10 @@ def get_llm(**overrides: Any) -> BaseChatModel:
 
     model = os.getenv("LLM_MODEL", "gpt-4o-mini")
     provider = os.getenv("LLM_PROVIDER") or None
+    if overrides.get('model'):
+        model = overrides.get('model')
+    if overrides.get('provider'):
+        provider = overrides.get('provider')    
     params: dict[str, Any] = {"temperature": float(os.getenv("LLM_TEMPERATURE", "0.7"))}
     params.update(overrides)
 

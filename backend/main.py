@@ -22,9 +22,10 @@ from langgraph.store.memory import InMemoryStore
 
 from workflow.agent import build_agent
 from workflow.approval import build_approval_graph
+from backend.workflow.customer_support import CustomerSupportAgent
 from routes.approval import router as approval_router  # noqa: E402
 from routes.agent import router as agent_router  # noqa: E402
-from routes.chat import router as chat_router # noqa: E402
+from backend.routes.customer_support import router as chat_router # noqa: E402
 from routes.auth import router as auth_router # noqa: E402
 
 
@@ -56,6 +57,7 @@ async def lifespan(app: FastAPI):
                 logger.info("In demo mode, initializing durable AsyncSqliteStore at %s", store_db)
                 app.state.approval_graph = build_approval_graph(checkpointer=saver)
                 app.state.agent_graph = build_agent(checkpointer=saver, store=store)
+                app.state.support_graph = CustomerSupportAgent(checkpointer=saver, store=store).build_support_graph()
                 yield
 
     elif not demo_mode and connection_url:
@@ -66,6 +68,7 @@ async def lifespan(app: FastAPI):
             async with AsyncPostgresStore.from_conn_string(f'{connection_url}/store') as store:
                 app.state.approval_graph = build_approval_graph(checkpointer=saver)
                 app.state.agent_graph = build_agent(checkpointer=saver, store=store)
+                app.state.support_graph = CustomerSupportAgent(checkpointer=saver, store=store).build_support_graph()
                 yield
 
     else:
@@ -73,6 +76,7 @@ async def lifespan(app: FastAPI):
         saver = MemorySaver()
         app.state.approval_graph = build_approval_graph(checkpointer=saver)
         app.state.agent_graph = build_agent(checkpointer=saver, store=store)
+        app.state.support_graph = CustomerSupportAgent(checkpointer=saver, store=store).build_support_graph()
         yield
 
 # FastAPI lifespan manages application startup (before taking the first request)and shutdown logic (after taking the final request). 

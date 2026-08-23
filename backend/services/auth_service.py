@@ -1,7 +1,7 @@
 
 from __future__ import annotations
 
-from models.model import AuthRequest, AuthResponse
+from models.model import AuthResponse
 from dotenv import load_dotenv
 import logging
 import os
@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 __csr_whitelist = os.getenv("CSR_WHITELIST")
 __csr_domains = os.getenv("CSR_DOMAINS")
+# os.makedirs("path/to/my_folder", exist_ok=True)
 
 async def validate_populate_context(email_addr: str) -> AuthResponse:
     demo_mode = os.getenv("DEMO_MODE", "false").lower() == "true" # we are using demo mode in dev environment
@@ -42,6 +43,7 @@ def load_from_demo_data(email_addr: str) -> AuthResponse:
     if d:
         try: 
             customer_context = CustomerContext.model_validate(d) # CustomerContext(**d), which go straight to init 
+            
             # or model_validate or model_validate_json. The model_validate method takes a dictionary as input, 
             # while model_validate_json takes a JSON string as input. Need to retrieve conversation, do some research on summarize messages
             return AuthResponse(email_addr = email_addr, is_auth = True, role = "customer", 

@@ -57,7 +57,8 @@ async def agent_start(data: AgentStart, request: Request):
                 final_seen = ev.get("final_response", "")
             yield ev
         if final_seen:
-            await save_user_memory(store, data.user_id, f"Asked the agent about: {data.message[:120]}")
+            # need to remove this module
+            await save_user_memory(store, data.user_id, thread_id, f"Asked the agent about: {data.message[:120]}")
 
     return sse_wrapper(gen())
 
