@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Literal, Annotated
 from langgraph.graph import MessagesState
+from zoneinfo import ZoneInfo
 
 MAX_MESSAGE_CHARS = 4_000
 MAX_MESSAGES = 100
@@ -30,8 +31,10 @@ class OrderItem(BaseModel):
     unit_price: Annotated[float, Field(gt=0)]
     number_units: Annotated[int, Field(gt=0)]
 
+# All date fields be TZ-aware 
 class Order(BaseModel):
     order_id: Annotated[int, Field(gt=0)]
+    delivery_tz: ZoneInfo = ZoneInfo("America/Chicago")
     order_date: datetime
     total_amount_incl_tax: Annotated[float, Field(gt=0)]
     tax_applied_rate: Annotated[float, Field(ge=0)]
@@ -78,8 +81,6 @@ class FAQMatchResult(BaseModel):
     answer: str
     confidence_score: Annotated[float, Field(ge=0.0, le=100.0)]
 
-class ExtractOrderNumber(BaseModel):
-    order_number: Annotated[int, Field(gt=0)] | None = None
 
 # It's TypedDict not BaseModel.  Which is correct decision for accumulated state. I don't need to guard
 # # the value.  However, it's TypedDict.  However, I cannot use attribute and have to use key to get the value. 
@@ -100,7 +101,7 @@ class ChatState(MessagesState):
     general_issue_resolved: bool
     order_number_provided: int
     target_order: Order
-    refund_eligible: bool
+    return_refund_eligible: bool
     intent_for_return_refund: bool
     refund_request: RefundRequest
 

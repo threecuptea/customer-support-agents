@@ -34,6 +34,9 @@ async def validate_populate_context(email_addr: str) -> AuthResponse:
     else:
         raise HTTPException(status_code=500, detail="Missing CSR (Customer Support Representatives) configuration")
     if demo_mode:
+        # TODO: Add a set up function to dynamically adjust date fields od demo_data so that it fit well with the order status: delivered but not
+        # refundable without human approval (exceeding the return window),  delivered and auto-refundable; transit and pending statuses.
+        # so that demo_data are always testable.
         return load_from_demo_data(email_addr)
     else:
         raise HTTPException(status_code=500, detail="Non-demo mode is not yet implemented.  Please use demo mode for now.")

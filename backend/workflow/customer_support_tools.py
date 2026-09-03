@@ -68,7 +68,7 @@ def find_closest_faq(user_question: str) -> FAQMatchResult:
     
 
 @tool
-def retrieve_target_order(context: CustomerContext, order_number: int) -> Order:
+def retrieve_target_order(context: CustomerContext, order_number: int) -> Order | None:
     """ retrieve the target order from the CustomerContext
         Args:
             context: CustomerContext
