@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 __csr_whitelist = os.getenv("CSR_WHITELIST")
 __csr_domains = os.getenv("CSR_DOMAINS")
-# os.makedirs("path/to/my_folder", exist_ok=True)
+
 
 async def validate_populate_context(email_addr: str) -> AuthResponse:
     demo_mode = os.getenv("DEMO_MODE", "false").lower() == "true" # we are using demo mode in dev environment
@@ -34,7 +34,7 @@ async def validate_populate_context(email_addr: str) -> AuthResponse:
     else:
         raise HTTPException(status_code=500, detail="Missing CSR (Customer Support Representatives) configuration")
     if demo_mode:
-        # TODO: Add a set up function to dynamically adjust date fields od demo_data so that it fit well with the order status: delivered but not
+        # TODO: Add a set up function to dynamically adjust date fields of demo_data so that it fit well with the order status: delivered but not
         # refundable without human approval (exceeding the return window),  delivered and auto-refundable; transit and pending statuses.
         # so that demo_data are always testable.
         return load_from_demo_data(email_addr)
@@ -48,7 +48,7 @@ def load_from_demo_data(email_addr: str) -> AuthResponse:
             customer_context = CustomerContext.model_validate(d) # CustomerContext(**d), which go straight to init 
             
             # or model_validate or model_validate_json. The model_validate method takes a dictionary as input, 
-            # while model_validate_json takes a JSON string as input. Need to retrieve conversation, do some research on summarize messages
+            # while model_validate_json takes a JSON string as input.
             return AuthResponse(email_addr = email_addr, is_auth = True, role = "customer", 
                 customer_context = customer_context)
         except ValidationError as ve:

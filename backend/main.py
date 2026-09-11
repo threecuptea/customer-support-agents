@@ -22,10 +22,10 @@ from langgraph.store.memory import InMemoryStore
 
 from workflow.agent import build_agent
 from workflow.approval import build_approval_graph
-from backend.workflow.customer_support import CustomerSupportAgent
+from workflow.customer_support import CustomerSupportAgent
 from routes.approval import router as approval_router  # noqa: E402
 from routes.agent import router as agent_router  # noqa: E402
-from backend.routes.customer_support import router as chat_router # noqa: E402
+from routes.customer_support import router as chat_router # noqa: E402
 from routes.auth import router as auth_router # noqa: E402
 
 

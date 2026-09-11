@@ -3,7 +3,6 @@ from models.model import ChatState, FAQMatchEvals, FAQMatchResult, Order
 
 from langgraph.graph import END, START, StateGraph
 from langchain_core.messages import HumanMessage, RemoveMessage, SystemMessage, AIMessage, ToolMessage
-from langchain_core.tools import tool
 from typing import Any
 from dotenv import load_dotenv
 import logging
@@ -12,17 +11,14 @@ from workflow.llm import get_llm
 from langchain_core.runnables import RunnableConfig
 from langgraph.config import get_store
 from memory import save_user_memory
-from workflow.customer_support_tools \
-import find_closest_faq, calculate_amount_refund_incl_tax, retrieve_target_order, check_if_refund_require_manual_approval, \
-    get_next_order_available, faq_dict
-from langgraph.prebuilt import ToolNode
+from workflow.customer_support_tools import find_closest_faq, retrieve_target_order, faq_dict
 
 
 load_dotenv(override=True)
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
-FAQ_MATCH_THRESHOLD = 70.0
+FAQ_MATCH_THRESHOLD = 75.0
 ESCALATE_MESSAGE = "I will escalate to a human agent and somebody will contact you within 3 business days"
 
 
@@ -38,7 +34,7 @@ class CustomerSupportAgent:
         self.general_llm_for_faq_match_result = get_llm().with_structured_output(FAQMatchResult)
     
         # "\n".join(f"- {n}" for n in notes)
-        self.faq_context = "\n".join([f"- 'question': {key}, 'answer': {val} " for key, val in faq_dict])
+        self.faq_context = "\n".join([f"- 'question': {key}, 'answer': {val} " for key, val in faq_dict.items()])
 
 
     ###############################################
@@ -90,9 +86,6 @@ class CustomerSupportAgent:
     ###############################################
     # I might need to 
     async def general_faq_eval_node(self, state: ChatState) -> dict[str, Any]:
-        # TODO: Find an example of comprehensive e-commerce policy to replace FAQs to match against
-        # FAQs is to enlist most commonly asked questions.  There should be a comprehensive company policy to cover all possible causes.
-
         SYSTEM_PROMPT = f"""
         You are an intelligent customer-support agent to help decide if it is helful to match the customer question 
         against FAQs
@@ -129,7 +122,7 @@ class CustomerSupportAgent:
         # resp should an AIMessage wrapper
         # FAQMatchEvals
         eval = await self.general_llm_for_faq_match_evals.ainvoke([system_msg])
-        updates = {"general_inquiry": {state["messages"][-1].content}, "faq_match_evals": eval}
+        updates = {"faq_match_evals": eval}
         if not eval or (eval and not eval.rapid_fuzz_wratio_match_helpful and not eval.llm_semantic_match_helpful):
             response = ESCALATE_MESSAGE
             message = SystemMessage(content=response)
@@ -254,8 +247,6 @@ class CustomerSupportAgent:
             return END
         return "general_faq_llm_match_node"
 
-    
-
 
     ###############################################
     #            Build the support graph
@@ -264,14 +255,9 @@ class CustomerSupportAgent:
         """Build and compile the main chat/ refund workflow."""
         builder = StateGraph(ChatState)
         # Harnese with RetryPolicy later
-        '''case "others":
-                        return "general_faq_eval_node"
-                    case _:
-                        return "order_retrieve_target_order_node"
-        '''                   
         builder.add_conditional_edges(START, self.route_branch, 
                                       {"general_faq_eval_node": "general_faq_eval_node", 
-                                       "order_retrieve_target_order_node": "order_retrieve_target_order_node"})
+                                       "order_inquiry_node": "order_inquiry_node"})
         
         builder.add_node("summarize_node", self.summarize_node)
         builder.add_edge("summarize_node", END)
@@ -290,7 +276,7 @@ class CustomerSupportAgent:
 
         builder.add_node("order_inquiry_node", self.order_inquiry_node)
         
-        return builder.compile(cheeckpointer = self.checkpointer, store = self.store)
+        return builder.compile(checkpointer = self.checkpointer, store = self.store)
     
 
     

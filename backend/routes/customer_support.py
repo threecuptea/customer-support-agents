@@ -62,6 +62,7 @@ async def customer_support_start(support: GeneralChatStart | OrderChatStart, req
         messages.append(SystemMessage(content=f"Previous conversations:\n{memory}"))
     initial_state = {}     
     if isinstance(support, GeneralChatStart):
+        messages.append(HumanMessage(content= support.general_inquiry))
         initial_state = {
             "messages": messages,
             "customer_name": " ".join(support.customer_context.title, support.customer_context.last_name),
@@ -70,12 +71,13 @@ async def customer_support_start(support: GeneralChatStart | OrderChatStart, req
             "general_inquiry": support.general_inquiry,
         }
     else:
+        messages.append(HumanMessage(content= f"The order: {support.order_number_provided} is what I am concerned about"))
         initial_state = {
             "messages": messages,
             "customer_name": " ".join(support.customer_context.title, support.customer_context.last_name),
             "customer_context": support.customer_context,
             "support_category": "order_inquery/ return_refund",
-            "general_inquiry": support.order_number_provided,
+            "order_number_provided": support.order_number_provided,
         }         
     try:
         result = await graph.ainvoke(initial_state, config)
@@ -98,12 +100,8 @@ async def customer_support_continue(chat: SupportChatContinue, request: Request)
         logger.exception("Error continuing customer-support workflow")
         raise HTTPException(status_code=500, detail=f"Error starting customer-support: {exc}")
 
+# Will Reducer rules of GraphState apply to Langgraph invoke action?
+# Yes, reducer rules defined in your graph state absolutely apply when calling the invoke action 
+# (as well as ainvoke, stream, and update_state)
+# In another word, API calls can append HumanMessage and update a few state variable at the same time.
 
-# LangGraph How do I invoke compiledStateGraph multiple times and maintain updated state with appended user message
-# config = {"configurable": {"thread_id": "conversation-1"}}
-# First user turn
-# input_1 = {"messages": [HumanMessage(content="Hi, my name is Alice.")]}
-# output_1 = graph.invoke(input_1, config)
-# input_2 = {"messages": [HumanMessage(content="What is my name?")]}
-# output_2 = graph.invoke(input_2, config)
-# print(output_2["messages"][-1].content)  # Remembers "Alice"

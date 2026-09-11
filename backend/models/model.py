@@ -95,7 +95,7 @@ class ChatState(MessagesState):
     summary: str
     customer_name: str
     customer_context: CustomerContext
-    support_category: Literal["order_inquery/ return_refund", "general/ others"] = 'others'
+    support_category: Literal["order_inquery/ return_refund", "general/ others"] = 'general/ others'
     general_inquiry: str
     faq_match_evals: FAQMatchEvals
     general_issue_resolved: bool

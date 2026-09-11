@@ -6,7 +6,7 @@ from models.model import CustomerContext, Order, RefundRequest, RefundProcess, F
 from dotenv import load_dotenv
 import os
 
-load_dotenv(overide= True)
+load_dotenv(override= True)
 
 threshold_amount_auto_approve = os.getenv("AMOUNT_THRESHOLD_AUTO")
 threshold_days_auto_approve = os.getenv("DAYS_THRESHOLD_AUTO=")
@@ -32,12 +32,12 @@ FAQs = {
         "What is your return policy?": "We accept returns within 35 days of delivery for unused items",
         "Can I still get my refund if my order exceeds 35 days of return policy": "Yes, with customer support representative's approval",
         "How do I start a return?": "You can talk to me to start a return/ refund request.",
-        "When will I get my refund?": "Refunds usually take 3 to 5 business days after we get the item back.",
+        "When will I get my refund?": "Refunds usually take 7 to 10 business days after we get the item back.",
         "Are returns free?": "Yes, we will include the return shipping label in the request confirmation email"
     },
     "Orders and Payment": {
         "What payment methods do you accept?": "We take credit/ debit cards, PayPal, Apple Pay, and Google Wallet.",
-        "Can I cancel or change my order?": "You can change or cancel within 1 hour of placing the order.", 
+        "Can I cancel my order?": "You can cancel your order as long as the order is in pending status.  You cannot cancel an order once it has been shipped and in transit status.",
         "Is my payment secure?": "Yes. All data is encrypted via SSL.",
     }    
 }
@@ -46,7 +46,8 @@ faq_dict = {}
 faq_dict.update(FAQs['Shipping & Delivery'])
 faq_dict.update(FAQs['Returns and Refunds'])
 faq_dict.update(FAQs['Orders and Payment'])
-faq_qst_lst = FAQs['Shipping & Delivery'].keys() + FAQs['Returns and Refunds'].keys() + FAQs['Orders and Payment'].keys()
+faq_qst_lst = list(faq_dict.keys())
+
 
 # Technically I don't need @tool decorator because it is not calling from LLM
 
@@ -74,7 +75,7 @@ def retrieve_target_order(context: CustomerContext, order_number: int) -> Order 
             context: CustomerContext
             order_number: used to locate the order from the CustomerContext
         Returns:
-            the target Order
+            an target Order
     """
     if context.latest_orders:
         for order in context.latest_orders:
@@ -82,19 +83,7 @@ def retrieve_target_order(context: CustomerContext, order_number: int) -> Order 
                 return order
     return None
 
-@tool            
-def get_next_order(context: CustomerContext) -> Order:
-    """ retrieve the next order available from the CustomerContext
-        Args:
-            context: CustomerContext 
-        Returns:
-            next Order available
-    """
-    try:
-        return next(iter(context.latest_orders))
-    except StopIteration:
-        return None
-    
+
 @tool
 def calculate_amount_refund_incl_tax(refund_request: RefundRequest) -> float:
     """Calculate total refund amount including tax base upon `ReturnedOrder` and `ReturnedOrderItem` associated 
@@ -108,7 +97,7 @@ def calculate_amount_refund_incl_tax(refund_request: RefundRequest) -> float:
     """
     # items min_length= 1
     if refund_request is None or refund_request.returned_order is None:
-        return float('-inf')
+        raise ValueError("The refund request does not have required information!!")
 
     total_before_tax = 0.0
     for item in refund_request.returned_order.items:
@@ -117,31 +106,33 @@ def calculate_amount_refund_incl_tax(refund_request: RefundRequest) -> float:
     return total_before_tax * (1 + refund_request.returned_order.tax_applied_rate)
 
 @tool
-def check_if_refund_require_manual_approval(refund_request: RefundRequest) -> str:
-    f"""Check if this refund request requires manual approval.
-    Use this right BEFORE processing a refund request and AFTER set 'amount_refund_incl_tax' 
-    for `ReturnedOrder`
+def check_if_refund_require_manual_approval(refund_request: RefundRequest) -> RefundProcess:
+    """Check if this refund request requires manual approval.
+    Use this right BEFORE processing a RefundRequest and AFTER set 'amount_refund_incl_tax' 
+    of `ReturnedOrder` for that RefundRequest
     It compares two thresholds: 
-    {threshold_amount_auto_approve} - for auto approval if the refund amount is below this threshold
-    {threshold_days_auto_approve} - for auto approval if the refund request date is within this return window
+    `threshold_amount_auto_approve` - for auto approval if the refund amount is below this threshold
+    `threshold_days_auto_approve` - for auto approval if the refund request date is within this return window
     Args:
-        refund_request: a valid 
+        refund_request: a valid RefundRequest
     Returns:
-        json string: representing `RefundProcess` object.
+        A RefundProcess object.
         if the refund request requires manual approval, 'requires_manual_approval' attribute
         will return True with 'reason' expllaining why
-        if the refund request requires manual approval, 'requires_manual_approval' attribute
-        will return False with 'reason' of 'None' 
+        if the refund request does not requires manual approval, 'requires_manual_approval' attribute
+        will return False with 'reason' None
     """
     refund_process = RefundProcess()
-    if refund_request.returned_order:
+    if refund_request.returned_order and refund_request.returned_order.amount_refund_incl_tax and refund_request.returned_order.origin_delivery_date:
         # threshold_amount_auto_approve should compare product cost only 
         if refund_request.returned_order.amount_refund_incl_tax // (1 + refund_request.returned_order.tax_applied_rate) > \
         threshold_amount_auto_approve:
             refund_process = RefundProcess(requires_manual_approval= True, 
-                                           reason=f"The refund amount excluding tax has exceeded the auto-approval threshold")
+                reason=f"The refund amount excluding tax has exceeded the auto-approval threshold: {threshold_amount_auto_approve}")
         if refund_request.request_date - refund_request.returned_order.origin_delivery_date > threshold_days_auto_approve:
             refund_process = RefundProcess(requires_manual_approval= True, 
-                                                       reason=f"The refund request date has exceeded the return window")
-        return refund_process.model_dump_json()
+                reason=f"The refund request date has exceeded the return window: {threshold_days_auto_approve}")
+        return refund_process
+    
+    raise ValueError("The refund request does not have required information!!")
 
