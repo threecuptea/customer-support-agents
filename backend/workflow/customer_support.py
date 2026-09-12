@@ -98,7 +98,8 @@ class CustomerSupportAgent:
         The above options are not mutual exclusive.
         Set `rapid_fuzz_wratio_match_helpful` if you think that the fuzz match option will be helpful.
         Set `llm_semantic_match_helpful` if you think the LLM semantic match will be help.
-        state `reason` as needed. 
+        state `reason` as needed.
+        Set both flags to False if you are not sure if either one will help  
         The followings are brief explanation of fuzz.WRatio for your reference:
 
         1. Take the ratio of the two processed strings (fuzz.ratio)

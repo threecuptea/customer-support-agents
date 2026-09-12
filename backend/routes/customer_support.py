@@ -4,8 +4,8 @@ from pydantic import BaseModel, Field
 from fastapi import APIRouter, Request, HTTPException
 import os
 from langchain_core.messages import HumanMessage, SystemMessage
-from typing import Literal, Annotated
-from models.model import CustomerContext, ChatState
+from typing import Annotated
+from models.model import CustomerContext
 from memory import load_user_memory
 from helper import parse_interrupt_info
 import uuid

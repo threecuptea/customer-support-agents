@@ -30,6 +30,7 @@ class OrderItem(BaseModel):
     supplier_name: Annotated[str, Field(min_length=1)]
     unit_price: Annotated[float, Field(gt=0)]
     number_units: Annotated[int, Field(gt=0)]
+    non_refundable: bool = False
 
 # All date fields be TZ-aware 
 class Order(BaseModel):
