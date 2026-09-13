@@ -46,8 +46,8 @@ export const FAQ_SECTIONS: FaqSection[] = [
         "answer": "We accept returns within 35 days of delivery for unused items"
       },
       {
-        "question": "Can I still get my refund if my order exceeds 35 days of return policy",
-        "answer": "Yes, with customer support representative's approval"
+        "question": "Can I still get my refund if my order exceeds the return window of the policy",
+        "answer": "Sorry, we have already extended 5 more days."
       },
       {
         "question": "How do I start a return?",

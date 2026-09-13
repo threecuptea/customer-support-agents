@@ -69,7 +69,7 @@ export default function CustomerSelectionsPage() {
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap justify-center gap-3">
           <button
             onClick={() => router.push("/customer/order-inquiry")}
             className="inline-flex items-center gap-1.5 bg-brand-purple hover:bg-brand-purple/90 text-white rounded-lg px-4 py-2 text-sm font-medium transition-colors"

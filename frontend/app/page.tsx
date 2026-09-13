@@ -60,16 +60,16 @@ export default function LoginPage() {
   };
 
   return (
-    <main className="min-h-screen bg-gradient-to-b from-gray-50 to-brand-blue/10 flex items-center justify-center px-4 py-10">
+    <main className="min-h-screen bg-gradient-to-b from-gray-50 to-brand-blue/10 flex justify-center px-4 py-16 sm:py-20">
       <div className="max-w-md w-full">
-        <h1 className="text-3xl font-bold text-brand-navy text-center mb-1">
+        <h1 className="text-3xl font-bold text-brand-navy text-center mb-2">
           e-shopping.com
         </h1>
-        <p className="text-brand-gray text-center text-sm mb-6">
+        <p className="text-brand-gray text-center text-sm mb-14">
           Customer Support
         </p>
 
-        <div className="mb-6 text-center space-y-1">
+        <div className="mb-14 text-center space-y-3">
           {FAQ_TEASERS.map(({ text, className }) => (
             <p key={text} className={className}>
               {text}
