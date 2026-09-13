@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { PackageSearch, MessageCircleQuestion, LogOut, ChevronDown } from "lucide-react";
+import { PackageSearch, MessageCircleQuestion, LogOut } from "lucide-react";
 import { useAuth, useRequireRole } from "../../lib/auth-context";
 import { FAQ_SECTIONS } from "../../lib/faq";
 
@@ -22,7 +22,7 @@ export default function CustomerSelectionsPage() {
 
   return (
     <main className="min-h-screen bg-gradient-to-b from-gray-50 to-brand-blue/10 py-10 px-4">
-      <div className="max-w-2xl mx-auto">
+      <div className="max-w-6xl mx-auto">
         <div className="flex items-center justify-between mb-6">
           <span className="text-sm font-semibold text-brand-navy">e-shopping.com</span>
           <button
@@ -46,24 +46,27 @@ export default function CustomerSelectionsPage() {
         </p>
 
         <div className="bg-white border border-gray-100 rounded-xl shadow-soft p-5 mb-6">
-          {FAQ_SECTIONS.map((section) => (
-            <div key={section.title} className="mb-4 last:mb-0">
-              <h2 className="text-sm font-semibold text-brand-purple uppercase tracking-wide mb-2">
-                {section.title}
-              </h2>
-              <div className="space-y-1">
-                {section.entries.map((entry) => (
-                  <details key={entry.question} className="group border-b border-gray-100 py-2">
-                    <summary className="flex items-center justify-between cursor-pointer list-none text-sm text-gray-800 font-medium">
-                      {entry.question}
-                      <ChevronDown className="w-4 h-4 text-brand-gray transition-transform group-open:rotate-180" />
-                    </summary>
-                    <p className="text-sm text-brand-gray mt-1.5">{entry.answer}</p>
-                  </details>
-                ))}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {FAQ_SECTIONS.map((section) => (
+              <div key={section.title}>
+                <h2 className="text-base font-bold text-brand-navy mb-3">
+                  {section.title}
+                </h2>
+                <div className="space-y-4">
+                  {section.entries.map((entry) => (
+                    <div key={entry.question}>
+                      <p className="text-sm font-medium text-gray-800 break-words">
+                        Q: {entry.question}
+                      </p>
+                      <p className="text-sm text-brand-gray mt-0.5 break-words">
+                        A: {entry.answer}
+                      </p>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-3">
