@@ -20,8 +20,8 @@ from langgraph.store.base import BaseStore
 logger = logging.getLogger(__name__)
 
 
-def _namespace(user_id: Any) -> tuple[str, Any]:
-    return ("users", user_id)
+def _namespace(user_id: Any) -> tuple[str, str]:
+    return ("users", str(user_id))
 
 
 def get_active_store() -> Optional[BaseStore]:

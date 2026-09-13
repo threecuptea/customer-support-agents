@@ -58,7 +58,7 @@ async def customer_support_start(support: GeneralChatStart | OrderChatStart, req
     config = {"configurable": {"thread_id": thread_id}}
 
     messages = []
-    memory = await load_user_memory(request.appe.state.store, support.customer_context.customer_id)
+    memory = await load_user_memory(request.app.state.store, support.customer_context.customer_id)
     if memory:
         messages.append(SystemMessage(content=f"Previous conversations:\n{memory}"))
     initial_state = {}     
@@ -66,16 +66,17 @@ async def customer_support_start(support: GeneralChatStart | OrderChatStart, req
         messages.append(HumanMessage(content= support.general_inquiry))
         initial_state = {
             "messages": messages,
-            "customer_name": " ".join(support.customer_context.title, support.customer_context.last_name),
+            "customer_name": " ".join([support.customer_context.title, support.customer_context.last_name]),
             "customer_context": support.customer_context,
             "support_category": "general/ others",
             "general_inquiry": support.general_inquiry,
+            "general_issue_resolved": False,
         }
     else:
         messages.append(HumanMessage(content= f"The order: {support.order_number_provided} is what I am concerned about"))
         initial_state = {
             "messages": messages,
-            "customer_name": " ".join(support.customer_context.title, support.customer_context.last_name),
+            "customer_name": " ".join([support.customer_context.title, support.customer_context.last_name]),
             "customer_context": support.customer_context,
             "support_category": "order_inquery/ return_refund",
             "order_number_provided": support.order_number_provided,

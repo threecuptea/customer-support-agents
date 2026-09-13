@@ -27,11 +27,11 @@ async def validate_populate_context(email_addr: str) -> AuthResponse:
         csr_members = re.split(r',\s*', __csr_whitelist)
         if email_addr in csr_members:
             return AuthResponse(email_addr = email_addr, is_auth = True, role = "csr")
-    elif __csr_domains:
+    if __csr_domains:
         csr_member_domains = re.split(r',\s*', __csr_domains)
         if any(email_addr.endswith(f'@{domain}') for domain in csr_member_domains):
             return AuthResponse(email_addr = email_addr, is_auth = True, role = "csr")
-    else:
+    if not __csr_whitelist and not __csr_domains:
         raise HTTPException(status_code=500, detail="Missing CSR (Customer Support Representatives) configuration")
     if demo_mode:
         # TODO: Add a set up function to dynamically adjust date fields of demo_data so that it fit well with the order status: delivered but not
@@ -54,31 +54,7 @@ def load_from_demo_data(email_addr: str) -> AuthResponse:
         except ValidationError as ve:
             logger.error(ve) # Human-readable error 
             logger.error(ve.errors) # The debugging details 
-            raise HTTPException(status_code=401, detail=f"Unable to retrieve a valid CustomerContext: {ve}")
-
+            return AuthResponse(email_addr = email_addr, is_auth = False, role = "customer")
     else:
-        raise HTTPException(status_code=404, detail="Unable to locate the customer by the email address")
-
-
-
-        
-
-
-
-
-    
-
-    
-
-    
-
-    
-        
-
-        
-
-
-    
-    
-
+        return AuthResponse(email_addr = email_addr, is_auth = False, role = "customer")    
     

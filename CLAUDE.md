@@ -51,7 +51,7 @@ There is an OPENAI_API_KEY in the .env file in the project root.
 
 The entire project should be packaged into a Docker container.
 
-The backend is in `backend/` — a `uv` project (Python 3.12) using FastAPI.  Currently, all API endpoints are in in `backend/main.py`. I have already separated into `route` and `services` and `models`. `models/models` have all model schemas shared by `auth` and `customer-support` services.  
+The backend is in `backend/` — a `uv` project (Python 3.12) using FastAPI.  Currently, all API endpoints are in in `backend/main.py`. I have already separated into `route` and `services` and `models`. `models/model.py` have all model schemas shared by `auth` and `customer-support` services.  
 
 The frontend is in `frontend/` — Next.js 16, React 19, Tailwind 4. It will be statically exported (`next.config.ts` → `output: "export"`) to `frontend/out/`, which FastAPI serves at runtime. 
 
@@ -117,7 +117,7 @@ The single-container image serves both the API and the Next.js static export (`f
 - CSA-2: Moved from two Docker containers (separate frontend + backend) to one. `Dockerfile` is a multi-stage build — stage 1 (`node:20-alpine`) runs `npm run build` against `frontend/` to produce the static export at `frontend/out` (`next.config.ts` sets `output: "export"`); stage 2 (`python:3.12-slim`) installs the backend with `uv sync --no-dev` and copies `frontend/out` in alongside it. `docker-compose.yml` runs a single service on port 8000. The root cause of the original failure (`/approval` 404ing at `:8000`) was that FastAPI never mounted/served `frontend/out` even though the image already contained it — fixed via the static-file serving + catch-all described in [Routing guard](#routing-guard). Also added: a root `.dockerignore` (host `node_modules`/`.venv`/`backend/checkpoints.sqlite` were previously copyable into the build context and image), and the frontend's `API_URL` now defaults to the relative `/api` instead of an absolute `http://localhost:8000/api`, so the same build works regardless of the host/domain the single container is served from.
 
 - CSA-3: [API] Re-organize, build the infrastrure: cross-cutting long-term memory and clean-up
-  - Move approval API calls out of main.py. Re-organize to have separate route/service and shared models. The approval API functions are in `routes/approval.py` now.  Two new routes/ services: auth and customer-support would follow the new structures.  `models/models.py` , having core schemas: ChatState, CustomerContext, Order, OrderItem, RefundRequest, ReturnedOrder, ReturnedOrderItem etc., are shared by auth and customer-support routes/ services
+  - Move approval API calls out of main.py. Re-organize to have separate route/service and shared models. The approval API functions are in `routes/approval.py` now.  Two new routes/ services: auth and customer-support would follow the new structures.  `models/model.py` , having core schemas: ChatState, CustomerContext, Order, OrderItem, RefundRequest, ReturnedOrder, ReturnedOrderItem etc., are shared by auth and customer-support routes/ services
   - I make use of LangGraph cross-cutting long-term memory.  Add long-term memory (so called store) wiring in the `lifespan` function of main.py. `customer-support` workflow is using long-term memory.
   - Update `save_user_memory` in memory.py to use thread_id as the key.  There will be one summary for a conversation thread. 
   - `load_user_memory` will look up by user_id (customer_id).  It will be called before LLM start conversations with the user in `customer-support` screens so that LLM have the context of previous conversations
@@ -127,7 +127,7 @@ The single-container image serves both the API and the Next.js static export (`f
 - CSA-4: Add `auth` route/service
     - Use `DEMO_MODE` only in prototype (demo_data is in memory).  I states the reason in `Request flow summary`
     - I apply `adjust_days_demo_data_testable` logic to `demo_data` in memory by test customer's assigned `OrderRefundStatus` so that they are always testable.
-    - `customer-support-agents` is a multi-tenant application.  `auth` service returns `AuthResponse` with a role of (`csr` or `customer`) by the login user email. `csr` is regulated by `CSR_WHITELIST` and `CSR_DOMAINS` defined.  The former has higher priority. Then fall back to search customer order system for `customer` role. It will return `AuthResponse` with a `is_auth` False. The user would be locked from access the  in that case. `AuthResponse` is prefilled with `CustomerContext` of recent orders for users of `customer` role. 
+    - `customer-support-agents` is a multi-tenant application.  `auth` service returns `AuthResponse` with a role of (`csr` or `customer`) by the login user email. `csr` is regulated by `CSR_WHITELIST` and `CSR_DOMAINS` defined.  The former has higher priority. Then fall back to search customer order system for `customer` role. It will return is_auth = False if it cannot find the customer. `AuthResponse` is prefilled with `CustomerContext` of recent orders for users of `customer` role. 
   
 
 ### Current API Endpoints

@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 FAQ_MATCH_THRESHOLD = 75.0
 ESCALATE_MESSAGE = "I will escalate to a human agent and somebody will contact you within 3 business days"
+SUMMARIZE_MESSAGE_THRESHOLD = 6
 
 
 class CustomerSupportAgent:
@@ -42,8 +43,10 @@ class CustomerSupportAgent:
     ###############################################
     # Borrow from https://pub.towardsai.net/your-first-real-langgraph-project-ac5eb00f923a              
     async def summarize_node(self, state: ChatState, config: RunnableConfig) -> dict[str, Any]:
-        """Triggered when the conversation exceeds 6 messages. Compresses the
-        full message history into a short summary, then deletes old raw messages.
+        """Compresses the full message history into a short summary, then deletes old
+        raw messages. Callers route here via `_should_summarize` (message count past
+        SUMMARIZE_MESSAGE_THRESHOLD, or their own flow-specific topic-concluded signal) —
+        this node itself is flow-agnostic and always summarizes when invoked.
         The summary grows richer turn by turn. Token costs stay nearly flat no matter how long
         the conversation runs.
         """
@@ -74,7 +77,7 @@ class CustomerSupportAgent:
         ]
         # Store summary in the long-term memory
         thread_id = config.get("configurable", {}).get("thread_id")
-        await save_user_memory(self.store, state.customer_context.customer_id, thread_id, response.content)
+        await save_user_memory(self.store, state['customer_context'].customer_id, thread_id, response.content)
 
         return {
             "summary": response.content,
@@ -123,14 +126,14 @@ class CustomerSupportAgent:
         # resp should an AIMessage wrapper
         # FAQMatchEvals
         eval = await self.general_llm_for_faq_match_evals.ainvoke([system_msg])
-        updates = {"faq_match_evals": eval}
+        updates = {"faq_match_evals": eval, "general_issue_resolved": False}
         if not eval or (eval and not eval.rapid_fuzz_wratio_match_helpful and not eval.llm_semantic_match_helpful):
             response = ESCALATE_MESSAGE
             message = SystemMessage(content=response)
             updates["messages"] = [message]
             updates["response"] = response
             updates["general_issue_resolved"] = True
-            
+
         return updates
 
     
@@ -158,6 +161,7 @@ class CustomerSupportAgent:
             }
         else:
             return {
+                "general_issue_resolved": False,
             }
 
     async def general_faq_llm_match_node(self, state: ChatState) -> dict[str, Any]:
@@ -226,26 +230,34 @@ class CustomerSupportAgent:
         # Speed up the workflow and let UI take care
         # What if the customer ask general questions (possible different ones) more than once?  Should we execute more than once
         # For order, will branch out based upon if target_order is set and if return_refund_eligible is set and if intent_for_return_refund etc.
-        match state.support_category:
+        match state['support_category']:
             case "general/ others":
                 return "general_faq_eval_node"
             case _:
                 return "order_inquiry_node"
         return ""       
 
-    def route_after_general_faq_eval(self, state: ChatState) -> str:      
-        if state["general_issue_resolved"]:
-            return END
+    def _should_summarize(self, state: ChatState, topic_concluded: bool) -> bool:
+        """Shared trigger for routing into `summarize_node`: each flow passes its own
+        flow-specific 'concluded' signal (e.g. `general_issue_resolved` for the general
+        inquiry flow); the message-count threshold is the only domain-agnostic part,
+        shared across flows.
+        """
+        return topic_concluded or len(state["messages"]) > SUMMARIZE_MESSAGE_THRESHOLD
+
+    def route_after_general_faq_eval(self, state: ChatState) -> str:
+        if self._should_summarize(state, state["general_issue_resolved"]):
+            return "summarize_node"
         if state["faq_match_evals"]:
             if state["faq_match_evals"].rapid_fuzz_wratio_match_helpful:
                 return "general_faq_fuzz_match_node"
             if state["faq_match_evals"].llm_semantic_match_helpful:
-                return "general_faq_llm_match_node" 
-        return END
+                return "general_faq_llm_match_node"
+        return "summarize_node"
 
-    def route_after_general_faq_fuzz_match(self, state: ChatState) -> str:      
-        if state["general_issue_resolved"]:
-            return END
+    def route_after_general_faq_fuzz_match(self, state: ChatState) -> str:
+        if self._should_summarize(state, state["general_issue_resolved"]):
+            return "summarize_node"
         return "general_faq_llm_match_node"
 
 
@@ -266,11 +278,11 @@ class CustomerSupportAgent:
         
         builder.add_node("general_faq_eval_node", self.general_faq_eval_node)
         builder.add_conditional_edges("general_faq_eval_node", self.route_after_general_faq_eval,
-            {END: END, "general_faq_fuzz_match_node": "general_faq_fuzz_match_node", "general_faq_llm_match_node": "general_faq_llm_match_node"})
+            {"summarize_node": "summarize_node", "general_faq_fuzz_match_node": "general_faq_fuzz_match_node", "general_faq_llm_match_node": "general_faq_llm_match_node"})
 
         builder.add_node("general_faq_fuzz_match_node", self.general_faq_fuzz_match_node)
         builder.add_conditional_edges("general_faq_fuzz_match_node", self.route_after_general_faq_fuzz_match,
-            {END: END, "general_faq_llm_match_node": "general_faq_llm_match_node"})
+            {"summarize_node": "summarize_node", "general_faq_llm_match_node": "general_faq_llm_match_node"})
         
         builder.add_node("general_faq_llm_match_node", self.general_faq_llm_match_node)
         builder.add_edge("general_faq_llm_match_node", "summarize_node")

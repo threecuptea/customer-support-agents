@@ -8,8 +8,8 @@ import os
 
 load_dotenv(override= True)
 
-threshold_amount_auto_approve = float(os.getenv("AMOUNT_THRESHOLD_AUTO"))
-threshold_days_auto_approve = int(os.getenv("DAYS_THRESHOLD_AUTO"))
+threshold_amount_auto_approve = float(os.getenv("AMOUNT_THRESHOLD_AUTO", "500"))
+threshold_days_auto_approve = int(os.getenv("DAYS_THRESHOLD_AUTO", "35"))
 
 
 # Group common e-commerce FAQs into core topics:

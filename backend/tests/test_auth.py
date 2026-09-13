@@ -57,7 +57,10 @@ def test_email_not_found(client):
     # without monkeypatch to set __csr_domains, it should return not found
     email_addr = "sonya.ling@threecuptea.com"
     resp = client.post("/api/auth", json={"email_addr": email_addr})
-    assert resp.status_code == 404    
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data['is_auth'] == False
+         
 
 # Type hinting alone does not change a field's requirement status and a default value is still required.
 # name: str | None = None: Input Value Can Be None? Yes, Field Can Be Omitted entirely? Yes
@@ -179,5 +182,8 @@ def test_order_missing_required(client):
     email_addr = "harry.enten@cnn.com"
     resp = client.post("/api/auth", json={"email_addr": email_addr})
     # missing order date
-    assert resp.status_code == 401
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data['is_auth'] == False
+        
     
