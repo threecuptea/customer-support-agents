@@ -31,6 +31,25 @@ load_dotenv(override=True)
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
+BACKEND_DIR = Path(__file__).resolve().parent
+# Anchored at the repo root (../data locally, /app/data in the single-container
+# image, since Docker's WORKDIR puts main.py at /app/backend). Resolving here
+# instead of leaving CHECKPOINT_DB/STORE_DB as bare relative paths means the
+# sqlite files always land in the same place regardless of the CWD the process
+# happened to be started from.
+DATA_DIR = BACKEND_DIR.parent / "data"
+
+
+def _resolve_db_path(value: str | None) -> str | None:
+    """Anchor a configured sqlite filename under DATA_DIR. An absolute path is
+    used as-is (e.g. an operator-supplied override); a relative one is treated
+    as a filename under DATA_DIR, regardless of any directory components given.
+    """
+    if not value:
+        return None
+    path = Path(value)
+    return str(path if path.is_absolute() else DATA_DIR / path.name)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
@@ -40,16 +59,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.store = store
 
     demo_mode = os.getenv("DEMO_MODE", "false").lower() == "true" # we are using demo mode in dev environment.
-    checkpoint_db = os.getenv("CHECKPOINT_DB")
-    store_db = os.getenv("STORE_DB")
+    checkpoint_db = _resolve_db_path(os.getenv("CHECKPOINT_DB"))
+    store_db = _resolve_db_path(os.getenv("STORE_DB"))
     connection_url = os.getenv("CONNECTION_URL")
     if demo_mode and checkpoint_db and store_db:
         # We are not persistinh any business entities in demo_mode (local)
         from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
         from langgraph.store.sqlite.aio import AsyncSqliteStore
-        # root data dir is the default folder for the sqlite db files.
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
         async with AsyncSqliteSaver.from_conn_string(checkpoint_db) as saver:
-            # I have to use ../data/stores.sqlite to point to the correct path. 
             async with AsyncSqliteStore.from_conn_string(store_db) as store:
                 logger.info("In demo mode, initializing durable AsyncSqliteSaver at %s", checkpoint_db)
                 logger.info("In demo mode, initializing durable AsyncSqliteStore at %s", store_db)
@@ -100,7 +118,7 @@ app.add_middleware(
 # In the single-container image, `frontend/out` is copied next to this file
 # (see Dockerfile). It won't exist when running the backend standalone in dev
 # (`npm run dev` serves the frontend separately in that case).
-FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend" / "out"
+FRONTEND_DIR = BACKEND_DIR.parent / "frontend" / "out"
 
 if (FRONTEND_DIR / "_next").is_dir():
     app.mount("/_next", StaticFiles(directory=FRONTEND_DIR / "_next"), name="next-static")
