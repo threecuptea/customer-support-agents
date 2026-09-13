@@ -8,11 +8,22 @@ import { FAQ_SECTIONS } from "../lib/faq";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "/api";
 
-// A handful of questions (first couple per section) shown as decorative tags —
-// there's no logo, so these stand in for one. Full FAQ list lives on /customer.
-const FAQ_TEASERS = FAQ_SECTIONS.flatMap((section) =>
-  section.entries.slice(0, 2).map((entry) => entry.question)
-);
+function findQuestion(text: string) {
+  for (const section of FAQ_SECTIONS) {
+    const hit = section.entries.find((entry) => entry.question === text);
+    if (hit) return hit.question;
+  }
+  return text;
+}
+
+// There's no logo, so a small scattered, hand-picked collage of FAQ questions
+// stands in for one. Full FAQ list lives on /customer.
+const FAQ_TEASERS = [
+  { text: findQuestion("When will my order ship?"), className: "text-2xl sm:text-3xl font-bold text-blue-600 -rotate-6" },
+  { text: findQuestion("What is your return policy?"), className: "text-sm sm:text-base font-semibold text-amber-500 -rotate-2 ml-10" },
+  { text: findQuestion("How long does a delivery take?"), className: "text-lg sm:text-xl font-semibold text-teal-600 -rotate-3" },
+  { text: findQuestion("What if my package is lost or late?"), className: "text-sm sm:text-base italic font-medium text-fuchsia-600 -rotate-1 ml-16" },
+];
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -58,6 +69,14 @@ export default function LoginPage() {
           Customer Support
         </p>
 
+        <div className="mb-6 text-center space-y-1">
+          {FAQ_TEASERS.map(({ text, className }) => (
+            <p key={text} className={className}>
+              {text}
+            </p>
+          ))}
+        </div>
+
         <div className="bg-white border border-gray-100 rounded-xl shadow-soft p-5">
           <label className="block text-sm font-medium text-gray-700 mb-2">
             Sign in with your account email
@@ -96,19 +115,6 @@ export default function LoginPage() {
               {error}
             </div>
           )}
-        </div>
-
-        <div className="mt-8">
-          <p className="text-xs font-medium text-brand-gray text-center mb-3">
-            Popular questions
-          </p>
-          <div className="flex flex-wrap justify-center gap-2">
-            {FAQ_TEASERS.map((question) => (
-              <span key={question} className="choice-badge">
-                {question}
-              </span>
-            ))}
-          </div>
         </div>
       </div>
     </main>
