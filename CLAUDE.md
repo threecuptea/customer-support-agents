@@ -103,6 +103,16 @@ The single-container image serves both the API and the Next.js static export (`f
 - A catch-all `GET /{full_path:path}`, registered last, serves the rest of `frontend/out`: it 404s immediately if `full_path` starts with `api/` (explicit guard, on top of registration order already protecting this), then tries the exact file, `{full_path}.html`, `{full_path}/index.html`, and — only for the empty path (`/`) — `index.html`. Any other unmatched path falls through to the export's own `404.html` (status 404), so typos/dead links don't silently render the homepage with a 200.
 - Path traversal is blocked by resolving each candidate and checking `candidate.is_relative_to(FRONTEND_DIR)` before serving it.
 
+### Sqlite persistence paths
+
+`CHECKPOINT_DB` and `STORE_DB` (used in demo mode for durable `AsyncSqliteSaver`/`AsyncSqliteStore`) are configured as relative filenames, but `sqlite3`/`aiosqlite` resolve relative paths against the process's **current working directory at connect time** — not against `.env`'s or `main.py`'s location. Launching `uvicorn`/`pytest` from `backend/` vs. the repo root used to produce sqlite files in different places for the exact same `.env` (and `STORE_DB` needed a `../data/` prefix hack just to land next to `CHECKPOINT_DB` at all).
+
+Fixed by anchoring both at `DATA_DIR = BACKEND_DIR.parent / "data"` in `main.py` (`BACKEND_DIR = Path(__file__).resolve().parent`), via a `_resolve_db_path()` helper:
+- A relative filename (e.g. `checkpoints.sqlite`) always resolves under `DATA_DIR` — the repo root's `data/` locally, `/app/data` in the container (Docker's `WORKDIR` puts `main.py` at `/app/backend`, so `BACKEND_DIR.parent` is `/app`), matching the `./data:/app/data` volume mount in `docker-compose.yml`.
+- An absolute path is used as-is (an operator override).
+
+`.env`/`.env.example` now just use bare filenames (`checkpoints.sqlite`, `stores.sqlite`); leaving both unset still falls back to in-memory `MemorySaver`/`InMemoryStore` as before.
+
 ## Color Scheme
 
 - Accent Yellow: `#ecad0a`
@@ -128,6 +138,13 @@ The single-container image serves both the API and the Next.js static export (`f
     - Use `DEMO_MODE` only in prototype (demo_data is in memory).  I states the reason in `Request flow summary`
     - I apply `adjust_days_demo_data_testable` logic to `demo_data` in memory by test customer's assigned `OrderRefundStatus` so that they are always testable.
     - `customer-support-agents` is a multi-tenant application.  `auth` service returns `AuthResponse` with a role of (`csr` or `customer`) by the login user email. `csr` is regulated by `CSR_WHITELIST` and `CSR_DOMAINS` defined.  The former has higher priority. Then fall back to search customer order system for `customer` role. It will return is_auth = False if it cannot find the customer. `AuthResponse` is prefilled with `CustomerContext` of recent orders for users of `customer` role. 
+
+- Post CSA-3/CSA-4 bug-fix pass (PR #4): general_inquiry flow was left half-done after CSA-3/CSA-4, so `order_inquiry_node`/order-return flow is still a stub (CSA-8 will build it out) — these are the bugs fixed on the general_inquiry side plus a couple that predate it:
+  - `services/auth_service.py`: fixed `elif`/`else` short-circuiting the CSR whitelist + domain checks (the domain check was skipped whenever a whitelist was configured, even if the email didn't match it); return `is_auth = False` instead of raising 401/404 when a customer can't be found or fails `CustomerContext` validation, so `/api/auth` always returns a consistent `AuthResponse` shape
+  - `routes/customer_support.py`: fixed a `str.join()` crash on every `/api/support/start` call (was passing two positional args instead of a list)
+  - `workflow/customer_support.py`: fixed `general_issue_resolved` never being set on the non-escalate branches of `general_faq_eval_node`/`general_faq_fuzz_match_node`, which raised `KeyError` in the routers on the normal/resolved path — declaring a field in the `ChatState` TypedDict does **not** give it a runtime default; LangGraph only exposes a channel once something actually writes it. Also reworked `summarize_node` routing: it's now reachable from every terminal branch of the general_inquiry flow (not just the LLM-match path) via a shared, flow-agnostic `_should_summarize(state, topic_concluded)` helper — each flow passes its own "topic concluded" signal (`general_issue_resolved` for general_inquiry), and the message-count threshold (`SUMMARIZE_MESSAGE_THRESHOLD = 6`) is the only generic part, kept out of `summarize_node` itself so future flows (order/return, CSA-8) can reuse it without depending on a field that's specific to general_inquiry
+  - `memory.py`: `_namespace()` passed `customer_id` (an `int`) straight into the store namespace tuple; LangGraph stores require string namespace segments, so `save_user_memory`/`load_user_memory` were silently failing (swallowed by their own `try/except`, logged only as a `WARNING`) on every single call — cross-session memory never actually persisted until this was fixed
+  - See [Sqlite persistence paths](#sqlite-persistence-paths) for the `CHECKPOINT_DB`/`STORE_DB` path-resolution fix
   
 
 ### Current API Endpoints
