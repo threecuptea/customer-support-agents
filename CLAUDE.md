@@ -30,9 +30,9 @@ uv run uvicorn main:app --reload     # dev server on :8000
 ```bash
 npm run dev          # dev server on :3000 (hot reload, proxies /api to :8000)
 npm run build        # static export to frontend/out/
-# npm test             # vitest run (single pass)
-# npm run test:watch   # vitest watch mode
-# npm run lint         # eslint
+npm test             # vitest run (single pass)
+npm run test:watch   # vitest watch mode
+# npm run lint         # eslint — not yet configured (next lint prompts interactively; no eslint config committed)
 ```
 
 ### Docker (run from repo root)
@@ -145,7 +145,16 @@ Fixed by anchoring both at `DATA_DIR = BACKEND_DIR.parent / "data"` in `main.py`
   - `workflow/customer_support.py`: fixed `general_issue_resolved` never being set on the non-escalate branches of `general_faq_eval_node`/`general_faq_fuzz_match_node`, which raised `KeyError` in the routers on the normal/resolved path — declaring a field in the `ChatState` TypedDict does **not** give it a runtime default; LangGraph only exposes a channel once something actually writes it. Also reworked `summarize_node` routing: it's now reachable from every terminal branch of the general_inquiry flow (not just the LLM-match path) via a shared, flow-agnostic `_should_summarize(state, topic_concluded)` helper — each flow passes its own "topic concluded" signal (`general_issue_resolved` for general_inquiry), and the message-count threshold (`SUMMARIZE_MESSAGE_THRESHOLD = 6`) is the only generic part, kept out of `summarize_node` itself so future flows (order/return, CSA-8) can reuse it without depending on a field that's specific to general_inquiry
   - `memory.py`: `_namespace()` passed `customer_id` (an `int`) straight into the store namespace tuple; LangGraph stores require string namespace segments, so `save_user_memory`/`load_user_memory` were silently failing (swallowed by their own `try/except`, logged only as a `WARNING`) on every single call — cross-session memory never actually persisted until this was fixed
   - See [Sqlite persistence paths](#sqlite-persistence-paths) for the `CHECKPOINT_DB`/`STORE_DB` path-resolution fix
-  
+
+- CSA-5/CSA-6/CSA-7: [UI] Login screen, CSR draft-approval screen, customer initial-selections screen (built together on one branch/PR since CSA-5's redirects land directly on CSA-6/CSA-7)
+  - CSA-5: new `frontend/app/page.tsx` (root route) — single email-address input, calls `POST /api/auth`, shows the required "unable to find any customer" message when `is_auth` is false (keying off `is_auth`, not `role`, since the backend defaults `role` to `"customer"` even on failure), and redirects to `/customer` or `/csr` by `role` on success. No logo exists, so the login card shows a handful of FAQ questions (first two per section from `lib/faq.ts`) as decorative, non-interactive tags.
+  - CSA-6: `frontend/app/approval/page.tsx` (the only page that existed before this work) was `git mv`'d to `frontend/app/csr/page.tsx` and wrapped with a `useRequireRole("csr")` guard; its draft/approve/edit/reject state machine against `/api/approval/start`/`/api/approval/decide` is otherwise unchanged. The "return/refund report screen" mentioned in the ticket is not part of this work — only the already-built draft-letter approve/edit/reject gate was ported, per the ticket's own "the latter part is ready" framing.
+  - CSA-7: new `frontend/app/customer/page.tsx` — greets the customer from `session.customer_context`, displays the full 3-section FAQ list from `lib/faq.ts` as a collapsible accordion, and offers three actions: "Order inquiry & return refund" and "Others" navigate to placeholder pages (`frontend/app/customer/order-inquiry/`, `frontend/app/customer/others/`) since their real destinations belong to un-started tickets (no order-inquiry UI ticket yet; "Others" is CSA-9, backed by CSA-8); "Exit" clears the session and returns to `/`.
+  - New `frontend/lib/auth-context.tsx`: a React Context (`AuthProvider`, `useAuth`, `useRequireRole`) persisting `{email_addr, role, customer_context}` to `localStorage`, hydrating on mount so a page refresh doesn't lose the session. `useRequireRole(role)` redirects unauthenticated or wrong-role visitors to `/` and returns `session: null` whenever unauthorized (including on a role mismatch) so guarded pages only need `if (isLoading || !session) return null;` — no per-page re-check of `session.role`.
+  - New `frontend/lib/faq.ts`: a **generated** file (do not hand-edit) produced by `backend/scripts/export_faq.py` from `workflow/customer_support_tools.py`'s `FAQs` dict, keeping the frontend's FAQ content and the backend's single source of truth from drifting apart. `backend/tests/test_faq_export_freshness.py` fails the backend test suite if the committed file is stale — regenerate with `uv run python -m scripts.export_faq` (from `backend/`) after editing `FAQs`.
+  - Brand colors (Accent Yellow/Blue Primary/Purple Secondary/Dark Navy/Gray Text, see [Color Scheme](#color-scheme)) are now wired into `frontend/tailwind.config.js` as `brand.*` tokens and used across the login, CSR, and customer screens — this is the first UI work to actually apply the documented palette.
+  - Bootstrapped frontend testing (previously nonexistent): `vitest` + `@testing-library/react` + `jsdom`, with `frontend/vitest.config.ts`/`vitest.setup.ts` and a shared `frontend/lib/test-utils.tsx` (`renderWithAuth`, `jsonResponse`). Coverage: `frontend/app/page.test.tsx`, `frontend/app/csr/page.test.tsx`, `frontend/app/customer/page.test.tsx`.
+  - Root `.gitignore` had a blanket `lib/`/`lib64/` Python-venv rule that was unintentionally shadowing the new `frontend/lib/` directory — removed, since `.venv/`/`venv/`/`env/` already cover virtualenv `lib/` dirs.
 
 ### Current API Endpoints
 - `GET /api/health` — liveness check

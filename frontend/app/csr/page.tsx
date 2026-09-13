@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 import {
   Send,
@@ -10,9 +9,11 @@ import {
   X,
   Loader2,
   FileText,
-  ArrowLeft,
+  LogOut,
   CheckCircle2,
 } from "lucide-react";
+import { useAuth, useRequireRole } from "../../lib/auth-context";
+import { useRouter } from "next/navigation";
 
 // Backend API base URL — defaults to same-origin (single-container deploy).
 // Override with NEXT_PUBLIC_API_URL at build time for other setups.
@@ -34,7 +35,11 @@ interface ApprovalResponse {
   revision_count: number;
 }
 
-export default function ApprovalPage() {
+export default function CsrPage() {
+  const { session, isLoading } = useRequireRole("csr");
+  const { logout } = useAuth();
+  const router = useRouter();
+
   const [task, setTask] = useState("");
   const [threadId, setThreadId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -110,7 +115,7 @@ export default function ApprovalPage() {
   };
 
   const isSent = status === "sent" || status === "sent_with_unresolved_feedback";
-  const reviewing = status === "awaiting_review" && !isSent;
+  const reviewing = status === "awaiting_review";
 
   const reset = () => {
     setThreadId(null);
@@ -123,24 +128,34 @@ export default function ApprovalPage() {
     setError(null);
   };
 
+  if (isLoading || !session) return null;
+
   return (
     <main className="min-h-screen bg-gradient-to-b from-gray-50 to-indigo-50/40 py-10 px-4">
       <div className="max-w-3xl mx-auto">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
-          <Link
-            href="/"
+          <span className="text-sm font-semibold text-brand-navy">
+            e-shopping.com <span className="text-brand-gray font-normal">· CSR</span>
+          </span>
+          <button
+            onClick={() => {
+              logout();
+              router.push("/");
+            }}
             className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800 transition-colors"
           >
-            <ArrowLeft className="w-4 h-4" /> Research assistant
-          </Link>
+            <LogOut className="w-4 h-4" /> Log out
+          </button>
+        </div>
+        <div className="flex items-center justify-end mb-6 -mt-4">
           <span className="text-xs font-medium text-indigo-600 bg-indigo-50 border border-indigo-100 rounded-full px-3 py-1">
             Human-in-the-loop · Approve / Edit / Reject
           </span>
         </div>
 
-        <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-          <FileText className="w-6 h-6 text-indigo-600" /> Approval Workflow
+        <h1 className="text-2xl font-bold text-brand-navy flex items-center gap-2">
+          <FileText className="w-6 h-6 text-brand-purple" /> Draft & Approve Customer Letters
         </h1>
         <p className="text-gray-600 mt-1 mb-6 text-sm">
           The AI drafts content for your task, then pauses. You approve it,
@@ -165,7 +180,7 @@ export default function ApprovalPage() {
               <button
                 onClick={isSent ? reset : startDraft}
                 disabled={loading || (!isSent && !task.trim())}
-                className="inline-flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg px-4 py-2 text-sm font-medium transition-colors"
+                className="inline-flex items-center gap-1.5 bg-brand-purple hover:bg-brand-purple/90 disabled:opacity-50 text-white rounded-lg px-4 py-2 text-sm font-medium transition-colors"
               >
                 {loading ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
@@ -216,7 +231,7 @@ export default function ApprovalPage() {
                   <button
                     onClick={() => decide("edit", { content: editText })}
                     disabled={loading}
-                    className="inline-flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg px-3 py-1.5 text-sm font-medium"
+                    className="inline-flex items-center gap-1.5 bg-brand-purple hover:bg-brand-purple/90 disabled:opacity-50 text-white rounded-lg px-3 py-1.5 text-sm font-medium"
                   >
                     <Check className="w-4 h-4" /> Send edited version
                   </button>

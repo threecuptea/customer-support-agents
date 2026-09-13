@@ -1,8 +1,9 @@
 import "./globals.css";
+import { AuthProvider } from "../lib/auth-context";
 
 export const metadata = {
-  title: "AI Research Assistant",
-  description: "Intelligent research with interactive guidance using LangGraph",
+  title: "e-shopping.com — Customer Support",
+  description: "e-shopping.com customer support: order help, returns & refunds, and general FAQs.",
 };
 
 export default function RootLayout({
@@ -12,7 +13,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">
+        <AuthProvider>{children}</AuthProvider>
+      </body>
     </html>
   );
 }
