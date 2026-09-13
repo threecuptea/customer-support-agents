@@ -30,7 +30,7 @@ FAQs = {
     },
     "Returns and Refunds": {
         "What is your return policy?": "We accept returns within 35 days of delivery for unused items",
-        "Can I still get my refund if my order exceeds 35 days of return policy": "Yes, with customer support representative's approval",
+        "Can I still get my refund if my order exceeds the return window of the policy": "Sorry, we have already extended 5 more days.",
         "How do I start a return?": "You can talk to me to start a return/ refund request.",
         "When will I get my refund?": "Refunds usually take 7 to 10 business days after we get the item back.",
         "Are returns free?": "Yes, we will include the return shipping label in the request confirmation email"

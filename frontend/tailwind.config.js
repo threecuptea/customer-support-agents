@@ -32,6 +32,13 @@ module.exports = {
           800: "#86198f",
           900: "#701a75",
         },
+        brand: {
+          yellow: "#ecad0a",
+          blue: "#209dd7",
+          purple: "#753991",
+          navy: "#032147",
+          gray: "#888888",
+        },
       },
       animation: {
         "fade-in": "fadeIn 0.5s ease-in-out",
