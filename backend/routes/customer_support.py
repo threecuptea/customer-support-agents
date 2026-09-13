@@ -36,7 +36,8 @@ class SupportChatContinue(BaseModel):
 def _support_payload(state, result) -> dict:
     """Build a response describing the current approval state."""
     is_interrupted, interrupt_message = parse_interrupt_info(result)
-    # I copied it from 'approval' and will revise it later
+    # I copied it from 'approval' and will revise it 
+    # those are ApprovalState
     return {
         "state": state.values,
         "next": state.next,
@@ -49,7 +50,7 @@ def _support_payload(state, result) -> dict:
     }
 
 # include_in_schema=False to hide it from API docs. UI should bbe the only one can post the chat 
-@router.post("")
+@router.post("/start")
 async def customer_support_start(support: GeneralChatStart | OrderChatStart, request: Request):
     # await
     graph = request.app.state.support_graph
@@ -87,7 +88,7 @@ async def customer_support_start(support: GeneralChatStart | OrderChatStart, req
         logger.exception("Error starting customer-support workflow")
         raise HTTPException(status_code=500, detail=f"Error starting customer-support: {exc}")
 
-@router.post("", include_in_schema=False)
+@router.post("/continue", include_in_schema=False)
 async def customer_support_continue(chat: SupportChatContinue, request: Request):
     graph = request.app.state.support_graph
     thread_id = chat.thread_id

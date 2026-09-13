@@ -16,15 +16,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-
+from collections.abc import AsyncGenerator
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.store.memory import InMemoryStore
 
-from workflow.agent import build_agent
 from workflow.approval import build_approval_graph
 from workflow.customer_support import CustomerSupportAgent
 from routes.approval import router as approval_router  # noqa: E402
-from routes.agent import router as agent_router  # noqa: E402
 from routes.customer_support import router as chat_router # noqa: E402
 from routes.auth import router as auth_router # noqa: E402
 
@@ -35,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Compile the graphs with a checkpointer (+ store for long-term memory)."""
     # Cross-thread long-term memory. Swap for a Postgres-backed store in prod.
     store = InMemoryStore()
@@ -56,7 +54,6 @@ async def lifespan(app: FastAPI):
                 logger.info("In demo mode, initializing durable AsyncSqliteSaver at %s", checkpoint_db)
                 logger.info("In demo mode, initializing durable AsyncSqliteStore at %s", store_db)
                 app.state.approval_graph = build_approval_graph(checkpointer=saver)
-                app.state.agent_graph = build_agent(checkpointer=saver, store=store)
                 app.state.support_graph = CustomerSupportAgent(checkpointer=saver, store=store).build_support_graph()
                 yield
 
@@ -67,7 +64,6 @@ async def lifespan(app: FastAPI):
         async with AsyncPostgresSaver.from_conn_string(f'{connection_url}/checkpointer') as saver:
             async with AsyncPostgresStore.from_conn_string(f'{connection_url}/store') as store:
                 app.state.approval_graph = build_approval_graph(checkpointer=saver)
-                app.state.agent_graph = build_agent(checkpointer=saver, store=store)
                 app.state.support_graph = CustomerSupportAgent(checkpointer=saver, store=store).build_support_graph()
                 yield
 
@@ -75,7 +71,6 @@ async def lifespan(app: FastAPI):
         logger.info("Using in-memory MemorySaver and InMemoryStore")
         saver = MemorySaver()
         app.state.approval_graph = build_approval_graph(checkpointer=saver)
-        app.state.agent_graph = build_agent(checkpointer=saver, store=store)
         app.state.support_graph = CustomerSupportAgent(checkpointer=saver, store=store).build_support_graph()
         yield
 
@@ -88,7 +83,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Custom Support Agent", lifespan=lifespan)  # noqa: E402
 # not app.add_route(...)
 app.include_router(approval_router)
-app.include_router(agent_router)
 app.include_router(chat_router)
 app.include_router(auth_router)
 
