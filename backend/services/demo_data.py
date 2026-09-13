@@ -1,0 +1,291 @@
+from __future__ import annotations
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+from enum import StrEnum, auto
+import os
+
+# I need to start thinking about some way to dynamically adjust dates to match the status
+
+_zoneinfo = ZoneInfo("America/New_York")
+
+threshold_days_auto_approve = int(os.getenv("DAYS_THRESHOLD_AUTO"))
+
+# ORDER_NON_REFUNDABLE_DAYS means an order is non-refundable because the refund request has exceeded the return window.
+# ORDER_NON_REFUNDABLE_ITEMS means an order is non-refundable because the return item(s) are either intimate items or perishable.
+# ORDER_DELIVERED_BORDERLINE are order supposed to be delivered according to the carrier but the customer does not see
+# the delivered items.  That's what a lot of order inquiry dispute come from and cases will be escalated. 
+class OrderRefundStatus(StrEnum):
+    ORDER_AUTO_REFUNDABLE = auto()
+    ORDER_NON_REFUNDABLE_DAYS = auto()
+    ORDER_NON_REFUNDABLE_ITEMS = auto()
+    ORDER_HUMAN_REFUNDABLE = auto()
+    ORDER_IN_TRANSIT = auto()
+    ORDER_IN_PENDING = auto()
+    ORDER_DATA_INVALID = auto() # for test reason
+    ORDER_DELIVERED_BORDERLINE = auto()
+
+customer_order_status_map = {
+    "wolf.blitzer@cnn.com": OrderRefundStatus.ORDER_NON_REFUNDABLE_DAYS,
+    "pamela.brown@cnn.com": OrderRefundStatus.ORDER_HUMAN_REFUNDABLE,
+    "anderson.cooper@cnn.com": OrderRefundStatus.ORDER_AUTO_REFUNDABLE,
+    "jake.tapper@cnn.com": OrderRefundStatus.ORDER_IN_TRANSIT,
+    "john.king@cnn.com": OrderRefundStatus.ORDER_IN_PENDING,
+    "harry.enten@cnn.com": OrderRefundStatus.ORDER_DATA_INVALID,
+    "dana.bash@cnn.com": OrderRefundStatus.ORDER_NON_REFUNDABLE_ITEMS,
+    "manu.raju@cnn.com": OrderRefundStatus.ORDER_DELIVERED_BORDERLINE
+}
+
+
+def adjust_days_demo_data_testable():
+    for email, features in demo_customers.items():
+        order_refund_status = customer_order_status_map.get(email)
+        order = features["latest_orders"][0]
+        # backfeed missing data
+        if order.get("estimated_delivery_date") and order.get("status") == "delivered":
+            order["delivery_date"] = order["estimated_delivery_date"]
+        match order_refund_status:
+            case OrderRefundStatus.ORDER_NON_REFUNDABLE_DAYS:
+                order["delivery_date"] = datetime.now(_zoneinfo) - timedelta(days= threshold_days_auto_approve + 3)
+                _auto_adjust_days(order)
+            case OrderRefundStatus.ORDER_HUMAN_REFUNDABLE | OrderRefundStatus.ORDER_AUTO_REFUNDABLE | OrderRefundStatus.ORDER_NON_REFUNDABLE_ITEMS:
+                order["delivery_date"] = datetime.now(_zoneinfo) - timedelta(days= 25)
+                _auto_adjust_days(order)
+            case OrderRefundStatus.ORDER_DELIVERED_BORDERLINE:
+                order["delivery_date"] = datetime.now(_zoneinfo) - timedelta(days= 2)
+                _auto_adjust_days(order)
+            # The above all have delivered status   
+            case OrderRefundStatus.ORDER_IN_TRANSIT:
+                order["estimated_delivery_date"] = datetime.now(_zoneinfo) + timedelta(days= 2)
+                _auto_adjust_days(order)
+            # because of backlog     
+            case OrderRefundStatus.ORDER_IN_PENDING:
+                order["order_date"] = datetime.now(_zoneinfo) - timedelta(days= 7)
+            case _:
+                pass
+
+def _auto_adjust_days(order: dict):
+    if order.get("delivery_date") or order.get("estimated_delivery_date"):
+        if order.get("delivery_date"):
+            order["estimated_delivery_date"] = order["delivery_date"]
+        order["ship_date"] = order["estimated_delivery_date"] - timedelta(days= 5)
+        order["order_date"] = order["ship_date"] - timedelta(days= 3)
+    
+           
+demo_customers = {
+    "anderson.cooper@cnn.com": {
+        "customer_id": 32098,
+        "first_name": "Anderson",
+        "last_name": "Cooper",
+        "email": "anderson.cooper@cnn.com",
+        "latest_orders":[{
+            "order_id": 123456,
+            "order_date": datetime(2026, 7, 20, 19, 45, 0, tzinfo= _zoneinfo),
+            "total_amount_incl_tax": 156.23,
+            "tax_applied_rate": 0.095,
+            "status": "delivered",
+            "ship_date": datetime(2026, 7, 22, 19, 45, 0, tzinfo= _zoneinfo),
+            "estimated_delivery_date": datetime(2026, 7, 25, 12, 45, 0, tzinfo= _zoneinfo),
+            "tracking_number": "1Z9999999999999999",
+            "items": [{
+                "product_id": "PRD-1001",
+                "product_name": "Wine Glasses",
+                "supplier_name": "Heritage Brands",
+                "unit_price": 23.78,
+                "number_units": 6,
+            }]
+        }], 
+    },
+    "wolf.blitzer@cnn.com": {
+            "customer_id": 32099,
+            "first_name": "Wolf",
+            "last_name": "Blitzer",
+            "email": "wolf.blitzer@cnn.com",
+            "latest_orders":[{
+                "order_id": 123457,
+                "order_date": datetime(2026, 7, 1, 21, 5, 0, tzinfo= _zoneinfo),
+                "total_amount_incl_tax": 84.30,
+                "tax_applied_rate": 0.075,
+                "status": "delivered",
+                "ship_date": datetime(2026, 7, 3, 19, 45, 0, tzinfo= _zoneinfo),
+                "estimated_delivery_date": datetime(2026, 7, 7, 12, 45, 0, tzinfo= _zoneinfo),
+                "tracking_number": "1Z9999993178999999",
+                "items": [{
+                    "product_id": "PRD-1015",
+                    "product_name": "Bike Light",
+                    "supplier_name": "Premier Merchandize",
+                    "unit_price": 30.26,
+                    "number_units": 2,
+                },
+                {
+                    "product_id": "PRD-1022",
+                    "product_name": "Water Bottle",
+                    "supplier_name": "United Imports",
+                    "unit_price": 17.9,
+                    "number_units": 1,
+                }]
+            }]  
+        },
+    "pamela.brown@cnn.com": {
+        "customer_id": 32100,
+        "first_name": "Pamela",
+        "last_name": "Brown",
+        "email": "pamela.brown@cnn.com",
+        "latest_orders":[{
+            "order_id": 123458,
+            "order_date": datetime(2026, 7, 25, 21, 10, 0, tzinfo= _zoneinfo),
+            "total_amount_incl_tax": 569.74,
+            "tax_applied_rate": 0.075,
+            "status": "delivered",
+            "ship_date": datetime(2026, 7, 28, 19, 45, 0, tzinfo= _zoneinfo),
+            "estimated_delivery_date": datetime(2026, 8, 1, 14, 30, 0, tzinfo= _zoneinfo),
+            "tracking_number": "1Z9999993182999999",
+            "items": [{
+                "product_id": "PRD-1099",
+                "product_name": "Sterling Silver White Sapphire Pendant Necklace",
+                "supplier_name": "Costal Trading",
+                "unit_price": 529.99,
+                "number_units": 1,
+                },
+                {
+                "product_id": "PRD-1002",
+                "product_name": "Eye Mask",
+                "supplier_name": "Costal Trading",
+                "unit_price": 15.67,
+                "number_units": 12,
+                },
+            ]
+        }]  
+    },
+    "jake.tapper@cnn.com": {
+        "customer_id": 32101,
+        "first_name": "Jake",
+        "last_name": "Tapper",
+        "email": "jake.tapper@cnn.com",
+        "latest_orders":[{
+            "order_id": 123459,
+            "order_date": datetime(2026, 8, 5, 21, 10, 0, tzinfo= _zoneinfo),
+            "total_amount_incl_tax": 118.52,
+            "tax_applied_rate": 0.075,
+            "status": "transit",
+            "ship_date": datetime(2026, 8, 10, 19, 45, 0, tzinfo= _zoneinfo),
+            "estimated_delivery_date": datetime(2026, 8, 15, 14, 30, 0, tzinfo= _zoneinfo),
+            "tracking_number": "1Z9999993185999999",
+            "items": [{
+                "product_id": "PRD-1031",
+                "product_name": "HDMI Cable",
+                "supplier_name": "Coastal Trading",
+                "unit_price": 49.22,
+                "number_units": 1,
+            },
+            {
+                "product_id": "PRD-1032",
+                "product_name": "Bluebooth Adapter",
+                "supplier_name": "Coastal Trading",
+                "unit_price": 61.03,
+                "number_units": 1,
+            }
+            ]
+        }]  
+    },
+    "john.king@cnn.com": {
+        "customer_id": 32102,
+        "first_name": "John",
+        "last_name": "King",
+        "email": "john.king@cnn.com",
+        "latest_orders":[{
+            "order_id": 123460,
+            "order_date": datetime(2026, 8, 5, 21, 15, 0, tzinfo= _zoneinfo),
+            "total_amount_incl_tax": 63.06,
+            "tax_applied_rate": 0.075,
+            "status": "pending",
+            "notes": "the ordered item is out of stock and wait for the shipment come in",
+            "items": [{
+                "product_id": "PRD-1156",
+                "product_name": "Zip Jacket",
+                "supplier_name": "Coastal Trading",
+                "unit_price": 29.33,
+                "number_units": 2,
+                }
+            ]
+        }]         
+    },
+    "harry.enten@cnn.com": {
+        "customer_id": 32103,
+        "first_name": "Harry",
+        "last_name": "Enten",
+        "email": "harry.enten@cnn.com",
+        "latest_orders":[{
+            "order_id": 123461,
+            "total_amount_incl_tax": 63.06,
+            "tax_applied_rate": 0.075,
+            "status": "pending",
+            "notes": "the ordered item is out of stock and wait for the shipment come in",
+            "items": [{
+                "product_id": "PRD-1156",
+                "product_name": "Zip Jacket",
+                "supplier_name": "Coastal Trading",
+                "unit_price": 29.33,
+                "number_units": 2,
+                }
+            ]
+        }]         
+    },
+    "dana.bash@cnn.com": {
+        "customer_id": 32104,
+        "first_name": "Dana",
+        "last_name": "Bash",
+        "email": "dana.bash@cnn.com",
+        "latest_orders":[{
+            "order_id": 123462,
+            "order_date": datetime(2026, 7, 25, 21, 10, 0, tzinfo= _zoneinfo),
+            "total_amount_incl_tax": 202.14,
+            "tax_applied_rate": 0.075,
+            "status": "delivered",
+            "ship_date": datetime(2026, 7, 28, 19, 45, 0, tzinfo= _zoneinfo),
+            "estimated_delivery_date": datetime(2026, 8, 1, 14, 30, 0, tzinfo= _zoneinfo),
+            "tracking_number": "1Z9999997933999999",
+            "items": [
+                {
+                "product_id": "PRD-1002",
+                "product_name": "Face Mask",
+                "supplier_name": "Premier Merchandize",
+                "unit_price": 15.67,
+                "number_units": 12,
+                "non_refundable": True,
+                },
+            ]
+        }]  
+    },
+    "manu.raju@cnn.com": {
+        "customer_id": 32105,
+        "first_name": "Manu",
+        "last_name": "Raju",
+        "email": "manu.raju@cnn.com",
+        "latest_orders":[{
+            "order_id": 123463,
+            "order_date": datetime(2026, 7, 25, 21, 10, 0, tzinfo= _zoneinfo),
+            "total_amount_incl_tax": 105.84,
+            "tax_applied_rate": 0.075,
+            "status": "delivered",
+            "ship_date": datetime(2026, 7, 28, 19, 45, 0, tzinfo= _zoneinfo),
+            "estimated_delivery_date": datetime(2026, 8, 1, 14, 30, 0, tzinfo= _zoneinfo),
+            "tracking_number": "1Z9999993177999999",
+            "items": [
+                {
+                "product_id": "PRD-1924",
+                "product_name": "Zip Jacket",
+                "supplier_name": "United Import",
+                "unit_price": 31.92,
+                "number_units": 1,
+                },
+                {
+                "product_id": "PRD-1906",
+                "product_name": "Golf Tees",
+                "supplier_name": "Premier Merchandize",
+                "unit_price": 11.09,
+                "number_units": 6,
+                },
+            ]
+        }]  
+    },
+}

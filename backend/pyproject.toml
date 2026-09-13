@@ -19,6 +19,9 @@ dependencies = [
     "litellm>=1.83.14",
     "pydantic>=2.12.5,<3",
     "fastapi-clerk-auth>=0.0.9",
+    "langgraph-checkpoint-postgres>=3.1.0",
+    "psycopg[binary,pool]>=3.3.4",
+    "rapidfuzz>=3.14.5",
 ]
 
 [dependency-groups]

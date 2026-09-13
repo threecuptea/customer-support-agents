@@ -12,16 +12,16 @@ so the graph still runs in LangGraph Studio / tests without a configured store.
 from __future__ import annotations
 
 import logging
-import uuid
-from typing import Optional
+from datetime import datetime, UTC
+from typing import Any, Optional
 
 from langgraph.store.base import BaseStore
 
 logger = logging.getLogger(__name__)
 
 
-def _namespace(user_id: str) -> tuple[str, str]:
-    return ("memories", user_id)
+def _namespace(user_id: Any) -> tuple[str, str]:
+    return ("users", str(user_id))
 
 
 def get_active_store() -> Optional[BaseStore]:
@@ -35,27 +35,32 @@ def get_active_store() -> Optional[BaseStore]:
 
 
 async def load_user_memory(
-    store: Optional[BaseStore], user_id: Optional[str], limit: int = 5
+    store: BaseStore, user_id: Any, limit: int = 3
 ) -> str:
     """Return a short bulleted summary of what we remember about the user."""
     if not store or not user_id:
         return ""
     try:
         items = await store.asearch(_namespace(user_id), limit=limit)
+        if items:
+            notes = ["on " + i.value.get("timestamp", "") + " "+ i.value.get("text", "") for i in items if i.value.get("text")]
+            return "\n".join(f"- {n}" for n in notes)
+        else:
+            return ""
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("Memory load failed: %s", exc)
         return ""
-    notes = [i.value.get("text", "") for i in items if i.value.get("text")]
-    return "\n".join(f"- {n}" for n in notes)
+    
 
-
+# Need to summarize the conversation and how to summarize the conversation.
 async def save_user_memory(
-    store: Optional[BaseStore], user_id: Optional[str], text: str
+    store: BaseStore, user_id: Any, thread_id: str, text: str
 ) -> None:
     """Persist a single memory note for the user."""
-    if not store or not user_id or not text:
+    if not store or not user_id or not thread_id or not text:
         return
     try:
-        await store.aput(_namespace(user_id), str(uuid.uuid4()), {"text": text})
+        # It will just override it if the namespace and the key are the same  
+        await store.aput(_namespace(user_id), thread_id,  {"text": text, "timestamp": datetime.now(UTC).strftime("%Y-%m-%d")})
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("Memory save failed: %s", exc)

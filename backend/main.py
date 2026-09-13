@@ -1,71 +1,109 @@
 """FastAPI server exposing the LangGraph human-in-the-loop research workflow.
 
-The graph is compiled at startup with a checkpointer chosen from the
-environment:
-
-- ``CHECKPOINT_DB=checkpoints.sqlite`` → durable, resumable state via
-  ``AsyncSqliteSaver`` (survives server restarts — LangGraph's durable
-  execution feature).
-- unset → in-memory state via ``MemorySaver`` (great for local dev).
-
 No secrets are hardcoded here; configure everything through environment
 variables (see ``.env.example``).
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-
+from collections.abc import AsyncGenerator
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.store.memory import InMemoryStore
-from langgraph.types import Command
 
-from workflow.agent import build_agent, stream_agent_response
 from workflow.approval import build_approval_graph
-from memory import load_user_memory, save_user_memory
+from workflow.customer_support import CustomerSupportAgent
+from routes.approval import router as approval_router  # noqa: E402
+from routes.customer_support import router as chat_router # noqa: E402
+from routes.auth import router as auth_router # noqa: E402
 
-load_dotenv()
+
+load_dotenv(override=True)
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
+BACKEND_DIR = Path(__file__).resolve().parent
+# Anchored at the repo root (../data locally, /app/data in the single-container
+# image, since Docker's WORKDIR puts main.py at /app/backend). Resolving here
+# instead of leaving CHECKPOINT_DB/STORE_DB as bare relative paths means the
+# sqlite files always land in the same place regardless of the CWD the process
+# happened to be started from.
+DATA_DIR = BACKEND_DIR.parent / "data"
+
+
+def _resolve_db_path(value: str | None) -> str | None:
+    """Anchor a configured sqlite filename under DATA_DIR. An absolute path is
+    used as-is (e.g. an operator-supplied override); a relative one is treated
+    as a filename under DATA_DIR, regardless of any directory components given.
+    """
+    if not value:
+        return None
+    path = Path(value)
+    return str(path if path.is_absolute() else DATA_DIR / path.name)
+
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Compile the graphs with a checkpointer (+ store for long-term memory)."""
     # Cross-thread long-term memory. Swap for a Postgres-backed store in prod.
     store = InMemoryStore()
     app.state.store = store
 
-    checkpoint_db = os.getenv("CHECKPOINT_DB")
-    if checkpoint_db:
+    demo_mode = os.getenv("DEMO_MODE", "false").lower() == "true" # we are using demo mode in dev environment.
+    checkpoint_db = _resolve_db_path(os.getenv("CHECKPOINT_DB"))
+    store_db = _resolve_db_path(os.getenv("STORE_DB"))
+    connection_url = os.getenv("CONNECTION_URL")
+    if demo_mode and checkpoint_db and store_db:
+        # We are not persistinh any business entities in demo_mode (local)
         from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-
-        logger.info("Using durable AsyncSqliteSaver at %s", checkpoint_db)
+        from langgraph.store.sqlite.aio import AsyncSqliteStore
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
         async with AsyncSqliteSaver.from_conn_string(checkpoint_db) as saver:
-            app.state.approval_graph = build_approval_graph(checkpointer=saver)
-            app.state.agent_graph = build_agent(checkpointer=saver, store=store)
-            yield
+            async with AsyncSqliteStore.from_conn_string(store_db) as store:
+                logger.info("In demo mode, initializing durable AsyncSqliteSaver at %s", checkpoint_db)
+                logger.info("In demo mode, initializing durable AsyncSqliteStore at %s", store_db)
+                app.state.approval_graph = build_approval_graph(checkpointer=saver)
+                app.state.support_graph = CustomerSupportAgent(checkpointer=saver, store=store).build_support_graph()
+                yield
+
+    elif not demo_mode and connection_url:
+        from langgraph.checkpoint.postgres import AsyncPostgresSaver
+        from langgraph.store.postgres import AsyncPostgresStore
+        # not testing the connection here in production
+        async with AsyncPostgresSaver.from_conn_string(f'{connection_url}/checkpointer') as saver:
+            async with AsyncPostgresStore.from_conn_string(f'{connection_url}/store') as store:
+                app.state.approval_graph = build_approval_graph(checkpointer=saver)
+                app.state.support_graph = CustomerSupportAgent(checkpointer=saver, store=store).build_support_graph()
+                yield
+
     else:
-        logger.info("Using in-memory MemorySaver (set CHECKPOINT_DB for durability)")
+        logger.info("Using in-memory MemorySaver and InMemoryStore")
         saver = MemorySaver()
         app.state.approval_graph = build_approval_graph(checkpointer=saver)
-        app.state.agent_graph = build_agent(checkpointer=saver, store=store)
+        app.state.support_graph = CustomerSupportAgent(checkpointer=saver, store=store).build_support_graph()
         yield
 
+# FastAPI lifespan manages application startup (before taking the first request)and shutdown logic (after taking the final request). 
+# It requires an asynchronouscontextmanager where code before yield statement runs when the app starts, 
+# and code after the yield runs when the app stops. . Under the hood, FastAPI relies on Starlettet which expects this object to 
+# implement the standard Python async context manager protocol (having __aenter__ and __aexit__ methods)
+# FastAPI depends upon lifespan. lifespan depends upon FastAPI parameter app. 
+# Without from __future__ import annotations, the app parameter would be evaluated at runtime, which would cause a circular import error.
+app = FastAPI(title="Custom Support Agent", lifespan=lifespan)  # noqa: E402
+# not app.add_route(...)
+app.include_router(approval_router)
+app.include_router(chat_router)
+app.include_router(auth_router)
 
-app = FastAPI(title="Custom Support Agent", lifespan=lifespan)
 
 _allowed_origins = os.getenv("CORS_ORIGINS", "*").split(",")
 app.add_middleware(
@@ -80,178 +118,22 @@ app.add_middleware(
 # In the single-container image, `frontend/out` is copied next to this file
 # (see Dockerfile). It won't exist when running the backend standalone in dev
 # (`npm run dev` serves the frontend separately in that case).
-FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend" / "out"
+FRONTEND_DIR = BACKEND_DIR.parent / "frontend" / "out"
 
 if (FRONTEND_DIR / "_next").is_dir():
     app.mount("/_next", StaticFiles(directory=FRONTEND_DIR / "_next"), name="next-static")
 
-
-# --- Request models ---------------------------------------------------------
-class AgentStart(BaseModel):
-    message: str
-    user_id: str | None = None
-    thread_id: str | None = None  # provide to continue an existing agent thread
-
-
-class AgentDecision(BaseModel):
-    thread_id: str
-    # One decision per pending tool call, e.g.
-    #   {"type": "approve"}
-    #   {"type": "edit", "edited_action": {"name": "web_search", "args": {...}}}
-    #   {"type": "reject", "message": "..."}  /  {"type": "respond", "message": "..."}
-    decisions: list[dict]
-
-
-class ApprovalStart(BaseModel):
-    task: str
-
-
-class ApprovalDecision(BaseModel):
-    thread_id: str
-    action: str  # "approve" | "edit" | "reject"
-    content: str | None = None  # edited draft, when action == "edit"
-    feedback: str | None = None  # change request, when action == "reject"
-
-
-# --- Helpers ----------------------------------------------------------------
-def _interrupt_info(result) -> tuple[bool, str | None]:
-    """Extract interrupt status and message from an ainvoke result."""
-    if isinstance(result, dict) and result.get("__interrupt__"):
-        return True, result.get("__interrupt__")[0].value
-    return False, None
-    
 
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
 
 
-# --- Approval workflow (draft → approve / edit / reject → send) -------------
-def _approval_payload(state, result) -> dict:
-    """Build a response describing the current approval state."""
-    is_interrupted, interrupt_message = _interrupt_info(result)
-    return {
-        "state": state.values,
-        "next": state.next,
-        "requires_input": is_interrupted,
-        "interrupt": interrupt_message,
-        "draft": state.values.get("draft", ""),
-        "status": state.values.get("status", "unknown"),
-        "final_output": state.values.get("final_output", ""),
-        "revision_count": state.values.get("revision_count", 0),
-    }
-
-
-@app.post("/api/approval/start")
-async def approval_start(data: ApprovalStart, request: Request):
-    """Draft content for a task and pause for human review."""
-    graph = request.app.state.approval_graph
-    thread_id = str(uuid.uuid4())
-    config = {"configurable": {"thread_id": thread_id}}
-
-    initial_state = {
-        "messages": [],
-        "task": data.task,
-        "draft": "",
-        "feedback": "",
-        "revision_count": 0,
-        "decision": "",
-        "status": "drafting",
-        "final_output": "",
-    }
-    try:
-        result = await graph.ainvoke(initial_state, config)
-        state = await graph.aget_state(config)
-        return {"thread_id": thread_id, **_approval_payload(state, result)}
-    except Exception as exc:
-        logger.exception("Error starting approval workflow")
-        raise HTTPException(status_code=500, detail=f"Error starting approval: {exc}")
-
-
-@app.post("/api/approval/decide")
-async def approval_decide(data: ApprovalDecision, request: Request):
-    """Resume the approval workflow with approve / edit / reject."""
-    graph = request.app.state.approval_graph
-    config = {"configurable": {"thread_id": data.thread_id}}
-
-    action = data.action.lower()
-    resume_value: dict = {"action": action}
-    if action == "edit":
-        resume_value["content"] = data.content or ""
-    elif action == "reject":
-        resume_value["feedback"] = data.feedback or ""  
-
-    try:
-        result = await graph.ainvoke(Command(resume=resume_value), config)
-        state = await graph.aget_state(config)
-        return _approval_payload(state, result)
-    except Exception as exc:
-        logger.exception("Error deciding approval workflow")
-        raise HTTPException(status_code=500, detail=f"Error in approval decision: {exc}")
-
-
-# --- Agent engine (create_agent + HITL middleware), this only for reference only and most likely will be cleaned up later --------------------------
-def _sse(generator) -> StreamingResponse:
-    async def body():
-        async for chunk in generator:
-            yield f"data: {json.dumps(chunk)}\n\n"
-
-    return StreamingResponse(
-        body(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
-    )
-
-
-@app.post("/api/agent/start")
-async def agent_start(data: AgentStart, request: Request):
-    """Start (or continue) an agentic run; streams progress, tokens, approvals."""
-    graph = request.app.state.agent_graph
-    store = request.app.state.store
-    is_new = not data.thread_id
-    thread_id = data.thread_id or str(uuid.uuid4())
-    config = {"configurable": {"thread_id": thread_id}}
-
-    from langchain_core.messages import HumanMessage, SystemMessage
-
-    messages = []
-    if is_new:
-        # Inject cross-session memory as a leading system message (first turn only).
-        memory = await load_user_memory(store, data.user_id)
-        if memory:
-            messages.append(SystemMessage(content=f"Remembered context:\n{memory}"))
-    messages.append(HumanMessage(content=data.message))
-
-    async def gen():
-        # IMPORTANT: yield the thread ID first so the client can store it for future requests.
-        yield {"type": "thread", "thread_id": thread_id}
-        final_seen = ""
-        """``command_input parameter is the initial ``{"messages": [...]}`` (to start) or a
-        Command(resume=...)`` (to resume after an approval decision)."""
-        async for ev in stream_agent_response(graph, thread_id, {"messages": messages}, config):
-            if ev.get("type") == "state" and not ev.get("requires_input"):
-                final_seen = ev.get("final_response", "")
-            yield ev
-        if final_seen:
-            await save_user_memory(store, data.user_id, f"Asked the agent about: {data.message[:120]}")
-
-    return _sse(gen())
-
-
-@app.post("/api/agent/decide")
-async def agent_decide(data: AgentDecision, request: Request):
-    """Resume the agent with approve / edit / reject / respond decisions."""
-    graph = request.app.state.agent_graph
-    config = {"configurable": {"thread_id": data.thread_id}}
-    command = Command(resume={"decisions": data.decisions})
-    return _sse(stream_agent_response(graph, data.thread_id, command, config))
-
-
 # --- Static frontend catch-all ----------------------------------------------
 # Registered last so every /api/* route above always wins the match first.
 # Guards against shadowing /api/* explicitly too, in case that ordering ever
 # changes.
-@app.get("/{full_path:path}")
+@app.get("/{full_path:path}", include_in_schema=False)
 async def serve_frontend(full_path: str):
     if full_path == "api" or full_path.startswith("api/"):
         raise HTTPException(status_code=404, detail="Not Found")

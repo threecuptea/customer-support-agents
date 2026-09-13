@@ -7,9 +7,8 @@ services:
       - "8000:8000"
     env_file:
       - .env
-    environment:
-      # Persist checkpoints to the mounted volume for durable execution.
-      - CHECKPOINT_DB=/app/data/checkpoints.sqlite
     volumes:
+      # CHECKPOINT_DB/STORE_DB from .env resolve (via main.py's DATA_DIR) to
+      # /app/data/<filename> — mounting it here is what makes that durable.
       - ./data:/app/data
     restart: unless-stopped

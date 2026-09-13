@@ -119,5 +119,12 @@ data
 docker-compose.yml.bak
 Dockerfile.bak
 
-# LangGraph durable checkpoint DB (runtime artifact, see CHECKPOINT_DB)
-backend/checkpoints.sqlite
+# LangGraph durable checkpoint/store DBs (runtime artifacts, see CHECKPOINT_DB/STORE_DB
+# in .env). These are relative paths, so depending on the CWD the process was started
+# from, the files can land at the repo root, backend/, or data/ — ignore by extension
+# instead of chasing every location.
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
