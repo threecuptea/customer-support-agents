@@ -60,23 +60,25 @@ export default function LoginPage() {
   };
 
   return (
-    <main className="min-h-screen bg-gradient-to-b from-gray-50 to-brand-blue/10 flex justify-center px-4 py-16 sm:py-20">
-      <div className="max-w-md w-full">
-        <h1 className="text-3xl font-bold text-brand-navy text-center mb-2">
-          e-shopping.com
-        </h1>
-        <p className="text-brand-gray text-center text-sm mb-14">
-          Customer Support
-        </p>
+    <main className="min-h-screen bg-gradient-to-b from-gray-50 to-brand-blue/10 flex flex-col items-center px-4 py-12">
+      <h1 className="text-3xl font-bold text-brand-navy text-center mt-4 mb-2">
+        e-shopping.com
+      </h1>
+      <p className="text-brand-gray text-center text-sm">Customer Support</p>
 
-        <div className="mb-14 text-center space-y-3">
-          {FAQ_TEASERS.map(({ text, className }) => (
-            <p key={text} className={className}>
-              {text}
-            </p>
-          ))}
-        </div>
+      <div className="flex-1 min-h-8" />
 
+      <div className="text-center space-y-4">
+        {FAQ_TEASERS.map(({ text, className }) => (
+          <p key={text} className={className}>
+            {text}
+          </p>
+        ))}
+      </div>
+
+      <div className="flex-1 min-h-8" />
+
+      <div className="max-w-md w-full mb-6">
         <div className="bg-white border border-gray-100 rounded-xl shadow-soft p-5">
           <label className="block text-sm font-medium text-gray-700 mb-2">
             Sign in with your account email
