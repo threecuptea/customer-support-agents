@@ -1,15 +1,15 @@
 from __future__ import annotations
-from models.model import ChatState, FAQMatchEvals, FAQMatchResult, Order
+from models.model import CustomerSupportState, FAQMatchEvals, FAQMatchResult, Order
 
 from langgraph.graph import END, START, StateGraph
-from langchain_core.messages import HumanMessage, RemoveMessage, SystemMessage, AIMessage, ToolMessage
+from langchain_core.messages import HumanMessage, RemoveMessage, SystemMessage, AIMessage
 from typing import Any
 from dotenv import load_dotenv
 import logging
 import os
 from workflow.llm import get_llm
 from langchain_core.runnables import RunnableConfig
-from langgraph.config import get_store
+
 from memory import save_user_memory
 from workflow.customer_support_tools import find_closest_faq, retrieve_target_order, faq_dict
 
@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 FAQ_MATCH_THRESHOLD = 75.0
 ESCALATE_MESSAGE = "I will escalate to a human agent and somebody will contact you within 3 business days"
 SUMMARIZE_MESSAGE_THRESHOLD = 6
+FAQ_FUZZY_MATCH_SOURCE = "faq_fuzzy_match"
+FAQ_LLM_MATCH_SOURCE = "faq_llm_match"
 
 
 class CustomerSupportAgent:
@@ -42,7 +44,7 @@ class CustomerSupportAgent:
     #               Summarize Node
     ###############################################
     # Borrow from https://pub.towardsai.net/your-first-real-langgraph-project-ac5eb00f923a              
-    async def summarize_node(self, state: ChatState, config: RunnableConfig) -> dict[str, Any]:
+    async def summarize_node(self, state: CustomerSupportState, config: RunnableConfig) -> dict[str, Any]:
         """Compresses the full message history into a short summary, then deletes old
         raw messages. Callers route here via `_should_summarize` (message count past
         SUMMARIZE_MESSAGE_THRESHOLD, or their own flow-specific topic-concluded signal) —
@@ -88,38 +90,24 @@ class CustomerSupportAgent:
     #               General Nodes
     ###############################################
     # I might need to 
-    async def general_faq_eval_node(self, state: ChatState) -> dict[str, Any]:
+    async def general_faq_eval_node(self, state: CustomerSupportState) -> dict[str, Any]:
         SYSTEM_PROMPT = f"""
         You are an intelligent customer-support agent to help decide if it is helful to match the customer question 
         against FAQs
+        Here is a summary of the previous conversation, if any: {state.get("summary") or "None yet"}.
         Here is the customer's question: {state["messages"][-1].content}.
         Here are FAQ context: {self.faq_context}.
-        There are two matching options: 
-        - Matches with fuzz.WRatio scorer of python Rapidfuzz library. The fuzz.WRatio scorer weights and combines multiple strategies 
-        such as case variations, substring checks, and token ordering
+        There are two matching options:
+        - Matches with fuzz.partial_ratio scorer of python Rapidfuzz library. The fuzz.partial_ratio scorer finds the
+        best-aligned contiguous substring of the shorter string within the longer one and scores their similarity,
+        so it favors cases where the customer's question shares a close substring with an FAQ question, even if the
+        two differ in length (e.g. extra words before/after).
         - LLM semantic matching
         The above options are not mutual exclusive.
-        Set `rapid_fuzz_wratio_match_helpful` if you think that the fuzz match option will be helpful.
+        Set `rapid_fuzz_partial_ratio_match_helpful` if you think that the fuzz match option will be helpful.
         Set `llm_semantic_match_helpful` if you think the LLM semantic match will be help.
         state `reason` as needed.
-        Set both flags to False if you are not sure if either one will help  
-        The followings are brief explanation of fuzz.WRatio for your reference:
-
-        1. Take the ratio of the two processed strings (fuzz.ratio)
-        2. Run checks to compare the length of the strings
-            * If one of the strings is more than 1.5 times as long as the other
-            use partial_ratio comparisons - scale partial results by 0.9
-            (this makes sure only full results can return 100)
-            * If one of the strings is over 8 times as long as the other
-            instead scale by 0.6
-        3. Run the other ratio functions
-            * if using partial ratio functions call partial_ratio,
-            partial_token_sort_ratio and partial_token_set_ratio
-            scale all of these by the ratio based on length
-            * otherwise call token_sort_ratio and token_set_ratio
-            * all token based comparisons are scaled by 0.95
-            (on top of any partial scalars)
-        4. Take the highest value from these results round it and return it as an integer.
+        Set both flags to False if you are not sure if either one will help
         """
         # Do I use Mesage the right way.  
         system_msg = SystemMessage(content=SYSTEM_PROMPT)
@@ -127,7 +115,7 @@ class CustomerSupportAgent:
         # FAQMatchEvals
         eval = await self.general_llm_for_faq_match_evals.ainvoke([system_msg])
         updates = {"faq_match_evals": eval, "general_issue_resolved": False}
-        if not eval or (eval and not eval.rapid_fuzz_wratio_match_helpful and not eval.llm_semantic_match_helpful):
+        if not eval or (eval and not eval.rapid_fuzz_partial_ratio_match_helpful and not eval.llm_semantic_match_helpful):
             response = ESCALATE_MESSAGE
             message = SystemMessage(content=response)
             updates["messages"] = [message]
@@ -141,11 +129,13 @@ class CustomerSupportAgent:
     # runs the matching functions (often at the same time), and turns the results into tool messages
     # However, ToolMessage content is always string.  I don't like to convert BaseModel to str then 
     # convert str to BaseModel back and forth.  I want it to return a BaseModel as it is
-    async def general_faq_fuzz_match_node(self, state: ChatState) -> dict[str, Any]:
-        result: FAQMatchResult = find_closest_faq(state["general_inquiry"])  
+    async def general_faq_fuzz_match_node(self, state: CustomerSupportState) -> dict[str, Any]:
+        result: FAQMatchResult = find_closest_faq(state["general_inquiry"])
         if result and result.confidence_score >= FAQ_MATCH_THRESHOLD:
             response = result.answer
-            message = ToolMessage(content=response, name="find_closest_faq")
+            # Originally I want to use ToolMessage but that requires tool-call_id which will link back to AIMessage.
+            # But I can use function call and not need to use LLM bind_tools
+            message = AIMessage(content=response, name=FAQ_FUZZY_MATCH_SOURCE)
             return {
                 "messages": [message],
                 "response": response,
@@ -164,7 +154,7 @@ class CustomerSupportAgent:
                 "general_issue_resolved": False,
             }
 
-    async def general_faq_llm_match_node(self, state: ChatState) -> dict[str, Any]:
+    async def general_faq_llm_match_node(self, state: CustomerSupportState) -> dict[str, Any]:
         SYSTEM_PROMPT = f"""
         You are an intelligent customer-support agent to help match the customer question against FAQs
         Here is the customer's question {state["general_inquiry"]}.
@@ -180,7 +170,7 @@ class CustomerSupportAgent:
         result: FAQMatchResult = await self.general_llm_for_faq_match_result.ainvoke([system_msg])
         if result and result.confidence_score >= FAQ_MATCH_THRESHOLD:
             response = result.answer
-            message = AIMessage(content=response)
+            message = AIMessage(content=response, name=FAQ_LLM_MATCH_SOURCE)
             return {
                 "messages": [message],
                 "response": response,
@@ -200,7 +190,7 @@ class CustomerSupportAgent:
     #               Order Nodes
     ###############################################
     
-    async def order_inquiry_node(self, state: ChatState) -> dict[str, Any]:
+    async def order_inquiry_node(self, state: CustomerSupportState) -> dict[str, Any]:
         # This should be a node to use 'retrieve_target_order' tool
         # need adjustment by AI what if a repeated conversation
         if not state["target_order"] and state["order_number_provided"]:
@@ -226,7 +216,7 @@ class CustomerSupportAgent:
     ###############################################
     #            Routes after a node
     ###############################################
-    def route_branch(self, state: ChatState) -> str:
+    def route_branch(self, state: CustomerSupportState) -> str:
         # Speed up the workflow and let UI take care
         # What if the customer ask general questions (possible different ones) more than once?  Should we execute more than once
         # For order, will branch out based upon if target_order is set and if return_refund_eligible is set and if intent_for_return_refund etc.
@@ -237,7 +227,7 @@ class CustomerSupportAgent:
                 return "order_inquiry_node"
         return ""       
 
-    def _should_summarize(self, state: ChatState, topic_concluded: bool) -> bool:
+    def _should_summarize(self, state: CustomerSupportState, topic_concluded: bool) -> bool:
         """Shared trigger for routing into `summarize_node`: each flow passes its own
         flow-specific 'concluded' signal (e.g. `general_issue_resolved` for the general
         inquiry flow); the message-count threshold is the only domain-agnostic part,
@@ -245,17 +235,17 @@ class CustomerSupportAgent:
         """
         return topic_concluded or len(state["messages"]) > SUMMARIZE_MESSAGE_THRESHOLD
 
-    def route_after_general_faq_eval(self, state: ChatState) -> str:
+    def route_after_general_faq_eval(self, state: CustomerSupportState) -> str:
         if self._should_summarize(state, state["general_issue_resolved"]):
             return "summarize_node"
         if state["faq_match_evals"]:
-            if state["faq_match_evals"].rapid_fuzz_wratio_match_helpful:
+            if state["faq_match_evals"].rapid_fuzz_partial_ratio_match_helpful:
                 return "general_faq_fuzz_match_node"
             if state["faq_match_evals"].llm_semantic_match_helpful:
                 return "general_faq_llm_match_node"
         return "summarize_node"
 
-    def route_after_general_faq_fuzz_match(self, state: ChatState) -> str:
+    def route_after_general_faq_fuzz_match(self, state: CustomerSupportState) -> str:
         if self._should_summarize(state, state["general_issue_resolved"]):
             return "summarize_node"
         return "general_faq_llm_match_node"
@@ -266,7 +256,7 @@ class CustomerSupportAgent:
     ###############################################
     def build_support_graph(self):
         """Build and compile the main chat/ refund workflow."""
-        builder = StateGraph(ChatState)
+        builder = StateGraph(CustomerSupportState)
         # Harnese with RetryPolicy later
         builder.add_conditional_edges(START, self.route_branch, 
                                       {"general_faq_eval_node": "general_faq_eval_node", 
@@ -289,7 +279,9 @@ class CustomerSupportAgent:
 
         builder.add_node("order_inquiry_node", self.order_inquiry_node)
         
-        return builder.compile(checkpointer = self.checkpointer, store = self.store)
+        graph = builder.compile(checkpointer = self.checkpointer, store = self.store)
+        self.graph = graph
+        return graph
     
 
     

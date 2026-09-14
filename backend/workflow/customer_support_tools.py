@@ -50,16 +50,16 @@ faq_qst_lst = list(faq_dict.keys())
 
 
 # Technically I don't need @tool decorator because it is not calling from LLM
+# It treat it as StructuredTool
 
-@tool
 def find_closest_faq(user_question: str) -> FAQMatchResult:
-    """Find the closest question and answer among FAQs using fuzzy WRatio (Weighted Ratio)
+    """Find the closest question and answer among FAQs using fuzzy partial_ratio
     Args:
         user_question: the user's question to match against
     Returns:
        a FAQMatchResult object
     """
-    match = process.extractOne(user_question, faq_qst_lst, scorer=fuzz.WRatio)
+    match = process.extractOne(user_question, faq_qst_lst, scorer=fuzz.partial_ratio)
     # print(f"Best match: {match[0]} with confidence {match[1]:.2f}")
     # if match and match[1] > 70.0:  # confidence threshold
     matched_question = match[0]
@@ -68,7 +68,6 @@ def find_closest_faq(user_question: str) -> FAQMatchResult:
     return FAQMatchResult(question= faq[0], answer= faq[1], confidence_score=round(match[1], 2))
     
 
-@tool
 def retrieve_target_order(context: CustomerContext, order_number: int) -> Order | None:
     """ retrieve the target order from the CustomerContext
         Args:
@@ -84,7 +83,6 @@ def retrieve_target_order(context: CustomerContext, order_number: int) -> Order 
     return None
 
 
-@tool
 def calculate_amount_refund_incl_tax(refund_request: RefundRequest) -> float:
     """Calculate total refund amount including tax base upon `ReturnedOrder` and `ReturnedOrderItem` associated 
         with the `RefundRequest` then applying `tax_applied_rate` added to total refund amount
@@ -105,7 +103,8 @@ def calculate_amount_refund_incl_tax(refund_request: RefundRequest) -> float:
 
     return total_before_tax * (1 + refund_request.returned_order.tax_applied_rate)
 
-@tool
+
+
 def check_if_refund_require_manual_approval(refund_request: RefundRequest) -> RefundProcess:
     """Check if this refund request requires manual approval.
     Use this right BEFORE processing a RefundRequest and AFTER set 'amount_refund_incl_tax' 

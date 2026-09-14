@@ -73,7 +73,7 @@ class RefundRequest(BaseModel):
     returned_order: ReturnedOrder | None = None
 
 class FAQMatchEvals(BaseModel):
-    rapid_fuzz_wratio_match_helpful: bool = False
+    rapid_fuzz_partial_ratio_match_helpful: bool = False
     llm_semantic_match_helpful: bool = False
     reason: str | None = None
 
@@ -85,9 +85,9 @@ class FAQMatchResult(BaseModel):
 
 # It's TypedDict not BaseModel.  Which is correct decision for accumulated state. I don't need to guard
 # # the value.  However, it's TypedDict.  However, I cannot use attribute and have to use key to get the value. 
-class ChatState(MessagesState):
+class CustomerSupportState(MessagesState):
     """
-    ChatState stores the customer-support conversation and state.
+    CustomerSupportState stores the customer-support conversation and state.
     `messages` are collections of LangGraph's BaseMessage like HumanMessage, AIMessage and ToolMessage
     `response` is used to store LLM's reply text to communicate with UI.
     We will summarize `messages` so to prevent its size from growing. 
@@ -98,7 +98,7 @@ class ChatState(MessagesState):
     customer_context: CustomerContext
     support_category: Literal["order_inquery/ return_refund", "general/ others"] = 'general/ others'
     general_inquiry: str
-    faq_match_evals: FAQMatchEvals
+    faq_match_evals: FAQMatchEvals | None
     general_issue_resolved: bool
     order_number_provided: int
     target_order: Order
@@ -143,9 +143,30 @@ class AuthResponse(BaseModel):
     is_auth: bool = False
     role: Literal["csr", "customer"] # customer-support-representative, or customer
     customer_context: CustomerContext | None = None # CustomerContext exists if the role is customer
+
     
+#########################################
+# The followings are used in authentication/ authorization
+#########################################
 
+class GeneralSupportRequest(BaseModel):
+    thread_id: str | None = None
+    customer_context: CustomerContext
+    general_inquiry: str
 
+class GeneralSupportResponse(BaseModel):
+    thread_id: Annotated[str, Field(min_length=1)]
+    general_inquiry: str
+    response: str
+
+class OrderReturnSupportRequest(BaseModel):
+    customer_context: CustomerContext
+    order_number_provided: int   
+
+class OrderReturnSupportContinue(BaseModel):
+    thread_id: Annotated[str, Field(min_length=1)]
+    user_conversation: Annotated[str, Field(min_length=1, max_length=MAX_MESSAGE_CHARS)]
+   
         
 
     

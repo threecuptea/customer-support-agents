@@ -76,6 +76,7 @@ demo_customers = {
         "customer_id": 32098,
         "first_name": "Anderson",
         "last_name": "Cooper",
+        "title": "Mr.",
         "email": "anderson.cooper@cnn.com",
         "latest_orders":[{
             "order_id": 123456,
@@ -99,6 +100,7 @@ demo_customers = {
             "customer_id": 32099,
             "first_name": "Wolf",
             "last_name": "Blitzer",
+            "title": "Mr.",
             "email": "wolf.blitzer@cnn.com",
             "latest_orders":[{
                 "order_id": 123457,
@@ -129,6 +131,7 @@ demo_customers = {
         "customer_id": 32100,
         "first_name": "Pamela",
         "last_name": "Brown",
+        "title": "Ms.",
         "email": "pamela.brown@cnn.com",
         "latest_orders":[{
             "order_id": 123458,
@@ -160,6 +163,7 @@ demo_customers = {
         "customer_id": 32101,
         "first_name": "Jake",
         "last_name": "Tapper",
+        "title": "Mr.",
         "email": "jake.tapper@cnn.com",
         "latest_orders":[{
             "order_id": 123459,
@@ -191,6 +195,7 @@ demo_customers = {
         "customer_id": 32102,
         "first_name": "John",
         "last_name": "King",
+        "title": "Mr.",
         "email": "john.king@cnn.com",
         "latest_orders":[{
             "order_id": 123460,
@@ -213,6 +218,7 @@ demo_customers = {
         "customer_id": 32103,
         "first_name": "Harry",
         "last_name": "Enten",
+        "title": "Mr.",
         "email": "harry.enten@cnn.com",
         "latest_orders":[{
             "order_id": 123461,
@@ -234,6 +240,7 @@ demo_customers = {
         "customer_id": 32104,
         "first_name": "Dana",
         "last_name": "Bash",
+        "title": "Ms.",
         "email": "dana.bash@cnn.com",
         "latest_orders":[{
             "order_id": 123462,
@@ -260,6 +267,7 @@ demo_customers = {
         "customer_id": 32105,
         "first_name": "Manu",
         "last_name": "Raju",
+        "title": "Mr.",
         "email": "manu.raju@cnn.com",
         "latest_orders":[{
             "order_id": 123463,
