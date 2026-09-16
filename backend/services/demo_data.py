@@ -1,7 +1,7 @@
 from __future__ import annotations
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from enum import StrEnum, auto
+from models.model import OrderRefundStatus
 import os
 
 # I need to start thinking about some way to dynamically adjust dates to match the status
@@ -10,19 +10,6 @@ _zoneinfo = ZoneInfo("America/New_York")
 
 threshold_days_auto_approve = int(os.getenv("DAYS_THRESHOLD_AUTO"))
 
-# ORDER_NON_REFUNDABLE_DAYS means an order is non-refundable because the refund request has exceeded the return window.
-# ORDER_NON_REFUNDABLE_ITEMS means an order is non-refundable because the return item(s) are either intimate items or perishable.
-# ORDER_DELIVERED_BORDERLINE are order supposed to be delivered according to the carrier but the customer does not see
-# the delivered items.  That's what a lot of order inquiry dispute come from and cases will be escalated. 
-class OrderRefundStatus(StrEnum):
-    ORDER_AUTO_REFUNDABLE = auto()
-    ORDER_NON_REFUNDABLE_DAYS = auto()
-    ORDER_NON_REFUNDABLE_ITEMS = auto()
-    ORDER_HUMAN_REFUNDABLE = auto()
-    ORDER_IN_TRANSIT = auto()
-    ORDER_IN_PENDING = auto()
-    ORDER_DATA_INVALID = auto() # for test reason
-    ORDER_DELIVERED_BORDERLINE = auto()
 
 customer_order_status_map = {
     "wolf.blitzer@cnn.com": OrderRefundStatus.ORDER_NON_REFUNDABLE_DAYS,

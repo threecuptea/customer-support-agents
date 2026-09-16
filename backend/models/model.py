@@ -5,11 +5,28 @@ from datetime import datetime
 from typing import Literal, Annotated
 from langgraph.graph import MessagesState
 from zoneinfo import ZoneInfo
+from enum import StrEnum, auto
 
 MAX_MESSAGE_CHARS = 4_000
 MAX_MESSAGES = 100
 
 MAX_REASON_CHARS = 500
+
+
+# ORDER_NON_REFUNDABLE_DAYS means an order is non-refundable because the refund request has exceeded the return window.
+# ORDER_NON_REFUNDABLE_ITEMS means an order is non-refundable because the return item(s) are either intimate items or perishable.
+# ORDER_DELIVERED_BORDERLINE are order supposed to be delivered according to the carrier but the customer does not see
+# the delivered items.  That's what a lot of order inquiry dispute come from and cases will be escalated. 
+class OrderRefundStatus(StrEnum):
+    ORDER_AUTO_REFUNDABLE = auto()
+    ORDER_NON_REFUNDABLE_DAYS = auto()
+    ORDER_NON_REFUNDABLE_ITEMS = auto()
+    ORDER_HUMAN_REFUNDABLE = auto()
+    # The above are related to return_refund_eligible
+    ORDER_IN_TRANSIT = auto()
+    ORDER_IN_PENDING = auto()
+    ORDER_DATA_INVALID = auto() # for test reason
+    ORDER_DELIVERED_BORDERLINE = auto()
 
 
 #############################################
@@ -102,11 +119,13 @@ class CustomerSupportState(MessagesState):
     general_issue_resolved: bool
     order_number_provided: int
     target_order: Order
-    return_refund_eligible: bool
-    intent_for_return_refund: bool
+    intent_to_return_refund: bool
+    order_refund_eligible: OrderRefundStatus
     refund_request: RefundRequest
 
+# Unfortunately we have to know what items to be return to devide
 class RefundProcess(BaseModel):
+
     requires_manual_approval: bool = False
     reason: str | None = None
 
