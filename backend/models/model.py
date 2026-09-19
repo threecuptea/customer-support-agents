@@ -11,6 +11,14 @@ MAX_MESSAGE_CHARS = 4_000
 MAX_MESSAGES = 100
 
 MAX_REASON_CHARS = 500
+ORDER_INQUIRY = "ORDER_INQUIRY"
+
+# "Help handle a lost shipment", "Help cancel an order", "Help answer an order inquiry that an AI Agent cannot handle"
+
+class ESCALATE_REASON(StrEnum):
+    HELP_LOST_SHIPMENT = "Help handle a lost shipment"
+    HELP_CANCEL_ORDER = "Help cancel an order"
+    HELP_ANSWER_ORDER_INQUIRY = "Help answer an order inquiry that an AI Agent cannot handle"
 
 
 # ORDER_NON_REFUNDABLE_DAYS means an order is non-refundable because the refund request has exceeded the return window.
@@ -92,7 +100,6 @@ class RefundRequest(BaseModel):
 class FAQMatchEvals(BaseModel):
     rapid_fuzz_partial_ratio_match_helpful: bool = False
     llm_semantic_match_helpful: bool = False
-    reason: str | None = None
 
 class FAQMatchResult(BaseModel):
     question: str
@@ -113,13 +120,16 @@ class CustomerSupportState(MessagesState):
     summary: str
     customer_name: str
     customer_context: CustomerContext
-    support_category: Literal["order_inquery/ return_refund", "general/ others"] = 'general/ others'
+    support_category: Literal["order_inquery/ return_refund", "return_refund", "general/ others"] = 'general/ others'
     general_inquiry: str
     faq_match_evals: FAQMatchEvals | None
-    general_issue_resolved: bool
-    order_number_provided: int
-    target_order: Order
-    intent_to_return_refund: bool
+    escalation_reason: str = None # This is for the future use: escalating and summarizing the reason to slack's CSR channel
+    general_issue_resolved: bool = False
+    order_number_provided:  int
+    target_order: Order = None
+    fail_to_locate_target_order_error: bool = False
+    order_issue_escalated: bool = False
+    intent_for_return_refund: bool
     order_refund_eligible: OrderRefundStatus
     refund_request: RefundRequest
 
@@ -139,10 +149,6 @@ class CustomerContext(BaseModel):
     last_name: Annotated[str, Field(min_length=1)]
     email: Annotated[str, Field(min_length=1)]
     latest_orders: list[Order] = []
-
-class OrderResult(BaseModel):
-    not_found: bool = False
-    order: Order = None    
     
 
 #########################################
@@ -178,9 +184,23 @@ class GeneralSupportResponse(BaseModel):
     general_inquiry: str
     response: str
 
-class OrderReturnSupportRequest(BaseModel):
+class OrderInitRequest(BaseModel):
+    thread_id: str | None = None
     customer_context: CustomerContext
-    order_number_provided: int   
+    order_number_provided: int
+
+class OrderStructuredOutput(BaseModel):
+    response: str | None = None
+    escalate: bool = False
+    
+    escalation_reason: Literal[ESCALATE_REASON.HELP_LOST_SHIPMENT, ESCALATE_REASON.HELP_CANCEL_ORDER, ESCALATE_REASON.HELP_ANSWER_ORDER_INQUIRY] | None
+    intent_for_return_refund: bool = False
+
+class OrderInitResponse(BaseModel):
+    thread_id: str
+    target_order: Order
+    response: str
+
 
 class OrderReturnSupportContinue(BaseModel):
     thread_id: Annotated[str, Field(min_length=1)]

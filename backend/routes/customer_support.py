@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request
 import os
-from models.model import GeneralSupportRequest, GeneralSupportResponse
+from models.model import GeneralSupportRequest, GeneralSupportResponse, OrderInitRequest, OrderInitResponse
 import logging
-from services.customer_support_service import invoke_general_support_workflow
+from services.customer_support_service import invoke_general_support_workflow, invoke_order_init_workflow
 
 
 MAX_MESSAGE_CHARS = 4_000
@@ -20,4 +20,10 @@ router = APIRouter(prefix="/api/support", tags=['support'])
 async def general_support(support: GeneralSupportRequest, request: Request) -> GeneralSupportResponse:
     logger.info(f"Received general inquiry: {support.general_inquiry} from {support.customer_context.email}")
     return await invoke_general_support_workflow(support, request)
+
+@router.post("/order/init")
+async def order_support_init(support: OrderInitRequest, request: Request) -> OrderInitResponse:
+    logger.info(f"Received order inquiry: {support.order_number_provided} from {support.customer_context.email}")
+    return await invoke_order_init_workflow(support, request)
+
   

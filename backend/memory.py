@@ -38,6 +38,7 @@ async def load_user_memory(
     store: BaseStore, user_id: Any, limit: int = 3
 ) -> str:
     """Return a short bulleted summary of what we remember about the user."""
+    #TODO load the last X days
     if not store or not user_id:
         return ""
     try:

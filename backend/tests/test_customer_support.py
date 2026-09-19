@@ -1,12 +1,15 @@
 import asyncio
 
 from fastapi.testclient import TestClient
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ChatMessage
+
 import pytest
 
 from main import app
 from models.model import FAQMatchEvals
-from workflow.customer_support import CustomerSupportAgent, ESCALATE_MESSAGE, FAQ_FUZZY_MATCH_SOURCE
+from workflow.customer_support import CustomerSupportAgent, ESCALATE_MESSAGE, SOURCE_FAQ_FUZZY_MATCH, SOURCE_FAQ_LLM_MATCH, \
+    SOURCE_FAQ_LLM_EVALS, ROLE_FUNCTION_CALL, ROLE_AGENT, FAQ_MATCH_THRESHOLD
+from langchain_core.messages import HumanMessage
 
 
 @pytest.fixture()
@@ -30,7 +33,7 @@ CUSTOMER_CONTEXT = {
 # instantiate `BaseMessage` directly, which raises a pydantic ValidationError
 # (`type` field required) since BaseMessage has no concrete `type` discriminator.
 # No pytest-asyncio plugin is installed, so these drive the coroutine with asyncio.run(). ---
-def test_general_faq_fuzz_match_node_returns_ai_message():
+def test_general_faq_fuzz_match_node_returns_chat_message():
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     state = {
         "general_inquiry": "What is your return policy?",
@@ -42,9 +45,12 @@ def test_general_faq_fuzz_match_node_returns_ai_message():
     assert result["general_issue_resolved"] is True
     assert result["response"] == "We accept returns within 35 days of delivery for unused items"
     assert len(result["messages"]) == 1
-    assert isinstance(result["messages"][0], AIMessage)
+    assert isinstance(result["messages"][0], ChatMessage)
     assert result["messages"][0].content == result["response"]
-    assert result["messages"][0].name == FAQ_FUZZY_MATCH_SOURCE
+    assert result["messages"][0].role == ROLE_FUNCTION_CALL
+    assert result["messages"][0].additional_kwargs['source'] == SOURCE_FAQ_FUZZY_MATCH
+    assert result["messages"][0].additional_kwargs['faq_match_result']
+    assert result["messages"][0].additional_kwargs['faq_match_result'].confidence_score > FAQ_MATCH_THRESHOLD
 
 
 def test_general_faq_fuzz_match_node_escalates_on_low_confidence():
@@ -58,18 +64,38 @@ def test_general_faq_fuzz_match_node_escalates_on_low_confidence():
 
     assert result["general_issue_resolved"] is True
     assert result["response"] == ESCALATE_MESSAGE
+    assert result["messages"][0].role == ROLE_AGENT
+    assert result["messages"][0].additional_kwargs['source'] == SOURCE_FAQ_FUZZY_MATCH
+    
 
 def test_general_faq_llm_match_node_escalates_on_low_confidence():
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     state = {
-        "general_inquiry": "What is your return policy?",
+        "general_inquiry": "asdkjaslkdj not a real question",
         "faq_match_evals": FAQMatchEvals(rapid_fuzz_partial_ratio_match_helpful=False, llm_semantic_match_helpful=True),
     }
-    
+    # It comes from mocked llm issue
     result = asyncio.run(agent.general_faq_llm_match_node(state))
 
     assert result["general_issue_resolved"] is True
     assert result["response"] == ESCALATE_MESSAGE
+    assert result["messages"][0].role == ROLE_AGENT
+    assert result["messages"][0].additional_kwargs['source'] == SOURCE_FAQ_LLM_MATCH
+
+def test_general_faq_llm_evals_node_directly_escalates():
+    agent = CustomerSupportAgent(checkpointer=None, store=None)
+    state = {
+        "messages": [HumanMessage(content="asdkjaslkdj not a real question")],
+        "general_inquiry": "asdkjaslkdj not a real question",
+    }
+    # It comes from mocked llm issue
+    result = asyncio.run(agent.general_faq_eval_node(state))
+
+    assert result["general_issue_resolved"] is True
+    assert result["response"] == ESCALATE_MESSAGE
+    assert result["messages"][0].role == ROLE_AGENT
+    assert result["messages"][0].additional_kwargs['source'] == SOURCE_FAQ_LLM_EVALS
+
 
 
 # --- End-to-end coverage for POST /api/support/general (also a regression test:
@@ -83,7 +109,10 @@ def test_general_support_endpoint_escalates_under_mock_llm(client):
     assert resp.status_code == 200
     data = resp.json()
     assert data["general_inquiry"] == "What is your return policy?"
+    # It comes from mocked llm issue, always negative
     assert data["response"] == ESCALATE_MESSAGE
+    assert data["thread_id"]
+    
 
 
 # --- Verifies multi-round thread continuity directly against the LangGraph checkpoint

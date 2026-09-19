@@ -1,8 +1,9 @@
 from __future__ import annotations
-from models.model import CustomerSupportState, FAQMatchEvals, FAQMatchResult, Order
+from models.model import CustomerSupportState, FAQMatchEvals, FAQMatchResult, Order, OrderStructuredOutput,\
+    ESCALATE_REASON, ORDER_INQUIRY
 
 from langgraph.graph import END, START, StateGraph
-from langchain_core.messages import HumanMessage, RemoveMessage, SystemMessage, AIMessage
+from langchain_core.messages import HumanMessage, RemoveMessage, SystemMessage, AIMessage, ChatMessage
 from typing import Any
 from dotenv import load_dotenv
 import logging
@@ -19,10 +20,19 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
 FAQ_MATCH_THRESHOLD = 75.0
-ESCALATE_MESSAGE = "I will escalate to a human agent and somebody will contact you within 3 business days"
+ESCALATE_MESSAGE = "I will escalate your inquiry/ request to a human agent and somebody will contact you within 3 business days"
+SYSTEM_ERROR_MESSAGE = "System error!! We cannot find your order, please try it later"
+ESCALATE_REASON_FAQ = "Unable to find a satifactory answer to the customer's question"
+
+
 SUMMARIZE_MESSAGE_THRESHOLD = 6
-FAQ_FUZZY_MATCH_SOURCE = "faq_fuzzy_match"
-FAQ_LLM_MATCH_SOURCE = "faq_llm_match"
+SOURCE_FAQ_FUZZY_MATCH = "faq_fuzzy_match"
+SOURCE_FAQ_LLM_MATCH = "faq_llm_match"
+SOURCE_FAQ_LLM_EVALS = "faq_llm_evals"
+SOURCE_ORDER_RETRIEVAL = "retrieve_target_order"
+SOURCE_ORDER_INQUIRY = "order_inquiry"
+ROLE_FUNCTION_CALL = "role_function_call"
+ROLE_AGENT = "role_agent"
 
 
 class CustomerSupportAgent:
@@ -33,11 +43,11 @@ class CustomerSupportAgent:
         self.summarize_llm = get_llm()
        
         # FAQ matching
+        # Selected models should be customized by their speciality and strength in the production
         self.general_llm_for_faq_match_evals = get_llm().with_structured_output(FAQMatchEvals)
         self.general_llm_for_faq_match_result = get_llm().with_structured_output(FAQMatchResult)
-    
-        # "\n".join(f"- {n}" for n in notes)
         self.faq_context = "\n".join([f"- 'question': {key}, 'answer': {val} " for key, val in faq_dict.items()])
+        self.order_llm_for_inquiry_chat = get_llm().with_structured_output(OrderStructuredOutput)
 
 
     ###############################################
@@ -91,12 +101,13 @@ class CustomerSupportAgent:
     ###############################################
     # I might need to 
     async def general_faq_eval_node(self, state: CustomerSupportState) -> dict[str, Any]:
+        # Draw previous conversation from the summary in this thread if any otherwise draw from the long term memory
         SYSTEM_PROMPT = f"""
-        You are an intelligent customer-support agent to help decide if it is helful to match the customer question 
+        You are an intelligent customer-support agent to help decide if it is helpful to match the customer question 
         against FAQs
-        Here is a summary of the previous conversation, if any: {state.get("summary") or "None yet"}.
-        Here is the customer's question: {state["messages"][-1].content}.
+        Here is the customer's question: {state["general_inquiry"]}.
         Here are FAQ context: {self.faq_context}.
+        Here is the summary of the previous conversation if any: {state.get("summary") if state.get("summary") else (state["messages"][-2].content if len(state["messages"]) >= 2 else "None yet")}.
         There are two matching options:
         - Matches with fuzz.partial_ratio scorer of python Rapidfuzz library. The fuzz.partial_ratio scorer finds the
         best-aligned contiguous substring of the shorter string within the longer one and scores their similarity,
@@ -117,9 +128,11 @@ class CustomerSupportAgent:
         updates = {"faq_match_evals": eval, "general_issue_resolved": False}
         if not eval or (eval and not eval.rapid_fuzz_partial_ratio_match_helpful and not eval.llm_semantic_match_helpful):
             response = ESCALATE_MESSAGE
-            message = SystemMessage(content=response)
+            message = ChatMessage(content=response, role= ROLE_AGENT, additional_kwargs={
+                "source": SOURCE_FAQ_LLM_EVALS})
             updates["messages"] = [message]
             updates["response"] = response
+            updates["escalation_reason"] = f"{ESCALATE_REASON_FAQ}: {state["general_inquiry"]}"
             updates["general_issue_resolved"] = True
 
         return updates
@@ -135,7 +148,9 @@ class CustomerSupportAgent:
             response = result.answer
             # Originally I want to use ToolMessage but that requires tool-call_id which will link back to AIMessage.
             # But I can use function call and not need to use LLM bind_tools
-            message = AIMessage(content=response, name=FAQ_FUZZY_MATCH_SOURCE)
+            message = ChatMessage(content=response, role= ROLE_FUNCTION_CALL, additional_kwargs={
+                "source":SOURCE_FAQ_FUZZY_MATCH, "faq_match_result": result
+            })
             return {
                 "messages": [message],
                 "response": response,
@@ -143,10 +158,12 @@ class CustomerSupportAgent:
             }
         elif not state["faq_match_evals"].llm_semantic_match_helpful:
             response = ESCALATE_MESSAGE
-            message = SystemMessage(content=response)
+            message = ChatMessage(content=response, role= ROLE_AGENT, additional_kwargs={
+                "source":SOURCE_FAQ_FUZZY_MATCH})
             return {
                     "messages": [message],
                     "response": response,
+                    "escalation_reason": f"{ESCALATE_REASON_FAQ}: {state["general_inquiry"]}",
                     "general_issue_resolved": True,
             }
         else:
@@ -170,7 +187,9 @@ class CustomerSupportAgent:
         result: FAQMatchResult = await self.general_llm_for_faq_match_result.ainvoke([system_msg])
         if result and result.confidence_score >= FAQ_MATCH_THRESHOLD:
             response = result.answer
-            message = AIMessage(content=response, name=FAQ_LLM_MATCH_SOURCE)
+            message = AIMessage(content=response, additional_kwargs={
+                "source":SOURCE_FAQ_LLM_MATCH
+            })
             return {
                 "messages": [message],
                 "response": response,
@@ -178,10 +197,13 @@ class CustomerSupportAgent:
             }
         else:
             response = ESCALATE_MESSAGE
-            message = SystemMessage(content=response)
+            message = ChatMessage(content=response, role=ROLE_AGENT, additional_kwargs={
+                "source":SOURCE_FAQ_LLM_MATCH, "faq_match_result": result,
+            })
             return {
                     "messages": [message],
                     "response": response,
+                    "escalation_reason": f"{ESCALATE_REASON_FAQ}: {state["general_inquiry"]}",
                     "general_issue_resolved": True,
             }
 
@@ -190,29 +212,112 @@ class CustomerSupportAgent:
     #               Order Nodes
     ###############################################
     
-    async def order_inquiry_node(self, state: CustomerSupportState) -> dict[str, Any]:
-        # This should be a node to use 'retrieve_target_order' tool
-        # need adjustment by AI what if a repeated conversation
-        if not state["target_order"] and state["order_number_provided"]:
-            target_order: Order = retrieve_target_order(state["customer_context"], state["order_number_provided"])
-            if not target_order:
-                # It should be be since it comes from CustomerContext that we retrieve.
-                raise ValueError(f"Unexpected error: unable to retrieve the target order: {state["order_number_provided"]}")
-        response = ""
+    async def order_continue_chat_node(self, state: CustomerSupportState) -> dict[str, Any]:
+            # Need to include not only HumanMessage but also SystemMessage etc.
+        recent_conversations = "\n".join([f"- {message.content}" for message in state['messages']])
+        
+        SYSTEM_PROMPT = f"""
+                You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her order.  
+                Here is the target order {state['target_order'].model_dump_json()}
+                Here is the most recent conversations in sequential order: {recent_conversations}.
+                Here is the summary of the previous conversation: {state.get("summary") if state.get("summary") else (state["messages"][-2].content if len(state["messages"]) >= 2 else "None yet")}.
+
+                Scenarios that we are trying to cover:
+
+                Find out what the customer is complaining about.
+                if the order status is 'delivered' but the customer did not receive the shipment, ask the customer to click the tracking number link to see if there is a delivery photo taken.  
+                If yes, is the photo taken in the customer's porch?  If yes, ask the customer to check with his/ her Ring's camera footage if the customer has Ring security system or 
+                check with his/ her family members before the customer confirm that the shipment is stolen . UPS would not be responsible for a stolen shipment.  
+                If the photo is not taken in the customer's porch or no photo taken, ask the customer to look around the house and/ or check with neighbors.
+                Let the customer know that he/ she can re-visit us after he/ she exhaust searches if the shipment is not stolen. 
+                You will set the `escalate` flag to True if the customer re-visit us as instructed and set '{ESCALATE_REASON.HELP_LOST_SHIPMENT}' as the `escalate_reason`.
+
+                if the order status is 'delivered' and the customer is complaining about item(s) delivered is/ are torn or damaged or bad-quality,
+                tell the customer that the quality problem might be an one-off issue and direct the customer to `e-shopping.com` web site to exchange items.
+
+                if the customer insist to return product(s), set the `intent_for_return_refund` to True and tell the customer that we will be happy to process 
+                the return refund.
+
+                if the order status is 'transit', ask the customer to track the whereabouts of the shipping using the UPS's tracking number.
+                if the order status is 'pending', ask the customer to wait for a couple of day.  The customer can cancel the order if he/ she really want.
+                if the customer intend to cancel the order, you will set the `escalate` flag to true and set '{ESCALATE_REASON.HELP_CANCEL_ORDER}' as the `escalate_reason`
+
+                if the customer's conversation lead to an uncovered scenario or that you do not have an answer, please set `escalate` flag to True and set
+                '{ESCALATE_REASON.HELP_CANCEL_ORDER}' as the `escalate_reason`
+                set `response` to what you want to reply 
+                """
+        system_msg = SystemMessage(content=SYSTEM_PROMPT)
+                # resp should an AIMessage wrapper
+                # FAQMatchEvals
+        order_output: OrderStructuredOutput = await self.order_llm_for_inquiry_chat.ainvoke([system_msg])
+        if order_output.escalate:
+            message = ChatMessage(content= ESCALATE_MESSAGE, role= ROLE_AGENT, additional_kwargs={
+                    "source": SOURCE_ORDER_INQUIRY})
+            return {
+                "messages": [message], 
+                "response": ESCALATE_MESSAGE,
+                "escalation_reason": f"{order_output.escalation_reason} of order #{state['order_number_provided']}", 
+                "order_issue_escalated": True,
+                "intent_for_return_refund": False
+            }
+                        
+        message = AIMessage(content= order_output.response, additional_kwargs={
+                "source":SOURCE_ORDER_INQUIRY})            
+        return {
+            "messages": [message],
+            "order_issue_escalated": False,
+            "escalation_reason": None,
+            "intent_for_return_refund": order_output.intent_for_return_refund,
+
+        }
+
+
+    async def order_retrieve_node(self, state: CustomerSupportState) -> dict[str, Any]:
+        target_order: Order = retrieve_target_order(state["customer_context"], state["order_number_provided"])
+        if target_order:
+            return {
+                "target_order": target_order,
+                "fail_to_locate_target_order_error": False 
+            }
+        # Should never come here
+        return {
+            "fail_to_locate_target_order_error": True
+            }
+
+    async def order_unfound_error_node(self, state: CustomerSupportState) -> dict[str, Any]:
+        response = SYSTEM_ERROR_MESSAGE
+        message = ChatMessage(content=response, role= ROLE_FUNCTION_CALL, additional_kwargs= {"source": SOURCE_ORDER_RETRIEVAL})
+        return {
+            "messages": [message],
+            "response": response
+        }
+
+    async def order_init_chat_node(self, state: CustomerSupportState) -> dict[str, Any]:        
+        target_order = state["target_order"]
         # If no previous conversation
-        match target_order.status:
+        match state["target_order"].status:
             case "pending": 
-                response = "Your order is still in 'pending' status. "
+                response = f"Your order is still in 'pending' status. You order on {target_order.order_date}"
                 if target_order.notes:
                     response += f"Notes say: {target_order.notes}. "
                 else:
-                    response += "Notes does not tell me additional information. "    
-                response += "We will ship as soon as the order is ready." 
+                    response += "Notes does not provide additional information. "    
+                response += "We will ship as soon as the order is ready and sorry for the delay.  Thanks for your patience"        
             case "transit":
                 response = f"Your order is still in 'transit' status. it was estimated to arrive at {target_order.estimated_delivery_date.isoformat()}. "
-                 
-       
-            
+                response += "Please follow the tracking number link in the shipping email or just go to UPS web site and enter your tracking number to get the delivery update, Thanks."
+            case "delivery":
+                response = f"According to our record,  your order has been delivered on {target_order.delivery_date.isoformat()}.  Is everything O.K.?"
+            case _:
+                pass
+
+        message = ChatMessage(content=response, role= ROLE_AGENT)
+        return {
+            "messages": [message],
+            "response": response,
+        } 
+
+
     ###############################################
     #            Routes after a node
     ###############################################
@@ -222,12 +327,11 @@ class CustomerSupportAgent:
         # For order, will branch out based upon if target_order is set and if return_refund_eligible is set and if intent_for_return_refund etc.
         match state['support_category']:
             case "general/ others":
-                return "general_faq_eval_node"
+                return "general_faq"
             case _:
-                return "order_inquiry_node"
-        return ""       
+                return self.route_order       
 
-    def _should_summarize(self, state: CustomerSupportState, topic_concluded: bool) -> bool:
+    def _should_summarize(self, state: CustomerSupportState, topic_concluded: bool = False) -> bool:
         """Shared trigger for routing into `summarize_node`: each flow passes its own
         flow-specific 'concluded' signal (e.g. `general_issue_resolved` for the general
         inquiry flow); the message-count threshold is the only domain-agnostic part,
@@ -250,6 +354,32 @@ class CustomerSupportAgent:
             return "summarize_node"
         return "general_faq_llm_match_node"
 
+    # It's not an actual route. It return node by condition.  Get around with conditional edge within conditional edge
+    def route_order(self, state: CustomerSupportState) -> str:
+        if not state["target_order"] and state["order_number_provided"]:
+            return "order_init"
+        
+        return "order_init_is_done"
+
+    def route_after_order_retrieve(self, state: CustomerSupportState) -> str:
+        if state["fail_to_locate_target_order_error"]:
+            return "order_unfound_error_node"
+        human_messages = [message for message in state['messages'] if isinstance(message, HumanMessage)]
+        if len(human_messages) == 1 and human_messages[0].content == f"{ORDER_INQUIRY}: {state['order_number_provided']}":
+            return "order_init_chat_node"
+        
+        return "order_continue_chat_node"
+
+    def route_after_order_init_chat(self, state: CustomerSupportState) -> str:
+        if self._should_summarize(state):
+            return "summarize_node"
+        return END
+
+    def route_after_order_continue_chat(self, state: CustomerSupportState) -> str:
+            if self._should_summarize(state, state["intent_for_return_refund"] or state["order_issue_escalated"]):
+                return "summarize_node"
+            return END 
+     
 
     ###############################################
     #            Build the support graph
@@ -259,8 +389,9 @@ class CustomerSupportAgent:
         builder = StateGraph(CustomerSupportState)
         # Harnese with RetryPolicy later
         builder.add_conditional_edges(START, self.route_branch, 
-                                      {"general_faq_eval_node": "general_faq_eval_node", 
-                                       "order_inquiry_node": "order_inquiry_node"})
+                                      {"general_faq": "general_faq_eval_node", 
+                                       "order_init": "order_retrieve_node",
+                                       "order_init_is_done": "order_continue_chat_node"})
         
         builder.add_node("summarize_node", self.summarize_node)
         builder.add_edge("summarize_node", END)
@@ -277,7 +408,23 @@ class CustomerSupportAgent:
         builder.add_node("general_faq_llm_match_node", self.general_faq_llm_match_node)
         builder.add_edge("general_faq_llm_match_node", "summarize_node")
 
-        builder.add_node("order_inquiry_node", self.order_inquiry_node)
+        builder.add_node("order_continue_chat_node", self.order_continue_chat_node)
+        builder.add_node("order_retrieve_node", self.order_retrieve_node)
+        builder.add_node("order_init_chat_node", self.order_init_chat_node)
+        builder.add_node("order_unfound_error_node", self.order_unfound_error_node)
+
+        builder.add_edge("order_unfound_error_node", "summarize_node")
+
+        builder.add_conditional_edges("order_retrieve_node", self.route_after_order_retrieve, 
+                                        {"order_unfound_error_node": "order_unfound_error_node", 
+                                         "order_init_chat_node": "order_init_chat_node",
+                                         "order_continue_chat_node": "order_continue_chat_node"})
+        
+        builder.add_conditional_edges("order_init_chat_node", self.route_after_order_init_chat,
+                    {"summarize_node": "summarize_node", END: END})
+        
+        builder.add_conditional_edges("order_continue_chat_node", self.route_after_order_continue_chat,
+                            {"summarize_node": "summarize_node", END: END})
         
         graph = builder.compile(checkpointer = self.checkpointer, store = self.store)
         self.graph = graph
