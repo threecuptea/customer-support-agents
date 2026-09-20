@@ -10,8 +10,7 @@ from enum import StrEnum, auto
 MAX_MESSAGE_CHARS = 4_000
 MAX_MESSAGES = 100
 
-MAX_REASON_CHARS = 500
-ORDER_INQUIRY = "ORDER_INQUIRY"
+MAX_REASON_CHARS = 50
 
 # "Help handle a lost shipment", "Help cancel an order", "Help answer an order inquiry that an AI Agent cannot handle"
 
@@ -22,14 +21,15 @@ class ESCALATE_REASON(StrEnum):
 
 
 # ORDER_NON_REFUNDABLE_DAYS means an order is non-refundable because the refund request has exceeded the return window.
-# ORDER_NON_REFUNDABLE_ITEMS means an order is non-refundable because the return item(s) are either intimate items or perishable.
+# ORDER_HUMAN_REFUNDABLE_ITEMS means an order is non-refundable because the return item(s) are intimate items that CSR need to 
+# make sure that it is unworn, unwashed, tag is on
 # ORDER_DELIVERED_BORDERLINE are order supposed to be delivered according to the carrier but the customer does not see
 # the delivered items.  That's what a lot of order inquiry dispute come from and cases will be escalated. 
 class OrderRefundStatus(StrEnum):
     ORDER_AUTO_REFUNDABLE = auto()
     ORDER_NON_REFUNDABLE_DAYS = auto()
-    ORDER_NON_REFUNDABLE_ITEMS = auto()
-    ORDER_HUMAN_REFUNDABLE = auto()
+    ORDER_HUMAN_REFUNDABLE_ITEMS = auto()
+    ORDER_HUMAN_REFUNDABLE_AMOUNT = auto()
     # The above are related to return_refund_eligible
     ORDER_IN_TRANSIT = auto()
     ORDER_IN_PENDING = auto()
@@ -55,7 +55,7 @@ class OrderItem(BaseModel):
     supplier_name: Annotated[str, Field(min_length=1)]
     unit_price: Annotated[float, Field(gt=0)]
     number_units: Annotated[int, Field(gt=0)]
-    non_refundable: bool = False
+    intimate_item: bool = False
 
 # All date fields be TZ-aware 
 class Order(BaseModel):
@@ -120,18 +120,18 @@ class CustomerSupportState(MessagesState):
     summary: str
     customer_name: str
     customer_context: CustomerContext
-    support_category: Literal["order_inquery/ return_refund", "return_refund", "general/ others"] = 'general/ others'
+    support_category: Literal["order_inquery", "return_refund", "general/ others"] = 'general/ others'
     general_inquiry: str
     faq_match_evals: FAQMatchEvals | None
     escalation_reason: str = None # This is for the future use: escalating and summarizing the reason to slack's CSR channel
     general_issue_resolved: bool = False
     order_number_provided:  int
     target_order: Order = None
-    fail_to_locate_target_order_error: bool = False
     order_issue_escalated: bool = False
     intent_for_return_refund: bool
     order_refund_eligible: OrderRefundStatus
     refund_request: RefundRequest
+    summarize_on_exit: bool = False
 
 # Unfortunately we have to know what items to be return to devide
 class RefundProcess(BaseModel):
@@ -201,10 +201,21 @@ class OrderInitResponse(BaseModel):
     target_order: Order
     response: str
 
-
-class OrderReturnSupportContinue(BaseModel):
+class OrderContinueRequest(BaseModel):
     thread_id: Annotated[str, Field(min_length=1)]
+    customer_name: str
     user_conversation: Annotated[str, Field(min_length=1, max_length=MAX_MESSAGE_CHARS)]
+
+class OrderContinueResponse(BaseModel):
+    thread_id: str
+    response: str
+    escalation_reason: str
+    intent_for_return_refund: bool
+
+class SummarizeOnExit(BaseModel):
+    thread_id: str    
+
+
    
         
 

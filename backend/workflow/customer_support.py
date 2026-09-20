@@ -1,6 +1,6 @@
 from __future__ import annotations
 from models.model import CustomerSupportState, FAQMatchEvals, FAQMatchResult, Order, OrderStructuredOutput,\
-    ESCALATE_REASON, ORDER_INQUIRY
+    ESCALATE_REASON
 
 from langgraph.graph import END, START, StateGraph
 from langchain_core.messages import HumanMessage, RemoveMessage, SystemMessage, AIMessage, ChatMessage
@@ -53,7 +53,14 @@ class CustomerSupportAgent:
     ###############################################
     #               Summarize Node
     ###############################################
-    # Borrow from https://pub.towardsai.net/your-first-real-langgraph-project-ac5eb00f923a              
+    # It's a good practice to summarize message, store in the long-term meory then delete old messages 
+    # leave only a few very recent ones (the latest two messages in this case). The summarized response 
+    # will be in 'summary'
+    # I did not realize that GraphState and StateSnapshot share the same meomry space
+    # RemoveMessage will affect GraphState and StateSnapshot.  Externally, we don't need to access GraphState
+    # We can just access StateSnapshot. 'messages' of GraphState will be StateSnapshot.values["messages"]
+    # and 'general_inquiry' of GraphState will be StateSnapshot.values["general_inquiry"] 
+    # Borrow from https://pub.towardsai.net/your-first-real-langgraph-project-ac5eb00f923a.  Thanks              
     async def summarize_node(self, state: CustomerSupportState, config: RunnableConfig) -> dict[str, Any]:
         """Compresses the full message history into a short summary, then deletes old
         raw messages. Callers route here via `_should_summarize` (message count past
@@ -217,35 +224,35 @@ class CustomerSupportAgent:
         recent_conversations = "\n".join([f"- {message.content}" for message in state['messages']])
         
         SYSTEM_PROMPT = f"""
-                You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her order.  
-                Here is the target order {state['target_order'].model_dump_json()}
-                Here is the most recent conversations in sequential order: {recent_conversations}.
-                Here is the summary of the previous conversation: {state.get("summary") if state.get("summary") else (state["messages"][-2].content if len(state["messages"]) >= 2 else "None yet")}.
+            You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her order.  
+            Here is the target order {state['target_order'].model_dump_json()}
+            Here is the most recent conversations in sequential order: {recent_conversations}.
+            Here is the summary of the previous conversation: {state.get("summary") if state.get("summary") else "None yet"}.
+            The above is the context of this order.
+            Scenarios that we are trying to cover:
 
-                Scenarios that we are trying to cover:
+            Find out what the customer is complaining about.
+            if the order status is 'delivered' but the customer did not receive the shipment, ask the customer to click the tracking number link to see if there is a delivery photo taken.  
+            If yes, is the photo taken in the customer's porch?  If yes, ask the customer to check with his/ her Ring's camera footage if the customer has Ring security system or 
+            check with his/ her family members before the customer confirm that the shipment is stolen . UPS would not be responsible for a stolen shipment.  
+            If the photo is not taken in the customer's porch or no photo taken, ask the customer to look around the house and/ or check with neighbors.
+            Let the customer know that he/ she can always re-visit us after he/ she exhaust searches assuming the shipment is not stolen. 
+            You will set the `escalate` flag to True if the customer re-visit us as instructed and set '{ESCALATE_REASON.HELP_LOST_SHIPMENT}' as the `escalate_reason`.
 
-                Find out what the customer is complaining about.
-                if the order status is 'delivered' but the customer did not receive the shipment, ask the customer to click the tracking number link to see if there is a delivery photo taken.  
-                If yes, is the photo taken in the customer's porch?  If yes, ask the customer to check with his/ her Ring's camera footage if the customer has Ring security system or 
-                check with his/ her family members before the customer confirm that the shipment is stolen . UPS would not be responsible for a stolen shipment.  
-                If the photo is not taken in the customer's porch or no photo taken, ask the customer to look around the house and/ or check with neighbors.
-                Let the customer know that he/ she can re-visit us after he/ she exhaust searches if the shipment is not stolen. 
-                You will set the `escalate` flag to True if the customer re-visit us as instructed and set '{ESCALATE_REASON.HELP_LOST_SHIPMENT}' as the `escalate_reason`.
+            if the order status is 'delivered' and the customer is complaining about item(s) delivered is/ are torn or damaged or bad-quality,
+            tell the customer that the quality problem might be an one-off issue and direct the customer to `e-shopping.com` web site to exchange items.
+            if the customer insist to return product(s), set the `intent_for_return_refund` to True and tell the customer that we will be happy to process 
+            the return refund if he/ she can help us itemize product(s) to be returned.
 
-                if the order status is 'delivered' and the customer is complaining about item(s) delivered is/ are torn or damaged or bad-quality,
-                tell the customer that the quality problem might be an one-off issue and direct the customer to `e-shopping.com` web site to exchange items.
+            if the order status is 'transit', ask the customer to track the whereabouts of the shipping using the UPS's tracking number.
+            if the order status is 'pending', ask the customer to wait for a couple of day.  The customer can always cancel the order if he/ she really want.
+            if the customer intend to cancel the order, you will set the `escalate` flag to true and set '{ESCALATE_REASON.HELP_CANCEL_ORDER}' as the `escalate_reason`
 
-                if the customer insist to return product(s), set the `intent_for_return_refund` to True and tell the customer that we will be happy to process 
-                the return refund.
+            if the customer's conversation lead to an uncovered scenario or that you do not have an answer, please set `escalate` flag to True and set
+            '{ESCALATE_REASON.HELP_ANSWER_ORDER_INQUIRY}' as the `escalate_reason`
 
-                if the order status is 'transit', ask the customer to track the whereabouts of the shipping using the UPS's tracking number.
-                if the order status is 'pending', ask the customer to wait for a couple of day.  The customer can cancel the order if he/ she really want.
-                if the customer intend to cancel the order, you will set the `escalate` flag to true and set '{ESCALATE_REASON.HELP_CANCEL_ORDER}' as the `escalate_reason`
-
-                if the customer's conversation lead to an uncovered scenario or that you do not have an answer, please set `escalate` flag to True and set
-                '{ESCALATE_REASON.HELP_CANCEL_ORDER}' as the `escalate_reason`
-                set `response` to what you want to reply 
-                """
+            set `response` to what you want to reply 
+            """
         system_msg = SystemMessage(content=SYSTEM_PROMPT)
                 # resp should an AIMessage wrapper
                 # FAQMatchEvals
@@ -265,77 +272,77 @@ class CustomerSupportAgent:
                 "source":SOURCE_ORDER_INQUIRY})            
         return {
             "messages": [message],
+            "response": order_output.response,
             "order_issue_escalated": False,
             "escalation_reason": None,
             "intent_for_return_refund": order_output.intent_for_return_refund,
 
         }
 
-
-    async def order_retrieve_node(self, state: CustomerSupportState) -> dict[str, Any]:
+    async def order_init_chat_node(self, state: CustomerSupportState) -> dict[str, Any]:        
         target_order: Order = retrieve_target_order(state["customer_context"], state["order_number_provided"])
         if target_order:
+            match target_order.status:
+                case "pending": 
+                    response = f"Your order is still in 'pending' status. You order on {target_order.order_date}"
+                    if target_order.notes:
+                        response += f"Notes say: {target_order.notes}. "
+                    else:
+                        response += "Notes does not provide additional information. "    
+                    response += "We will ship as soon as the order is ready and sorry for the delay.  Thanks for your patience"        
+                case "transit":
+                    response = f"Your order is still in 'transit' status. it was estimated to arrive at {target_order.estimated_delivery_date.isoformat()}. "
+                    response += "Please follow the tracking number link in the shipping email or just go to UPS web site and enter your tracking number to get the delivery update, Thanks."
+                case "delivery":
+                    response = f"According to our record,  your order has been delivered on {target_order.delivery_date.isoformat()}.  Is everything O.K.?"
+                case _:
+                    pass
+
+            message = ChatMessage(content=response, role= ROLE_AGENT)
             return {
                 "target_order": target_order,
-                "fail_to_locate_target_order_error": False 
+                "messages": [message],
+                "response": response,
             }
-        # Should never come here
-        return {
-            "fail_to_locate_target_order_error": True
+        else:
+            # It should not happen
+            response = SYSTEM_ERROR_MESSAGE
+            message = ChatMessage(content=response, role= ROLE_FUNCTION_CALL, additional_kwargs= {"source": SOURCE_ORDER_RETRIEVAL})
+            return {
+                "target_order": None, 
+                "messages": [message],
+                "response": response,
             }
-
-    async def order_unfound_error_node(self, state: CustomerSupportState) -> dict[str, Any]:
-        response = SYSTEM_ERROR_MESSAGE
-        message = ChatMessage(content=response, role= ROLE_FUNCTION_CALL, additional_kwargs= {"source": SOURCE_ORDER_RETRIEVAL})
-        return {
-            "messages": [message],
-            "response": response
-        }
-
-    async def order_init_chat_node(self, state: CustomerSupportState) -> dict[str, Any]:        
-        target_order = state["target_order"]
-        # If no previous conversation
-        match state["target_order"].status:
-            case "pending": 
-                response = f"Your order is still in 'pending' status. You order on {target_order.order_date}"
-                if target_order.notes:
-                    response += f"Notes say: {target_order.notes}. "
-                else:
-                    response += "Notes does not provide additional information. "    
-                response += "We will ship as soon as the order is ready and sorry for the delay.  Thanks for your patience"        
-            case "transit":
-                response = f"Your order is still in 'transit' status. it was estimated to arrive at {target_order.estimated_delivery_date.isoformat()}. "
-                response += "Please follow the tracking number link in the shipping email or just go to UPS web site and enter your tracking number to get the delivery update, Thanks."
-            case "delivery":
-                response = f"According to our record,  your order has been delivered on {target_order.delivery_date.isoformat()}.  Is everything O.K.?"
-            case _:
-                pass
-
-        message = ChatMessage(content=response, role= ROLE_AGENT)
-        return {
-            "messages": [message],
-            "response": response,
-        } 
-
+            
 
     ###############################################
     #            Routes after a node
     ###############################################
     def route_branch(self, state: CustomerSupportState) -> str:
-        # Speed up the workflow and let UI take care
-        # What if the customer ask general questions (possible different ones) more than once?  Should we execute more than once
-        # For order, will branch out based upon if target_order is set and if return_refund_eligible is set and if intent_for_return_refund etc.
+        # Add summarize_on_exit hook so it can be called when the customer press 'Exit'
+        if state["summarize_on_exit"]:
+            return "summarize_node"
+        
         match state['support_category']:
             case "general/ others":
                 return "general_faq"
             case _:
                 return self.route_order       
 
+    # It's not an actual route. It return node by condition.  Get around with conditional edge within conditional edge
+    def route_order(self, state: CustomerSupportState) -> str:
+        if not state["target_order"] and state["order_number_provided"]:
+            return "order_init"
+        
+        return "order_init_is_done"
+
     def _should_summarize(self, state: CustomerSupportState, topic_concluded: bool = False) -> bool:
         """Shared trigger for routing into `summarize_node`: each flow passes its own
         flow-specific 'concluded' signal (e.g. `general_issue_resolved` for the general
         inquiry flow); the message-count threshold is the only domain-agnostic part,
         shared across flows.
+        It's possible that the customer will just close browser. That's why I try to summarize whenever
+        the customer wrap up a topic.
         """
         return topic_concluded or len(state["messages"]) > SUMMARIZE_MESSAGE_THRESHOLD
 
@@ -354,27 +361,6 @@ class CustomerSupportAgent:
             return "summarize_node"
         return "general_faq_llm_match_node"
 
-    # It's not an actual route. It return node by condition.  Get around with conditional edge within conditional edge
-    def route_order(self, state: CustomerSupportState) -> str:
-        if not state["target_order"] and state["order_number_provided"]:
-            return "order_init"
-        
-        return "order_init_is_done"
-
-    def route_after_order_retrieve(self, state: CustomerSupportState) -> str:
-        if state["fail_to_locate_target_order_error"]:
-            return "order_unfound_error_node"
-        human_messages = [message for message in state['messages'] if isinstance(message, HumanMessage)]
-        if len(human_messages) == 1 and human_messages[0].content == f"{ORDER_INQUIRY}: {state['order_number_provided']}":
-            return "order_init_chat_node"
-        
-        return "order_continue_chat_node"
-
-    def route_after_order_init_chat(self, state: CustomerSupportState) -> str:
-        if self._should_summarize(state):
-            return "summarize_node"
-        return END
-
     def route_after_order_continue_chat(self, state: CustomerSupportState) -> str:
             if self._should_summarize(state, state["intent_for_return_refund"] or state["order_issue_escalated"]):
                 return "summarize_node"
@@ -390,13 +376,12 @@ class CustomerSupportAgent:
         # Harnese with RetryPolicy later
         builder.add_conditional_edges(START, self.route_branch, 
                                       {"general_faq": "general_faq_eval_node", 
-                                       "order_init": "order_retrieve_node",
+                                       "order_init": "order_init_chat_node",
                                        "order_init_is_done": "order_continue_chat_node"})
         
         builder.add_node("summarize_node", self.summarize_node)
         builder.add_edge("summarize_node", END)
 
-        
         builder.add_node("general_faq_eval_node", self.general_faq_eval_node)
         builder.add_conditional_edges("general_faq_eval_node", self.route_after_general_faq_eval,
             {"summarize_node": "summarize_node", "general_faq_fuzz_match_node": "general_faq_fuzz_match_node", "general_faq_llm_match_node": "general_faq_llm_match_node"})
@@ -409,22 +394,14 @@ class CustomerSupportAgent:
         builder.add_edge("general_faq_llm_match_node", "summarize_node")
 
         builder.add_node("order_continue_chat_node", self.order_continue_chat_node)
-        builder.add_node("order_retrieve_node", self.order_retrieve_node)
         builder.add_node("order_init_chat_node", self.order_init_chat_node)
-        builder.add_node("order_unfound_error_node", self.order_unfound_error_node)
 
-        builder.add_edge("order_unfound_error_node", "summarize_node")
+        # It's not cost effcient to inject order_continue_chat_node with long-term memory every time it was invoke.
+        # Instead, I summarize here and include the content long-term memory so that 'order_continue_chat_node' has a good context   
+        builder.add_edge("order_init_chat_node", "summarize_node") 
 
-        builder.add_conditional_edges("order_retrieve_node", self.route_after_order_retrieve, 
-                                        {"order_unfound_error_node": "order_unfound_error_node", 
-                                         "order_init_chat_node": "order_init_chat_node",
-                                         "order_continue_chat_node": "order_continue_chat_node"})
-        
-        builder.add_conditional_edges("order_init_chat_node", self.route_after_order_init_chat,
-                    {"summarize_node": "summarize_node", END: END})
-        
         builder.add_conditional_edges("order_continue_chat_node", self.route_after_order_continue_chat,
-                            {"summarize_node": "summarize_node", END: END})
+            {"summarize_node": "summarize_node", END: END})
         
         graph = builder.compile(checkpointer = self.checkpointer, store = self.store)
         self.graph = graph

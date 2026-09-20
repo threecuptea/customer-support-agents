@@ -114,7 +114,6 @@ def test_general_support_endpoint_escalates_under_mock_llm(client):
     assert data["thread_id"]
     
 
-
 # --- Verifies multi-round thread continuity directly against the LangGraph checkpoint
 # (via `aget_state`), not just the HTTP response: messages accumulate across rounds via
 # the `add_messages` reducer, `summarize_node` prunes old messages back down via

@@ -13,13 +13,14 @@ threshold_days_auto_approve = int(os.getenv("DAYS_THRESHOLD_AUTO"))
 
 customer_order_status_map = {
     "wolf.blitzer@cnn.com": OrderRefundStatus.ORDER_NON_REFUNDABLE_DAYS,
-    "pamela.brown@cnn.com": OrderRefundStatus.ORDER_HUMAN_REFUNDABLE,
+    "pamela.brown@cnn.com": OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_AMOUNT,
     "anderson.cooper@cnn.com": OrderRefundStatus.ORDER_AUTO_REFUNDABLE,
     "jake.tapper@cnn.com": OrderRefundStatus.ORDER_IN_TRANSIT,
     "john.king@cnn.com": OrderRefundStatus.ORDER_IN_PENDING,
     "harry.enten@cnn.com": OrderRefundStatus.ORDER_DATA_INVALID,
-    "dana.bash@cnn.com": OrderRefundStatus.ORDER_NON_REFUNDABLE_ITEMS,
-    "manu.raju@cnn.com": OrderRefundStatus.ORDER_DELIVERED_BORDERLINE
+    "dana.bash@cnn.com": OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_ITEMS,
+    "manu.raju@cnn.com": OrderRefundStatus.ORDER_DELIVERED_BORDERLINE,
+    "sonya_ling1947@yahoo.com": OrderRefundStatus.ORDER_AUTO_REFUNDABLE,
 }
 
 
@@ -34,7 +35,7 @@ def adjust_days_demo_data_testable():
             case OrderRefundStatus.ORDER_NON_REFUNDABLE_DAYS:
                 order["delivery_date"] = datetime.now(_zoneinfo) - timedelta(days= threshold_days_auto_approve + 3)
                 _auto_adjust_days(order)
-            case OrderRefundStatus.ORDER_HUMAN_REFUNDABLE | OrderRefundStatus.ORDER_AUTO_REFUNDABLE | OrderRefundStatus.ORDER_NON_REFUNDABLE_ITEMS:
+            case OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_AMOUNT | OrderRefundStatus.ORDER_AUTO_REFUNDABLE | OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_ITEMS:
                 order["delivery_date"] = datetime.now(_zoneinfo) - timedelta(days= 25)
                 _auto_adjust_days(order)
             case OrderRefundStatus.ORDER_DELIVERED_BORDERLINE:
@@ -241,11 +242,11 @@ demo_customers = {
             "items": [
                 {
                 "product_id": "PRD-1002",
-                "product_name": "Face Mask",
-                "supplier_name": "Premier Merchandize",
-                "unit_price": 15.67,
-                "number_units": 12,
-                "non_refundable": True,
+                "product_name": "Dream Angeles Bras",
+                "supplier_name": "Victoria's Secret",
+                "unit_price": 64.95,
+                "number_units": 2,
+                "intimate_item": True,
                 },
             ]
         }]  
@@ -281,6 +282,31 @@ demo_customers = {
                 "number_units": 6,
                 },
             ]
+        }]  
+    },
+    "sonya_ling1947@yahoo.com": {
+        "customer_id": 32106,
+        "first_name": "Sonya",
+        "last_name": "Ling",
+        "title": "Ms.",
+        "email": "sonya_ling1947@yahoo.com",
+        "latest_orders":[{
+            "order_id": 123464,
+            "order_date": datetime(2026, 7, 25, 21, 10, 0, tzinfo= _zoneinfo),
+            "total_amount_incl_tax": 156.23,
+            "tax_applied_rate": 0.075,
+            "status": "delivered",
+            "ship_date": datetime(2026, 7, 28, 19, 45, 0, tzinfo= _zoneinfo),
+            "estimated_delivery_date": datetime(2026, 8, 1, 14, 30, 0, tzinfo= _zoneinfo),
+            "tracking_number": "1Z9999999502999999",
+            "items": [{
+                "product_id": "PRD-1001",
+                "product_name": "Wine Glasses",
+                "supplier_name": "Heritage Brands",
+                "unit_price": 23.78,
+                "number_units": 6,
+            }]
+            
         }]  
     },
 }
