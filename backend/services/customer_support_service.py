@@ -66,6 +66,7 @@ async def invoke_order_init_workflow(support: OrderInitRequest, request: Request
             "order_number_provided": support.order_number_provided,
             "target_order": None,
             "order_issue_escalated": False,
+            "order_issue_resolved": False,
             "escalation_reason": None,
             "intent_for_return_refund": False,
             "summarize_on_exit": False,
@@ -88,7 +89,8 @@ async def invoke_order_continue_workflow(support: OrderContinueRequest, request:
     config = {"configurable": {"thread_id": thread_id}}
     # We cannot inject long-terms memory for each invoke. That should come from `invoke_order_init_workflow``
     try:
-       customer_support_state  = await graph.ainvoke(HumanMessage(content= support.user_conversation), config)
+       customer_support_state  = await graph.ainvoke({"messages": [HumanMessage(content= support.user_conversation)]}, config)
+       print("***** After graph.ainvoke *****")
        # escalation_reason is for the future use: communication to CSR in slack  
        return OrderContinueResponse(
            thread_id=thread_id,
@@ -106,7 +108,7 @@ async def invoke_summarize_on_exit(support: SummarizeOnExit, request: Request):
     thread_id = support.thread_id
     config = {"configurable": {"thread_id": thread_id}}
     try:
-        graph.ainvoke(HumanMessage(content= "I intend to 'Exit'"), config)
+        graph.ainvoke({"summarize_on_exit": True}, config)
         # escalation_reason is for the future use: communication to CSR in slack  
     except Exception as exc:
         error_msg = "Error summarize on exit"

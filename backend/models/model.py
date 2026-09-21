@@ -60,7 +60,6 @@ class OrderItem(BaseModel):
 # All date fields be TZ-aware 
 class Order(BaseModel):
     order_id: Annotated[int, Field(gt=0)]
-    delivery_tz: ZoneInfo = ZoneInfo("America/Chicago")
     order_date: datetime
     total_amount_incl_tax: Annotated[float, Field(gt=0)]
     tax_applied_rate: Annotated[float, Field(ge=0)]
@@ -128,6 +127,7 @@ class CustomerSupportState(MessagesState):
     order_number_provided:  int
     target_order: Order = None
     order_issue_escalated: bool = False
+    order_issue_resolved: bool = False
     intent_for_return_refund: bool
     order_refund_eligible: OrderRefundStatus
     refund_request: RefundRequest
@@ -192,9 +192,9 @@ class OrderInitRequest(BaseModel):
 class OrderStructuredOutput(BaseModel):
     response: str | None = None
     escalate: bool = False
-    
-    escalation_reason: Literal[ESCALATE_REASON.HELP_LOST_SHIPMENT, ESCALATE_REASON.HELP_CANCEL_ORDER, ESCALATE_REASON.HELP_ANSWER_ORDER_INQUIRY] | None
+    escalation_reason: Literal[ESCALATE_REASON.HELP_LOST_SHIPMENT, ESCALATE_REASON.HELP_CANCEL_ORDER, ESCALATE_REASON.HELP_ANSWER_ORDER_INQUIRY] | None = None
     intent_for_return_refund: bool = False
+    order_issue_resolved: bool = False
 
 class OrderInitResponse(BaseModel):
     thread_id: str
@@ -203,14 +203,13 @@ class OrderInitResponse(BaseModel):
 
 class OrderContinueRequest(BaseModel):
     thread_id: Annotated[str, Field(min_length=1)]
-    customer_name: str
     user_conversation: Annotated[str, Field(min_length=1, max_length=MAX_MESSAGE_CHARS)]
 
 class OrderContinueResponse(BaseModel):
     thread_id: str
     response: str
-    escalation_reason: str
-    intent_for_return_refund: bool
+    escalation_reason: str | None = None
+    intent_for_return_refund: bool = False
 
 class SummarizeOnExit(BaseModel):
     thread_id: str    

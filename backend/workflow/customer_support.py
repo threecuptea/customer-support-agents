@@ -31,8 +31,8 @@ SOURCE_FAQ_LLM_MATCH = "faq_llm_match"
 SOURCE_FAQ_LLM_EVALS = "faq_llm_evals"
 SOURCE_ORDER_RETRIEVAL = "retrieve_target_order"
 SOURCE_ORDER_INQUIRY = "order_inquiry"
-ROLE_FUNCTION_CALL = "role_function_call"
-ROLE_AGENT = "role_agent"
+ROLE_FUNCTION_CALL = "function"
+ROLE_AGENT = "assistant"
 
 
 class CustomerSupportAgent:
@@ -55,9 +55,9 @@ class CustomerSupportAgent:
     ###############################################
     # It's a good practice to summarize message, store in the long-term meory then delete old messages 
     # leave only a few very recent ones (the latest two messages in this case). The summarized response 
-    # will be in 'summary'
+    # will be in 'summary'.
     # I did not realize that GraphState and StateSnapshot share the same meomry space
-    # RemoveMessage will affect GraphState and StateSnapshot.  Externally, we don't need to access GraphState
+    # RemoveMessage will affect GraphState and StateSnapshot outputs.  Externally, we don't need to access GraphState
     # We can just access StateSnapshot. 'messages' of GraphState will be StateSnapshot.values["messages"]
     # and 'general_inquiry' of GraphState will be StateSnapshot.values["general_inquiry"] 
     # Borrow from https://pub.towardsai.net/your-first-real-langgraph-project-ac5eb00f923a.  Thanks              
@@ -220,15 +220,18 @@ class CustomerSupportAgent:
     ###############################################
     
     async def order_continue_chat_node(self, state: CustomerSupportState) -> dict[str, Any]:
-            # Need to include not only HumanMessage but also SystemMessage etc.
+            # Need to include not only HumanMessage but also SystemMessage etc.  
         recent_conversations = "\n".join([f"- {message.content}" for message in state['messages']])
-        
         SYSTEM_PROMPT = f"""
             You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her order.  
             Here is the target order {state['target_order'].model_dump_json()}
             Here is the most recent conversations in sequential order: {recent_conversations}.
             Here is the summary of the previous conversation: {state.get("summary") if state.get("summary") else "None yet"}.
             The above is the context of this order.
+            DO NOT REPEAT the same response!!  
+            You can wrap up by saying something like 'Anything else I can help you with?' if you find it is at the end of the conversation.
+            set `order_issue_resolved` when it is appropriate.             
+                        
             Scenarios that we are trying to cover:
 
             Find out what the customer is complaining about.
@@ -240,8 +243,8 @@ class CustomerSupportAgent:
             You will set the `escalate` flag to True if the customer re-visit us as instructed and set '{ESCALATE_REASON.HELP_LOST_SHIPMENT}' as the `escalate_reason`.
 
             if the order status is 'delivered' and the customer is complaining about item(s) delivered is/ are torn or damaged or bad-quality,
-            tell the customer that the quality problem might be an one-off issue and direct the customer to `e-shopping.com` web site to exchange items.
-            if the customer insist to return product(s), set the `intent_for_return_refund` to True and tell the customer that we will be happy to process 
+            tell the customer that the quality problem might be an one-off issue and direct the customer to `e-shopping.com` web site to exchange items if possible.
+            if the customer like to return the product(s), please confirm with him/ her for sure before set the `intent_for_return_refund` to True and tell the customer that we will be happy to process 
             the return refund if he/ she can help us itemize product(s) to be returned.
 
             if the order status is 'transit', ask the customer to track the whereabouts of the shipping using the UPS's tracking number.
@@ -253,10 +256,10 @@ class CustomerSupportAgent:
 
             set `response` to what you want to reply 
             """
+        
         system_msg = SystemMessage(content=SYSTEM_PROMPT)
-                # resp should an AIMessage wrapper
-                # FAQMatchEvals
         order_output: OrderStructuredOutput = await self.order_llm_for_inquiry_chat.ainvoke([system_msg])
+        # mock llm will return order_output None
         if order_output.escalate:
             message = ChatMessage(content= ESCALATE_MESSAGE, role= ROLE_AGENT, additional_kwargs={
                     "source": SOURCE_ORDER_INQUIRY})
@@ -265,7 +268,6 @@ class CustomerSupportAgent:
                 "response": ESCALATE_MESSAGE,
                 "escalation_reason": f"{order_output.escalation_reason} of order #{state['order_number_provided']}", 
                 "order_issue_escalated": True,
-                "intent_for_return_refund": False
             }
                         
         message = AIMessage(content= order_output.response, additional_kwargs={
@@ -273,8 +275,7 @@ class CustomerSupportAgent:
         return {
             "messages": [message],
             "response": order_output.response,
-            "order_issue_escalated": False,
-            "escalation_reason": None,
+            "order_issue_resolved": order_output.order_issue_resolved, # signal writing the summary
             "intent_for_return_refund": order_output.intent_for_return_refund,
 
         }
@@ -282,6 +283,8 @@ class CustomerSupportAgent:
     async def order_init_chat_node(self, state: CustomerSupportState) -> dict[str, Any]:        
         target_order: Order = retrieve_target_order(state["customer_context"], state["order_number_provided"])
         if target_order:
+            response = ""
+            # ["delivered", "transit", "pending"]
             match target_order.status:
                 case "pending": 
                     response = f"Your order is still in 'pending' status. You order on {target_order.order_date}"
@@ -293,8 +296,8 @@ class CustomerSupportAgent:
                 case "transit":
                     response = f"Your order is still in 'transit' status. it was estimated to arrive at {target_order.estimated_delivery_date.isoformat()}. "
                     response += "Please follow the tracking number link in the shipping email or just go to UPS web site and enter your tracking number to get the delivery update, Thanks."
-                case "delivery":
-                    response = f"According to our record,  your order has been delivered on {target_order.delivery_date.isoformat()}.  Is everything O.K.?"
+                case "delivered":
+                    response = f"Your order is in 'delivered' status. According to our record,  your order has been delivered on {target_order.delivery_date.isoformat()}.  Is everything O.K.?"
                 case _:
                     pass
 
@@ -307,7 +310,7 @@ class CustomerSupportAgent:
         else:
             # It should not happen
             response = SYSTEM_ERROR_MESSAGE
-            message = ChatMessage(content=response, role= ROLE_FUNCTION_CALL, additional_kwargs= {"source": SOURCE_ORDER_RETRIEVAL})
+            message = ChatMessage(content=response, role= ROLE_AGENT, additional_kwargs= {"source": SOURCE_ORDER_RETRIEVAL})
             return {
                 "target_order": None, 
                 "messages": [message],
@@ -320,21 +323,22 @@ class CustomerSupportAgent:
     ###############################################
     def route_branch(self, state: CustomerSupportState) -> str:
         # Add summarize_on_exit hook so it can be called when the customer press 'Exit'
-        if state["summarize_on_exit"]:
+        if state.get("summarize_on_exit"):
             return "summarize_node"
         
         match state['support_category']:
             case "general/ others":
                 return "general_faq"
             case _:
-                return self.route_order       
+                return self.route_order(state)       
 
     # It's not an actual route. It return node by condition.  Get around with conditional edge within conditional edge
     def route_order(self, state: CustomerSupportState) -> str:
-        if not state["target_order"] and state["order_number_provided"]:
+        # Fix an error if order_number not passed or passed as 0.  Let retrieve_target_order instead of order_continue_chat_node handle 
+        if not state["target_order"]:
             return "order_init"
         
-        return "order_init_is_done"
+        return "order_init_done"
 
     def _should_summarize(self, state: CustomerSupportState, topic_concluded: bool = False) -> bool:
         """Shared trigger for routing into `summarize_node`: each flow passes its own
@@ -362,7 +366,10 @@ class CustomerSupportAgent:
         return "general_faq_llm_match_node"
 
     def route_after_order_continue_chat(self, state: CustomerSupportState) -> str:
-            if self._should_summarize(state, state["intent_for_return_refund"] or state["order_issue_escalated"]):
+            if self._should_summarize(state, 
+                                      state.get("intent_for_return_refund") or  
+                                      state.get("order_issue_escalated") or 
+                                      state.get("order_issue_resolved")):
                 return "summarize_node"
             return END 
      
@@ -375,9 +382,10 @@ class CustomerSupportAgent:
         builder = StateGraph(CustomerSupportState)
         # Harnese with RetryPolicy later
         builder.add_conditional_edges(START, self.route_branch, 
-                                      {"general_faq": "general_faq_eval_node", 
+                                      {"summarize_node": "summarize_node",
+                                       "general_faq": "general_faq_eval_node", 
                                        "order_init": "order_init_chat_node",
-                                       "order_init_is_done": "order_continue_chat_node"})
+                                       "order_init_done": "order_continue_chat_node"})
         
         builder.add_node("summarize_node", self.summarize_node)
         builder.add_edge("summarize_node", END)

@@ -35,9 +35,9 @@ async def order_support_continue(support: OrderContinueRequest, request: Request
     return await invoke_order_continue_workflow(support, request)
 
 @router.post("/exit")
-async def exit_signal(support: SummarizeOnExit, request: Request) -> OrderContinueResponse:
+async def exit_signal(support: SummarizeOnExit, request: Request):
     logger.info(f"Exit request by thread_id : {support.thread_id}")
-    return await invoke_summarize_on_exit(support, request)
+    invoke_summarize_on_exit(support, request)
 
 
 
