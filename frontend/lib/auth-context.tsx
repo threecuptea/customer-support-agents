@@ -11,7 +11,7 @@ export interface OrderItem {
   supplier_name: string;
   unit_price: number;
   number_units: number;
-  non_refundable: boolean;
+  intimate_item: boolean;
 }
 
 export interface Order {

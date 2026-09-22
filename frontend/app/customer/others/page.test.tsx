@@ -96,4 +96,35 @@ describe("GeneralInquiryPage", () => {
     expect(push).toHaveBeenCalledWith("/");
     expect(localStorage.getItem("csa_session")).toBeNull();
   });
+
+  it("calls /api/support/exit before logging out once a thread exists", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          thread_id: "t1",
+          general_inquiry: "What is your return policy?",
+          response: "We accept returns within 35 days of delivery for unused items",
+        })
+      )
+      .mockResolvedValueOnce(jsonResponse(null));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderWithAuth(<GeneralInquiryPage />, { seedSession: customerSession });
+    await screen.findByText(/hi ms\. lovelace/i);
+
+    const input = screen.getByPlaceholderText(/return policy/i);
+    await userEvent.type(input, "What is your return policy?");
+    await userEvent.click(screen.getByRole("button", { name: /request an answer/i }));
+    await screen.findByText("We accept returns within 35 days of delivery for unused items");
+
+    await userEvent.click(screen.getAllByRole("button", { name: /exit/i })[0]);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const [exitUrl, exitInit] = fetchMock.mock.calls[1];
+    expect(exitUrl).toContain("/support/exit");
+    expect(JSON.parse(exitInit.body)).toEqual({ thread_id: "t1" });
+    expect(push).toHaveBeenCalledWith("/");
+    expect(localStorage.getItem("csa_session")).toBeNull();
+  });
 });
