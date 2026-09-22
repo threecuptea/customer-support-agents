@@ -55,9 +55,6 @@ def _resolve_db_path(value: str | None) -> str | None:
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Compile the graphs with a checkpointer (+ store for long-term memory)."""
     # Cross-thread long-term memory. Swap for a Postgres-backed store in prod.
-    store = InMemoryStore()
-    app.state.store = store
-
     demo_mode = os.getenv("DEMO_MODE", "false").lower() == "true" # we are using demo mode in dev environment.
     checkpoint_db = _resolve_db_path(os.getenv("CHECKPOINT_DB"))
     store_db = _resolve_db_path(os.getenv("STORE_DB"))
@@ -88,6 +85,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     else:
         logger.info("Using in-memory MemorySaver and InMemoryStore")
         saver = MemorySaver()
+        store = InMemoryStore()
         app.state.approval_graph = build_approval_graph(checkpointer=saver)
         app.state.support_graph = CustomerSupportAgent(checkpointer=saver, store=store).build_support_graph()
         yield

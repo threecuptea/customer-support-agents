@@ -44,7 +44,7 @@ async def load_user_memory(
     try:
         items = await store.asearch(_namespace(user_id), limit=limit)
         if items:
-            notes = ["on " + i.value.get("timestamp", "") + " "+ i.value.get("text", "") for i in items if i.value.get("text")]
+            notes = ["on " + i.alue.get("timestamp", "") + " "+ i.value.get("text", "") for i in items if i.value.get("text")]
             return "\n".join(f"- {n}" for n in notes)
         else:
             return ""
@@ -61,7 +61,7 @@ async def save_user_memory(
     if not store or not user_id or not thread_id or not text:
         return
     try:
-        # It will just override it if the namespace and the key are the same  
+        # It will just override it if the namespace and the key are the same 
         await store.aput(_namespace(user_id), thread_id,  {"text": text, "timestamp": datetime.now(UTC).strftime("%Y-%m-%d")})
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("Memory save failed: %s", exc)

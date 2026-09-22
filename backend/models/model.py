@@ -105,6 +105,9 @@ class FAQMatchResult(BaseModel):
     answer: str
     confidence_score: Annotated[float, Field(ge=0.0, le=100.0)]
 
+class OrderRevisitEval(BaseModel):
+    is_revisit: bool = False
+
 
 # It's TypedDict not BaseModel.  Which is correct decision for accumulated state. I don't need to guard
 # # the value.  However, it's TypedDict.  However, I cannot use attribute and have to use key to get the value. 
@@ -126,6 +129,7 @@ class CustomerSupportState(MessagesState):
     general_issue_resolved: bool = False
     order_number_provided:  int
     target_order: Order = None
+    order_is_revisit: bool = False # set by detect_order_revisit_node; routes order_init straight into order_continue_chat_node
     order_issue_escalated: bool = False
     order_issue_resolved: bool = False
     intent_for_return_refund: bool

@@ -19,7 +19,7 @@ async def invoke_general_support_workflow(support: GeneralSupportRequest, reques
     config = {"configurable": {"thread_id": thread_id}}
 
     messages = []
-    memory = await load_user_memory(request.app.state.store, support.customer_context.customer_id)
+    memory = await load_user_memory(graph.store, support.customer_context.customer_id)
     if memory:
         messages.append(SystemMessage(content=f"Previous conversations:\n{memory}"))
     messages.append(HumanMessage(content= support.general_inquiry))
@@ -47,16 +47,19 @@ async def invoke_general_support_workflow(support: GeneralSupportRequest, reques
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
     
-
 async def invoke_order_init_workflow(support: OrderInitRequest, request: Request) -> OrderInitResponse:
     graph = request.app.state.support_graph
     thread_id = support.thread_id if support.thread_id else str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
 
     messages = []
-    memory = await load_user_memory(request.app.state.store, support.customer_context.customer_id)
+    memory = await load_user_memory(graph.store, support.customer_context.customer_id)
     if memory:
-        messages.append(SystemMessage(content=f"Previous conversations:\n{memory}")) 
+        logger.info(f"load_user_memory= {memory}")
+        messages.append(SystemMessage(content=f"Previous conversations:\n{memory}"))
+    else:
+        logger.info("Unable to find previous memory")
+             
     messages.append(HumanMessage(content= f"Order inquiry: {support.order_number_provided}"))
     initial_state = {
             "messages": messages,
@@ -65,6 +68,7 @@ async def invoke_order_init_workflow(support: OrderInitRequest, request: Request
             "support_category": "order_inquery",
             "order_number_provided": support.order_number_provided,
             "target_order": None,
+            "order_is_revisit": False,
             "order_issue_escalated": False,
             "order_issue_resolved": False,
             "escalation_reason": None,
