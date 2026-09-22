@@ -226,6 +226,8 @@ I did some research on wheather we should summarize messages, store in the long-
   - Also cleaned up, per user request: `general_faq_eval_node` had a `state["messages"][-2]`-based fallback reintroduced into its prompt — the exact fixed-index anti-pattern CSA-8's notes above already documented avoiding (memory is reliably available via the injected `SystemMessage`/`summary` already, no need to guess at a message-list position). Reverted to the simple `state.get("summary") or "None yet"` form.
   - Also fixed, per user's own edit: `order_continue_chat_node`'s escalate branch built a reason-specific header-prefixed message for the internal `ChatMessage`, but returned the bare `ESCALATE_MESSAGE` (no header) as the `"response"` value — meaning the API/UI never actually surfaced the header text to the customer, only the internal message log had it. Now returns the header-prefixed text on both.
   - Tests: `retrieve_target_order_node`/`order_init_static_response_node` cover what the old combined-node tests did; new tests for `detect_order_revisit_node` (both a faked-`True` case via a stub LLM, and the real mock-always-`None`-→-`False` case) and both new routing functions. 33/33 backend tests pass.
+  - Find a big bug. Thanks to Claude. I use `app.state.store` in `load_user_memory` and `app.state.store` points to InMemoryStore.
+  `save_user_memory` save to SQLite.   No wonder that I keep getting ""Unable to find previous memory" and `is_revisit` has never been set to `True` before the bug was fixed.  It is pointing to `graph.store` now.
 
 ### Current API Endpoints
 - `GET /api/health` — liveness check

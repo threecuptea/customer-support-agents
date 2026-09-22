@@ -102,7 +102,6 @@ class CustomerSupportAgent:
         ]
         # Store summary in the long-term memory
         thread_id = config.get("configurable", {}).get("thread_id")
-        logger.info(f"Will save response content: {response.content}")
         await save_user_memory(self.store, state['customer_context'].customer_id, thread_id, response.content)
 
         return {
@@ -398,7 +397,6 @@ class CustomerSupportAgent:
     def route_branch(self, state: CustomerSupportState) -> str:
         # Add summarize_on_exit hook so it can be called when the customer press 'Exit'
         if state.get("summarize_on_exit"):
-            logger.info("summarize_on_exit")
             return "summarize_node"
         
         match state['support_category']:
