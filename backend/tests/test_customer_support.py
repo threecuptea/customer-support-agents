@@ -6,7 +6,7 @@ from langchain_core.messages import ChatMessage
 import pytest
 
 from main import app
-from models.model import FAQMatchEvals, Order, CustomerContext
+from models.model import FAQMatchEvals, Order, CustomerContext, OrderRevisitEval
 from workflow.customer_support import CustomerSupportAgent, ESCALATE_MESSAGE, FUNCTION_FAQ_FUZZY_MATCH, SOURCE_FAQ_FUZZY_MATCH, SOURCE_FAQ_LLM_MATCH, \
     SOURCE_FAQ_LLM_EVALS, ROLE_FUNCTION_CALL, ROLE_AGENT, FAQ_MATCH_THRESHOLD, SYSTEM_ERROR_MESSAGE, SOURCE_ORDER_RETRIEVAL
 from langchain_core.messages import HumanMessage
@@ -163,6 +163,17 @@ def test_general_support_thread_accumulates_and_summarizes(client):
     assert state_after_r2.values["summary"]
     assert state_after_r2.values["general_inquiry"] == "How long does delivery take?"
 
+def _run_order_init_fresh_inquiry(agent: CustomerSupportAgent, state: dict) -> dict:
+    """order_init_chat_node was split into retrieve_target_order_node (prep) and
+    order_init_static_response_node (render). Drive both in sequence, merging state
+    between them the way LangGraph would, to exercise the fresh-inquiry path end to end."""
+    retrieve_result = asyncio.run(agent.retrieve_target_order_node(state))
+    state = {**state, **retrieve_result}
+    if not state["target_order"]:
+        return retrieve_result
+    render_result = asyncio.run(agent.order_init_static_response_node(state))
+    return {**retrieve_result, **render_result}
+
 def test_order_init_succeed(client):
     email_addr = "anderson.cooper@cnn.com"
     resp = client.post("/api/auth", json={"email_addr": email_addr})
@@ -176,7 +187,7 @@ def test_order_init_succeed(client):
         "customer_context": context,
         "order_number_provided": target_order_id
     }
-    result = asyncio.run(agent.order_init_chat_node(state))
+    result = _run_order_init_fresh_inquiry(agent, state)
     assert len(result["messages"]) == 1
     assert isinstance(result["messages"][0], ChatMessage)
     assert result["messages"][0].role == ROLE_AGENT
@@ -185,25 +196,25 @@ def test_order_init_succeed(client):
     assert order.order_id == target_order_id
     assert order.status == 'delivered'
     assert result["response"]
-    phrase = f"in '{order.status}' status" 
+    phrase = f"in '{order.status}' status"
     assert phrase in result["response"]
     assert phrase in result["messages"][0].content
 
     update_order = context.latest_orders[0]
     update_order.status = 'transit'
-    result = asyncio.run(agent.order_init_chat_node(state))
+    result = _run_order_init_fresh_inquiry(agent, state)
     order: Order = result["target_order"]
     assert order.status == update_order.status
-    phrase = f"in '{order.status}' status" 
+    phrase = f"in '{order.status}' status"
     assert phrase in result["response"]
     assert phrase in result["messages"][0].content
 
     update_order = context.latest_orders[0]
     update_order.status = 'pending'
-    result = asyncio.run(agent.order_init_chat_node(state))
+    result = _run_order_init_fresh_inquiry(agent, state)
     order: Order = result["target_order"]
     assert order.status == update_order.status
-    phrase = f"in '{order.status}' status" 
+    phrase = f"in '{order.status}' status"
     assert phrase in result["response"]
     assert phrase in result["messages"][0].content
 
@@ -219,14 +230,61 @@ def test_order_init_fail(client):
         "customer_context": context,
         "order_number_provided": target_order_id + 1
     }
-    result = asyncio.run(agent.order_init_chat_node(state))
+    result = asyncio.run(agent.retrieve_target_order_node(state))
     assert len(result["messages"]) == 1
     assert isinstance(result["messages"][0], ChatMessage)
     assert result["response"] == SYSTEM_ERROR_MESSAGE
     assert result["messages"][0].role == ROLE_AGENT
     assert result["messages"][0].additional_kwargs['source'] == SOURCE_ORDER_RETRIEVAL
 
-    
+def test_detect_order_revisit_node_defaults_false_under_mock(client):
+    # Mock LLM can't fake with_structured_output, so this call always returns None,
+    # matching order_continue_chat_node's same documented limitation.
+    email_addr = "anderson.cooper@cnn.com"
+    resp = client.post("/api/auth", json={"email_addr": email_addr})
+    context: CustomerContext = CustomerContext(**resp.json()['customer_context'])
+    agent = CustomerSupportAgent(checkpointer=None, store=None)
+    state = {
+        "target_order": context.latest_orders[0],
+        "summary": "",
+        "messages": [],
+    }
+    result = asyncio.run(agent.detect_order_revisit_node(state))
+    assert result["order_is_revisit"] is False
+
+def test_detect_order_revisit_node_true_when_llm_confirms(client):
+    class _FakeRevisitLLM:
+        async def ainvoke(self, messages):
+            return OrderRevisitEval(is_revisit=True)
+
+    email_addr = "anderson.cooper@cnn.com"
+    resp = client.post("/api/auth", json={"email_addr": email_addr})
+    context: CustomerContext = CustomerContext(**resp.json()['customer_context'])
+    agent = CustomerSupportAgent(checkpointer=None, store=None)
+    agent.order_llm_for_revisit_eval = _FakeRevisitLLM()
+    state = {
+        "target_order": context.latest_orders[0],
+        "summary": "Customer previously reported this order's shipment as lost.",
+        "messages": [],
+    }
+    result = asyncio.run(agent.detect_order_revisit_node(state))
+    assert result["order_is_revisit"] is True
+
+def test_route_after_retrieve_target_order(client):
+    email_addr = "anderson.cooper@cnn.com"
+    resp = client.post("/api/auth", json={"email_addr": email_addr})
+    context: CustomerContext = CustomerContext(**resp.json()['customer_context'])
+    agent = CustomerSupportAgent(checkpointer=None, store=None)
+    assert agent.route_after_retrieve_target_order({"target_order": None}) == "summarize_node"
+    assert agent.route_after_retrieve_target_order({"target_order": context.latest_orders[0]}) == "detect_order_revisit_node"
+
+def test_route_after_detect_order_revisit():
+    agent = CustomerSupportAgent(checkpointer=None, store=None)
+    assert agent.route_after_detect_order_revisit({"order_is_revisit": True}) == "order_continue_chat_node"
+    assert agent.route_after_detect_order_revisit({"order_is_revisit": False}) == "order_init_static_response_node"
+    assert agent.route_after_detect_order_revisit({}) == "order_init_static_response_node"
+
+
 def test_routes(client):
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     state = {

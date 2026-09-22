@@ -1,6 +1,6 @@
 from __future__ import annotations
 from models.model import CustomerSupportState, FAQMatchEvals, FAQMatchResult, Order, OrderStructuredOutput,\
-    ESCALATE_REASON
+    ESCALATE_REASON, OrderRevisitEval
 
 from langgraph.graph import END, START, StateGraph
 from langchain_core.messages import HumanMessage, RemoveMessage, SystemMessage, AIMessage, ChatMessage
@@ -52,6 +52,8 @@ class CustomerSupportAgent:
         self.general_llm_for_faq_match_result = get_llm().with_structured_output(FAQMatchResult)
         self.faq_context = "\n".join([f"- 'question': {key}, 'answer': {val} " for key, val in faq_dict.items()])
         self.order_llm_for_inquiry_chat = get_llm().with_structured_output(OrderStructuredOutput)
+        # Classification, not conversation — low temperature for consistency across near-identical inputs.
+        self.order_llm_for_revisit_eval = get_llm(temperature=0.0).with_structured_output(OrderRevisitEval)
 
 
     ###############################################
@@ -100,6 +102,7 @@ class CustomerSupportAgent:
         ]
         # Store summary in the long-term memory
         thread_id = config.get("configurable", {}).get("thread_id")
+        logger.info(f"Will save response content: {response.content}")
         await save_user_memory(self.store, state['customer_context'].customer_id, thread_id, response.content)
 
         return {
@@ -112,13 +115,15 @@ class CustomerSupportAgent:
     ###############################################
     # I might need to 
     async def general_faq_eval_node(self, state: CustomerSupportState) -> dict[str, Any]:
-        # Draw previous conversation from the summary in this thread if any otherwise draw from the long term memory
+        # Long-term memory is already injected as a SystemMessage in `messages` by
+        # invoke_general_support_workflow, and folds into `summary` once summarize_node has
+        # run — no need to reach into `messages` by a fixed index for prior context.
         SYSTEM_PROMPT = f"""
-        You are an intelligent customer-support agent to help decide if it is helpful to match the customer question 
+        You are an intelligent customer-support agent to help decide if it is helpful to match the customer question
         against FAQs
         Here is the customer's question: {state["general_inquiry"]}.
         Here are FAQ context: {self.faq_context}.
-        Here is the summary of the previous conversation if any: {state.get("summary") if state.get("summary") else (state["messages"][-2].content if len(state["messages"]) >= 2 else "None yet")}.
+        Here is the summary of the previous conversation if any: {state.get("summary") if state.get("summary") else "None yet"}.
         There are two matching options:
         - Matches with fuzz.partial_ratio scorer of python Rapidfuzz library. The fuzz.partial_ratio scorer finds the
         best-aligned contiguous substring of the shorter string within the longer one and scores their similarity,
@@ -224,12 +229,22 @@ class CustomerSupportAgent:
     ###############################################
     
     async def order_continue_chat_node(self, state: CustomerSupportState) -> dict[str, Any]:
-            # Need to include not only HumanMessage but also SystemMessage etc.  
-        recent_conversations = "\n".join([f"- {message.content}" for message in state['messages']])
+        # A revisit routes straight here from detect_order_revisit_node, before summarize_node
+        # has pruned anything — so the long-term-memory SystemMessage injected by
+        # invoke_order_init_workflow can still be sitting in state['messages'] at this point.
+        # Keep it in its own labeled section rather than folding it into the raw conversation,
+        # same as detect_order_revisit_node.
+        memory_notes = "\n".join(
+            [f"- {message.content}" for message in state['messages'] if isinstance(message, SystemMessage)]
+        )
+        recent_conversations = "\n".join(
+            [f"- {message.content}" for message in state['messages'] if not isinstance(message, SystemMessage)]
+        )
         SYSTEM_PROMPT = f"""
-            You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her order.  
+            You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her order.
             Here is the target order {state['target_order'].model_dump_json()}
-            Here is the most recent conversations in sequential order: {recent_conversations}.
+            Here is what we remember about this customer from past visits, if any: {memory_notes if memory_notes else "None yet"}.
+            Here is the most recent conversations in sequential order: {recent_conversations if recent_conversations else "None yet"}.
             Here is the summary of the previous conversation: {state.get("summary") if state.get("summary") else "None yet"}.
             The above is the context of this order.
             DO NOT REPEAT the same response!!  
@@ -262,7 +277,9 @@ class CustomerSupportAgent:
             """
         
         system_msg = SystemMessage(content=SYSTEM_PROMPT)
+        logger.info("order_continue_chat_node prompt for order #%s:\n%s", state['order_number_provided'], SYSTEM_PROMPT)
         order_output: OrderStructuredOutput = await self.order_llm_for_inquiry_chat.ainvoke([system_msg])
+        logger.info("order_continue_chat_node result for order #%s: %s", state['order_number_provided'], order_output)
         # mock llm will return order_output None
         if not order_output or order_output.escalate:
             escalation_reason = order_output.escalation_reason if order_output else ESCALATE_REASON.HELP_ANSWER_ORDER_INQUIRY
@@ -279,7 +296,7 @@ class CustomerSupportAgent:
                     "source": SOURCE_ORDER_INQUIRY})
             return {
                 "messages": [message],
-                "response": ESCALATE_MESSAGE,
+                "response": response,
                 "escalation_reason": f"{escalation_reason} of order #{state['order_number_provided']}",
                 "order_issue_escalated": True,
             }
@@ -294,43 +311,86 @@ class CustomerSupportAgent:
 
         }
 
-    async def order_init_chat_node(self, state: CustomerSupportState) -> dict[str, Any]:        
+    # Preparation only: retrieve the order and set it on state. Deliberately separate from
+    # response generation below, so the routing decision (static template vs. revisit-aware
+    # LLM handoff) sits between retrieval and rendering rather than being baked into one node.
+    async def retrieve_target_order_node(self, state: CustomerSupportState) -> dict[str, Any]:
         target_order: Order = retrieve_target_order(state["customer_context"], state["order_number_provided"])
         if target_order:
-            response = ""
-            # ["delivered", "transit", "pending"]
-            match target_order.status:
-                case "pending": 
-                    response = f"Your order is still in 'pending' status. You order on {target_order.order_date}. "
-                    if target_order.notes:
-                        response += f"Notes say: {target_order.notes}. "
-                    else:
-                        response += "Notes does not provide additional information. "    
-                    response += "We will ship as soon as the order is ready and sorry for the delay.  Thanks for your patience"        
-                case "transit":
-                    response = f"Your order is still in 'transit' status. it was estimated to arrive at {target_order.estimated_delivery_date.isoformat()}. "
-                    response += "Please follow the tracking number link in the shipping email or just go to UPS web site and enter your tracking number to get the delivery update, Thanks."
-                case "delivered":
-                    response = f"Your order is in 'delivered' status. According to our record,  your order has been delivered on {target_order.delivery_date.isoformat()}.  Is everything O.K.?"
-                case _:
-                    pass
+            return {"target_order": target_order}
+        # It should not happen
+        response = SYSTEM_ERROR_MESSAGE
+        message = ChatMessage(content=response, role= ROLE_AGENT, additional_kwargs= {"source": SOURCE_ORDER_RETRIEVAL})
+        return {
+            "target_order": None,
+            "messages": [message],
+            "response": response,
+        }
 
-            message = ChatMessage(content=response, role= ROLE_AGENT)
-            return {
-                "target_order": target_order,
-                "messages": [message],
-                "response": response,
-            }
-        else:
-            # It should not happen
-            response = SYSTEM_ERROR_MESSAGE
-            message = ChatMessage(content=response, role= ROLE_AGENT, additional_kwargs= {"source": SOURCE_ORDER_RETRIEVAL})
-            return {
-                "target_order": None, 
-                "messages": [message],
-                "response": response,
-            }
-            
+    # Decides whether this order_number_provided has already been discussed (this thread's
+    # running summary, or long-term memory injected into `messages` for a brand-new thread) —
+    # as opposed to genuinely being raised for the first time. Uses LLM judgement rather than a
+    # string/substring match against the order number, since the summary may refer to the order
+    # by product name ("your PowerBank order") without repeating the numeric id.
+    async def detect_order_revisit_node(self, state: CustomerSupportState) -> dict[str, Any]:
+        target_order = state["target_order"]
+        # invoke_order_init_workflow injects long-term memory as a SystemMessage — keep it in its
+        # own labeled section rather than folding it into the raw conversation transcript, so the
+        # classifier doesn't have to infer which lines are "known history" vs. this turn's message.
+        memory_notes = "\n".join(
+            [f"- {message.content}" for message in state["messages"] if isinstance(message, SystemMessage)]
+        )
+        recent_conversations = "\n".join(
+            [f"- {message.content}" for message in state["messages"] if not isinstance(message, SystemMessage)]
+        )
+        SYSTEM_PROMPT = f"""
+        You are an intelligent customer-support agent trying to decide whether the customer has already
+        discussed order #{target_order.order_id} in a prior conversation, as opposed to raising it for the
+        very first time just now.
+        Here is the summary of this conversation thread so far, if any: {state.get("summary") if state.get("summary") else "None yet"}.
+        Here is what we remember about this customer from past visits, if any: {memory_notes if memory_notes else "None yet"}.
+        Here is the most recent conversation in this thread, in sequential order: {recent_conversations if recent_conversations else "None yet"}.
+        Set `is_revisit` to True only if there is clear evidence order #{target_order.order_id} specifically
+        (not just any order) was already discussed — for example a prior mention of a lost shipment, a
+        return/ refund request, a cancellation, or any other support issue tied to this order.
+        Set `is_revisit` to False if this looks like the first time the customer is raising this order, or if
+        you are not sure.
+        """
+        system_msg = SystemMessage(content=SYSTEM_PROMPT)
+        logger.info("detect_order_revisit_node prompt for order #%s:\n%s", target_order.order_id, SYSTEM_PROMPT)
+        eval: OrderRevisitEval = await self.order_llm_for_revisit_eval.ainvoke([system_msg])
+        logger.info("detect_order_revisit_node result for order #%s: %s", target_order.order_id, eval)
+        return {"order_is_revisit": bool(eval and eval.is_revisit)}
+
+    # Fresh-inquiry path only: deterministic, no LLM call, assumes retrieve_target_order_node
+    # already populated `target_order` and detect_order_revisit_node found no prior conversation
+    # about it. A revisit skips this node entirely and goes straight to order_continue_chat_node.
+    async def order_init_static_response_node(self, state: CustomerSupportState) -> dict[str, Any]:
+        target_order = state["target_order"]
+        response = ""
+        # ["delivered", "transit", "pending"]
+        match target_order.status:
+            case "pending":
+                response = f"Your order is still in 'pending' status. You order on {target_order.order_date}. "
+                if target_order.notes:
+                    response += f"Notes say: {target_order.notes}. "
+                else:
+                    response += "Notes does not provide additional information. "
+                response += "We will ship as soon as the order is ready and sorry for the delay.  Thanks for your patience"
+            case "transit":
+                response = f"Your order is still in 'transit' status. it was estimated to arrive at {target_order.estimated_delivery_date.isoformat()}. "
+                response += "Please follow the tracking number link in the shipping email or just go to UPS web site and enter your tracking number to get the delivery update, Thanks."
+            case "delivered":
+                response = f"Your order is in 'delivered' status. According to our record,  your order has been delivered on {target_order.delivery_date.isoformat()}.  Is everything O.K.?"
+            case _:
+                pass
+
+        message = ChatMessage(content=response, role= ROLE_AGENT)
+        return {
+            "messages": [message],
+            "response": response,
+        }
+
 
     ###############################################
     #            Routes after a node
@@ -338,6 +398,7 @@ class CustomerSupportAgent:
     def route_branch(self, state: CustomerSupportState) -> str:
         # Add summarize_on_exit hook so it can be called when the customer press 'Exit'
         if state.get("summarize_on_exit"):
+            logger.info("summarize_on_exit")
             return "summarize_node"
         
         match state['support_category']:
@@ -351,8 +412,19 @@ class CustomerSupportAgent:
         # Fix an error if order_number not passed or passed as 0.  Let retrieve_target_order instead of order_continue_chat_node handle
         if not state.get("target_order"):
             return "order_init"
-        
+
         return "order_init_done"
+
+    def route_after_retrieve_target_order(self, state: CustomerSupportState) -> str:
+        if not state.get("target_order"):
+            # retrieve_target_order_node already built the SYSTEM_ERROR_MESSAGE response
+            return "summarize_node"
+        return "detect_order_revisit_node"
+
+    def route_after_detect_order_revisit(self, state: CustomerSupportState) -> str:
+        if state.get("order_is_revisit"):
+            return "order_continue_chat_node"
+        return "order_init_static_response_node"
 
     def _should_summarize(self, state: CustomerSupportState, topic_concluded: bool = False) -> bool:
         """Shared trigger for routing into `summarize_node`: each flow passes its own
@@ -395,10 +467,10 @@ class CustomerSupportAgent:
         """Build and compile the main chat/ refund workflow."""
         builder = StateGraph(CustomerSupportState)
         # Harnese with RetryPolicy later
-        builder.add_conditional_edges(START, self.route_branch, 
+        builder.add_conditional_edges(START, self.route_branch,
                                       {"summarize_node": "summarize_node",
-                                       "general_faq": "general_faq_eval_node", 
-                                       "order_init": "order_init_chat_node",
+                                       "general_faq": "general_faq_eval_node",
+                                       "order_init": "retrieve_target_order_node",
                                        "order_init_done": "order_continue_chat_node"})
         
         builder.add_node("summarize_node", self.summarize_node)
@@ -416,11 +488,19 @@ class CustomerSupportAgent:
         builder.add_edge("general_faq_llm_match_node", "summarize_node")
 
         builder.add_node("order_continue_chat_node", self.order_continue_chat_node)
-        builder.add_node("order_init_chat_node", self.order_init_chat_node)
 
+        builder.add_node("retrieve_target_order_node", self.retrieve_target_order_node)
+        builder.add_conditional_edges("retrieve_target_order_node", self.route_after_retrieve_target_order,
+            {"summarize_node": "summarize_node", "detect_order_revisit_node": "detect_order_revisit_node"})
+
+        builder.add_node("detect_order_revisit_node", self.detect_order_revisit_node)
+        builder.add_conditional_edges("detect_order_revisit_node", self.route_after_detect_order_revisit,
+            {"order_init_static_response_node": "order_init_static_response_node", "order_continue_chat_node": "order_continue_chat_node"})
+
+        builder.add_node("order_init_static_response_node", self.order_init_static_response_node)
         # It's not cost effcient to inject order_continue_chat_node with long-term memory every time it was invoke.
-        # Instead, I summarize here and include the content long-term memory so that 'order_continue_chat_node' has a good context   
-        builder.add_edge("order_init_chat_node", "summarize_node") 
+        # Instead, I summarize here and include the content long-term memory so that 'order_continue_chat_node' has a good context
+        builder.add_edge("order_init_static_response_node", "summarize_node")
 
         builder.add_conditional_edges("order_continue_chat_node", self.route_after_order_continue_chat,
             {"summarize_node": "summarize_node", END: END})
