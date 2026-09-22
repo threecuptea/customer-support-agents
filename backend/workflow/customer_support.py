@@ -24,8 +24,12 @@ ESCALATE_MESSAGE = "I will escalate your inquiry/ request to a human agent and s
 SYSTEM_ERROR_MESSAGE = "System error!! We cannot find your order, please try it later"
 ESCALATE_REASON_FAQ = "Unable to find a satifactory answer to the customer's question"
 
+HEADER_ANSWER_QUESTION = "I don't have an answer to your question."
+HEADER_LOST_SHIPMENT = "You need help to handle your lost shipment."
+HEADER_CANCEL_ORDER = "You need help to cancel your order."
 
 SUMMARIZE_MESSAGE_THRESHOLD = 6
+FUNCTION_FAQ_FUZZY_MATCH = "find_closest_faq"
 SOURCE_FAQ_FUZZY_MATCH = "faq_fuzzy_match"
 SOURCE_FAQ_LLM_MATCH = "faq_llm_match"
 SOURCE_FAQ_LLM_EVALS = "faq_llm_evals"
@@ -134,7 +138,7 @@ class CustomerSupportAgent:
         eval = await self.general_llm_for_faq_match_evals.ainvoke([system_msg])
         updates = {"faq_match_evals": eval, "general_issue_resolved": False}
         if not eval or (eval and not eval.rapid_fuzz_partial_ratio_match_helpful and not eval.llm_semantic_match_helpful):
-            response = ESCALATE_MESSAGE
+            response = f"{HEADER_ANSWER_QUESTION} {ESCALATE_MESSAGE}"
             message = ChatMessage(content=response, role= ROLE_AGENT, additional_kwargs={
                 "source": SOURCE_FAQ_LLM_EVALS})
             updates["messages"] = [message]
@@ -155,8 +159,8 @@ class CustomerSupportAgent:
             response = result.answer
             # Originally I want to use ToolMessage but that requires tool-call_id which will link back to AIMessage.
             # But I can use function call and not need to use LLM bind_tools
-            message = ChatMessage(content=response, role= ROLE_FUNCTION_CALL, additional_kwargs={
-                "source":SOURCE_FAQ_FUZZY_MATCH, "faq_match_result": result
+            message = ChatMessage(content=response, role= ROLE_FUNCTION_CALL, name=FUNCTION_FAQ_FUZZY_MATCH, additional_kwargs={
+                "faq_match_result": result
             })
             return {
                 "messages": [message],
@@ -164,7 +168,7 @@ class CustomerSupportAgent:
                 "general_issue_resolved": True,
             }
         elif not state["faq_match_evals"].llm_semantic_match_helpful:
-            response = ESCALATE_MESSAGE
+            response = f"{HEADER_ANSWER_QUESTION} {ESCALATE_MESSAGE}"
             message = ChatMessage(content=response, role= ROLE_AGENT, additional_kwargs={
                 "source":SOURCE_FAQ_FUZZY_MATCH})
             return {
@@ -203,7 +207,7 @@ class CustomerSupportAgent:
                 "general_issue_resolved": True,
             }
         else:
-            response = ESCALATE_MESSAGE
+            response = f"{HEADER_ANSWER_QUESTION} {ESCALATE_MESSAGE}"
             message = ChatMessage(content=response, role=ROLE_AGENT, additional_kwargs={
                 "source":SOURCE_FAQ_LLM_MATCH, "faq_match_result": result,
             })
@@ -262,7 +266,16 @@ class CustomerSupportAgent:
         # mock llm will return order_output None
         if not order_output or order_output.escalate:
             escalation_reason = order_output.escalation_reason if order_output else ESCALATE_REASON.HELP_ANSWER_ORDER_INQUIRY
-            message = ChatMessage(content= ESCALATE_MESSAGE, role= ROLE_AGENT, additional_kwargs={
+            header = ""
+            match escalation_reason:
+                case ESCALATE_REASON.HELP_LOST_SHIPMENT:
+                    header = HEADER_LOST_SHIPMENT
+                case ESCALATE_REASON.HELP_CANCEL_ORDER:
+                    header = HEADER_CANCEL_ORDER
+                case _:
+                    header = HEADER_ANSWER_QUESTION
+            response = f"{header} {ESCALATE_MESSAGE}"                
+            message = ChatMessage(content= response, role= ROLE_AGENT, additional_kwargs={
                     "source": SOURCE_ORDER_INQUIRY})
             return {
                 "messages": [message],
@@ -288,7 +301,7 @@ class CustomerSupportAgent:
             # ["delivered", "transit", "pending"]
             match target_order.status:
                 case "pending": 
-                    response = f"Your order is still in 'pending' status. You order on {target_order.order_date}"
+                    response = f"Your order is still in 'pending' status. You order on {target_order.order_date}. "
                     if target_order.notes:
                         response += f"Notes say: {target_order.notes}. "
                     else:

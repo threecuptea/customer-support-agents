@@ -45,7 +45,18 @@ export default function GeneralInquiryPage() {
   const greetingName = customer ? `${customer.title} ${customer.last_name}` : "there";
   const hasAnswer = exchanges.length > 0;
 
-  const exit = () => {
+  const exit = async () => {
+    if (threadId) {
+      try {
+        await fetch(`${API_URL}/support/exit`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ thread_id: threadId }),
+        });
+      } catch {
+        // Best-effort: never block Exit on this call failing.
+      }
+    }
     logout();
     router.push("/");
   };
