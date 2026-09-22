@@ -295,7 +295,7 @@ demo_customers = {
         "latest_orders":[{
             "order_id": 123465,
             "order_date": datetime(2026, 9, 15, 21, 10, 0, tzinfo= _zoneinfo),
-            "total_amount_incl_tax": 74.02,
+            "total_amount_incl_tax": 97.98,
             "tax_applied_rate": 0.095,
             "status": "transit",
             "ship_date": datetime(2026, 9, 19, 10, 45, 0, tzinfo= _zoneinfo),

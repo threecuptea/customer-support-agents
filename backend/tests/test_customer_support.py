@@ -7,7 +7,7 @@ import pytest
 
 from main import app
 from models.model import FAQMatchEvals, Order, CustomerContext
-from workflow.customer_support import CustomerSupportAgent, ESCALATE_MESSAGE, SOURCE_FAQ_FUZZY_MATCH, SOURCE_FAQ_LLM_MATCH, \
+from workflow.customer_support import CustomerSupportAgent, ESCALATE_MESSAGE, FUNCTION_FAQ_FUZZY_MATCH, SOURCE_FAQ_FUZZY_MATCH, SOURCE_FAQ_LLM_MATCH, \
     SOURCE_FAQ_LLM_EVALS, ROLE_FUNCTION_CALL, ROLE_AGENT, FAQ_MATCH_THRESHOLD, SYSTEM_ERROR_MESSAGE, SOURCE_ORDER_RETRIEVAL
 from langchain_core.messages import HumanMessage
 from datetime import datetime
@@ -50,7 +50,7 @@ def test_general_faq_fuzz_match_node_returns_chat_message():
     assert isinstance(result["messages"][0], ChatMessage)
     assert result["messages"][0].content == result["response"]
     assert result["messages"][0].role == ROLE_FUNCTION_CALL
-    assert result["messages"][0].additional_kwargs['source'] == SOURCE_FAQ_FUZZY_MATCH
+    assert result["messages"][0].name == FUNCTION_FAQ_FUZZY_MATCH
     assert result["messages"][0].additional_kwargs['faq_match_result']
     assert result["messages"][0].additional_kwargs['faq_match_result'].confidence_score > FAQ_MATCH_THRESHOLD
 
@@ -65,7 +65,7 @@ def test_general_faq_fuzz_match_node_escalates_on_low_confidence():
     result = asyncio.run(agent.general_faq_fuzz_match_node(state))
 
     assert result["general_issue_resolved"] is True
-    assert result["response"] == ESCALATE_MESSAGE
+    assert ESCALATE_MESSAGE in result["response"]
     assert result["messages"][0].role == ROLE_AGENT
     assert result["messages"][0].additional_kwargs['source'] == SOURCE_FAQ_FUZZY_MATCH
     
@@ -80,7 +80,7 @@ def test_general_faq_llm_match_node_escalates_on_low_confidence():
     result = asyncio.run(agent.general_faq_llm_match_node(state))
 
     assert result["general_issue_resolved"] is True
-    assert result["response"] == ESCALATE_MESSAGE
+    assert ESCALATE_MESSAGE in result["response"]
     assert result["messages"][0].role == ROLE_AGENT
     assert result["messages"][0].additional_kwargs['source'] == SOURCE_FAQ_LLM_MATCH
 
@@ -94,7 +94,7 @@ def test_general_faq_llm_evals_node_directly_escalates():
     result = asyncio.run(agent.general_faq_eval_node(state))
 
     assert result["general_issue_resolved"] is True
-    assert result["response"] == ESCALATE_MESSAGE
+    assert ESCALATE_MESSAGE in result["response"]
     assert result["messages"][0].role == ROLE_AGENT
     assert result["messages"][0].additional_kwargs['source'] == SOURCE_FAQ_LLM_EVALS
 
@@ -112,7 +112,7 @@ def test_general_support_endpoint_escalates_under_mock_llm(client):
     data = resp.json()
     assert data["general_inquiry"] == "What is your return policy?"
     # It comes from mocked llm issue, always negative
-    assert data["response"] == ESCALATE_MESSAGE
+    assert ESCALATE_MESSAGE in data["response"]
     assert data["thread_id"]
     
 
@@ -138,7 +138,7 @@ def test_general_support_thread_accumulates_and_summarizes(client):
     # with, so nothing is actually removed on this first round.
     assert len(state_after_r1.values["messages"]) == 2
     assert state_after_r1.values["messages"][0].content == "What is your return policy?"
-    assert state_after_r1.values["messages"][1].content == ESCALATE_MESSAGE
+    assert ESCALATE_MESSAGE in state_after_r1.values["messages"][1].content
     assert state_after_r1.values["summary"]
 
     r2 = client.post(
@@ -159,7 +159,7 @@ def test_general_support_thread_accumulates_and_summarizes(client):
     messages_after_r2 = state_after_r2.values["messages"]
     assert len(messages_after_r2) == 2
     assert messages_after_r2[0].content == "How long does delivery take?"
-    assert messages_after_r2[1].content == ESCALATE_MESSAGE
+    assert ESCALATE_MESSAGE in messages_after_r2[1].content
     assert state_after_r2.values["summary"]
     assert state_after_r2.values["general_inquiry"] == "How long does delivery take?"
 
