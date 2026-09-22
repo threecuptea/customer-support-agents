@@ -1,7 +1,7 @@
 from __future__ import annotations
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from enum import StrEnum, auto
+from models.model import OrderRefundStatus
 import os
 
 # I need to start thinking about some way to dynamically adjust dates to match the status
@@ -10,58 +10,55 @@ _zoneinfo = ZoneInfo("America/New_York")
 
 threshold_days_auto_approve = int(os.getenv("DAYS_THRESHOLD_AUTO"))
 
-# ORDER_NON_REFUNDABLE_DAYS means an order is non-refundable because the refund request has exceeded the return window.
-# ORDER_NON_REFUNDABLE_ITEMS means an order is non-refundable because the return item(s) are either intimate items or perishable.
-# ORDER_DELIVERED_BORDERLINE are order supposed to be delivered according to the carrier but the customer does not see
-# the delivered items.  That's what a lot of order inquiry dispute come from and cases will be escalated. 
-class OrderRefundStatus(StrEnum):
-    ORDER_AUTO_REFUNDABLE = auto()
-    ORDER_NON_REFUNDABLE_DAYS = auto()
-    ORDER_NON_REFUNDABLE_ITEMS = auto()
-    ORDER_HUMAN_REFUNDABLE = auto()
-    ORDER_IN_TRANSIT = auto()
-    ORDER_IN_PENDING = auto()
-    ORDER_DATA_INVALID = auto() # for test reason
-    ORDER_DELIVERED_BORDERLINE = auto()
 
 customer_order_status_map = {
-    "wolf.blitzer@cnn.com": OrderRefundStatus.ORDER_NON_REFUNDABLE_DAYS,
-    "pamela.brown@cnn.com": OrderRefundStatus.ORDER_HUMAN_REFUNDABLE,
-    "anderson.cooper@cnn.com": OrderRefundStatus.ORDER_AUTO_REFUNDABLE,
-    "jake.tapper@cnn.com": OrderRefundStatus.ORDER_IN_TRANSIT,
-    "john.king@cnn.com": OrderRefundStatus.ORDER_IN_PENDING,
-    "harry.enten@cnn.com": OrderRefundStatus.ORDER_DATA_INVALID,
-    "dana.bash@cnn.com": OrderRefundStatus.ORDER_NON_REFUNDABLE_ITEMS,
-    "manu.raju@cnn.com": OrderRefundStatus.ORDER_DELIVERED_BORDERLINE
+    "wolf.blitzer@cnn.com": [OrderRefundStatus.ORDER_NON_REFUNDABLE_DAYS],
+    "pamela.brown@cnn.com": [OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_AMOUNT],
+    "anderson.cooper@cnn.com": [OrderRefundStatus.ORDER_AUTO_REFUNDABLE],
+    "jake.tapper@cnn.com": [OrderRefundStatus.ORDER_IN_TRANSIT],
+    "john.king@cnn.com": [OrderRefundStatus.ORDER_IN_PENDING],
+    "harry.enten@cnn.com": [OrderRefundStatus.ORDER_DATA_INVALID],
+    "dana.bash@cnn.com": [OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_ITEMS],
+    "manu.raju@cnn.com": [OrderRefundStatus.ORDER_DELIVERED_BORDERLINE],
+    "sonya_ling1947@yahoo.com": [
+        OrderRefundStatus.ORDER_IN_TRANSIT,
+        OrderRefundStatus.ORDER_AUTO_REFUNDABLE]
 }
 
 
 def adjust_days_demo_data_testable():
     for email, features in demo_customers.items():
         order_refund_status = customer_order_status_map.get(email)
-        order = features["latest_orders"][0]
-        # backfeed missing data
-        if order.get("estimated_delivery_date") and order.get("status") == "delivered":
-            order["delivery_date"] = order["estimated_delivery_date"]
-        match order_refund_status:
-            case OrderRefundStatus.ORDER_NON_REFUNDABLE_DAYS:
-                order["delivery_date"] = datetime.now(_zoneinfo) - timedelta(days= threshold_days_auto_approve + 3)
-                _auto_adjust_days(order)
-            case OrderRefundStatus.ORDER_HUMAN_REFUNDABLE | OrderRefundStatus.ORDER_AUTO_REFUNDABLE | OrderRefundStatus.ORDER_NON_REFUNDABLE_ITEMS:
-                order["delivery_date"] = datetime.now(_zoneinfo) - timedelta(days= 25)
-                _auto_adjust_days(order)
-            case OrderRefundStatus.ORDER_DELIVERED_BORDERLINE:
-                order["delivery_date"] = datetime.now(_zoneinfo) - timedelta(days= 2)
-                _auto_adjust_days(order)
-            # The above all have delivered status   
-            case OrderRefundStatus.ORDER_IN_TRANSIT:
-                order["estimated_delivery_date"] = datetime.now(_zoneinfo) + timedelta(days= 2)
-                _auto_adjust_days(order)
-            # because of backlog     
-            case OrderRefundStatus.ORDER_IN_PENDING:
-                order["order_date"] = datetime.now(_zoneinfo) - timedelta(days= 7)
-            case _:
-                pass
+        if order_refund_status is None:
+            raise ValueError(f"customer_order_status_map is missing an entry for demo customer '{email}'")
+        if len(order_refund_status) != len(features["latest_orders"]):
+            raise ValueError(
+                f"customer_order_status_map['{email}'] has {len(order_refund_status)} status(es) "
+                f"but demo_customers['{email}'] has {len(features['latest_orders'])} order(s); they must line up 1:1"
+            )
+        for i, order in enumerate(features["latest_orders"]):
+            # backfeed missing data
+            if order.get("estimated_delivery_date") and order.get("status") == "delivered":
+                order["delivery_date"] = order["estimated_delivery_date"]
+            match order_refund_status[i]:
+                case OrderRefundStatus.ORDER_NON_REFUNDABLE_DAYS:
+                    order["delivery_date"] = datetime.now(_zoneinfo) - timedelta(days= threshold_days_auto_approve + 3)
+                    _auto_adjust_days(order)
+                case OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_AMOUNT | OrderRefundStatus.ORDER_AUTO_REFUNDABLE | OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_ITEMS:
+                    order["delivery_date"] = datetime.now(_zoneinfo) - timedelta(days= 25)
+                    _auto_adjust_days(order)
+                case OrderRefundStatus.ORDER_DELIVERED_BORDERLINE:
+                    order["delivery_date"] = datetime.now(_zoneinfo) - timedelta(days= 2)
+                    _auto_adjust_days(order)
+                # The above all have delivered status   
+                case OrderRefundStatus.ORDER_IN_TRANSIT:
+                    order["estimated_delivery_date"] = datetime.now(_zoneinfo) + timedelta(days= 2)
+                    _auto_adjust_days(order)
+                # because of backlog     
+                case OrderRefundStatus.ORDER_IN_PENDING:
+                    order["order_date"] = datetime.now(_zoneinfo) - timedelta(days= 7)
+                case _:
+                    pass
 
 def _auto_adjust_days(order: dict):
     if order.get("delivery_date") or order.get("estimated_delivery_date"):
@@ -70,7 +67,7 @@ def _auto_adjust_days(order: dict):
         order["ship_date"] = order["estimated_delivery_date"] - timedelta(days= 5)
         order["order_date"] = order["ship_date"] - timedelta(days= 3)
     
-           
+#TODO: Modify to have users with multiple orders.           
 demo_customers = {
     "anderson.cooper@cnn.com": {
         "customer_id": 32098,
@@ -148,13 +145,6 @@ demo_customers = {
                 "supplier_name": "Costal Trading",
                 "unit_price": 529.99,
                 "number_units": 1,
-                },
-                {
-                "product_id": "PRD-1002",
-                "product_name": "Eye Mask",
-                "supplier_name": "Costal Trading",
-                "unit_price": 15.67,
-                "number_units": 12,
                 },
             ]
         }]  
@@ -245,7 +235,7 @@ demo_customers = {
         "latest_orders":[{
             "order_id": 123462,
             "order_date": datetime(2026, 7, 25, 21, 10, 0, tzinfo= _zoneinfo),
-            "total_amount_incl_tax": 202.14,
+            "total_amount_incl_tax": 69.82,
             "tax_applied_rate": 0.075,
             "status": "delivered",
             "ship_date": datetime(2026, 7, 28, 19, 45, 0, tzinfo= _zoneinfo),
@@ -254,11 +244,11 @@ demo_customers = {
             "items": [
                 {
                 "product_id": "PRD-1002",
-                "product_name": "Face Mask",
-                "supplier_name": "Premier Merchandize",
-                "unit_price": 15.67,
-                "number_units": 12,
-                "non_refundable": True,
+                "product_name": "Dream Angeles Bras",
+                "supplier_name": "Victoria's Secret",
+                "unit_price": 64.95,
+                "number_units": 1,
+                "intimate_item": True,
                 },
             ]
         }]  
@@ -294,6 +284,47 @@ demo_customers = {
                 "number_units": 6,
                 },
             ]
+        }]  
+    },
+    "sonya_ling1947@yahoo.com": {
+        "customer_id": 32106,
+        "first_name": "Sonya",
+        "last_name": "Ling",
+        "title": "Ms.",
+        "email": "sonya_ling1947@yahoo.com",
+        "latest_orders":[{
+            "order_id": 123465,
+            "order_date": datetime(2026, 9, 15, 21, 10, 0, tzinfo= _zoneinfo),
+            "total_amount_incl_tax": 74.02,
+            "tax_applied_rate": 0.095,
+            "status": "transit",
+            "ship_date": datetime(2026, 9, 19, 10, 45, 0, tzinfo= _zoneinfo),
+            "estimated_delivery_date": datetime(2026, 9, 23, 14, 30, 0, tzinfo= _zoneinfo),
+            "tracking_number": "1Z99999996479999990",
+            "items": [{
+                "product_id": "PRD-1463",
+                "product_name": "PowerBank",
+                "supplier_name": "National Supply Group",
+                "unit_price": 44.74,
+                "number_units": 2,
+            }]  
+            },{
+            "order_id": 123464,
+            "order_date": datetime(2026, 9, 5, 21, 10, 0, tzinfo= _zoneinfo),
+            "total_amount_incl_tax": 74.02,
+            "tax_applied_rate": 0.095,
+            "status": "delivered",
+            "ship_date": datetime(2026, 9, 10, 10, 45, 0, tzinfo= _zoneinfo),
+            "estimated_delivery_date": datetime(2026, 9, 12, 14, 30, 0, tzinfo= _zoneinfo),
+            "delivery_date": datetime(2026, 9, 15, 18, 30, 0, tzinfo= _zoneinfo),
+            "tracking_number": "1Z9999999502999999",
+            "items": [{
+                "product_id": "PRD-1121",
+                "product_name": "Wireless Earbuds",
+                "supplier_name": "Summit Wholesale Inc",
+                "unit_price": 67.60,
+                "number_units": 1,
+            }]  
         }]  
     },
 }

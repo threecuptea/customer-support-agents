@@ -5,11 +5,36 @@ from datetime import datetime
 from typing import Literal, Annotated
 from langgraph.graph import MessagesState
 from zoneinfo import ZoneInfo
+from enum import StrEnum, auto
 
 MAX_MESSAGE_CHARS = 4_000
 MAX_MESSAGES = 100
 
 MAX_REASON_CHARS = 500
+
+# "Help handle a lost shipment", "Help cancel an order", "Help answer an order inquiry that an AI Agent cannot handle"
+
+class ESCALATE_REASON(StrEnum):
+    HELP_LOST_SHIPMENT = "Help handle a lost shipment"
+    HELP_CANCEL_ORDER = "Help cancel an order"
+    HELP_ANSWER_ORDER_INQUIRY = "Help answer an order inquiry that an AI Agent cannot handle"
+
+
+# ORDER_NON_REFUNDABLE_DAYS means an order is non-refundable because the refund request has exceeded the return window.
+# ORDER_HUMAN_REFUNDABLE_ITEMS means an order is non-refundable because the return item(s) are intimate items that CSR need to 
+# make sure that it is unworn, unwashed, tag is on
+# ORDER_DELIVERED_BORDERLINE are order supposed to be delivered according to the carrier but the customer does not see
+# the delivered items.  That's what a lot of order inquiry dispute come from and cases will be escalated. 
+class OrderRefundStatus(StrEnum):
+    ORDER_AUTO_REFUNDABLE = auto()
+    ORDER_NON_REFUNDABLE_DAYS = auto()
+    ORDER_HUMAN_REFUNDABLE_ITEMS = auto()
+    ORDER_HUMAN_REFUNDABLE_AMOUNT = auto()
+    # The above are related to return_refund_eligible
+    ORDER_IN_TRANSIT = auto()
+    ORDER_IN_PENDING = auto()
+    ORDER_DATA_INVALID = auto() # for test reason
+    ORDER_DELIVERED_BORDERLINE = auto()
 
 
 #############################################
@@ -30,12 +55,11 @@ class OrderItem(BaseModel):
     supplier_name: Annotated[str, Field(min_length=1)]
     unit_price: Annotated[float, Field(gt=0)]
     number_units: Annotated[int, Field(gt=0)]
-    non_refundable: bool = False
+    intimate_item: bool = False
 
 # All date fields be TZ-aware 
 class Order(BaseModel):
     order_id: Annotated[int, Field(gt=0)]
-    delivery_tz: ZoneInfo = ZoneInfo("America/Chicago")
     order_date: datetime
     total_amount_incl_tax: Annotated[float, Field(gt=0)]
     tax_applied_rate: Annotated[float, Field(ge=0)]
@@ -75,7 +99,6 @@ class RefundRequest(BaseModel):
 class FAQMatchEvals(BaseModel):
     rapid_fuzz_partial_ratio_match_helpful: bool = False
     llm_semantic_match_helpful: bool = False
-    reason: str | None = None
 
 class FAQMatchResult(BaseModel):
     question: str
@@ -96,17 +119,23 @@ class CustomerSupportState(MessagesState):
     summary: str
     customer_name: str
     customer_context: CustomerContext
-    support_category: Literal["order_inquery/ return_refund", "general/ others"] = 'general/ others'
+    support_category: Literal["order_inquery", "return_refund", "general/ others"] = 'general/ others'
     general_inquiry: str
     faq_match_evals: FAQMatchEvals | None
-    general_issue_resolved: bool
-    order_number_provided: int
-    target_order: Order
-    return_refund_eligible: bool
+    escalation_reason: str = None # This is for the future use: escalating and summarizing the reason to slack's CSR channel
+    general_issue_resolved: bool = False
+    order_number_provided:  int
+    target_order: Order = None
+    order_issue_escalated: bool = False
+    order_issue_resolved: bool = False
     intent_for_return_refund: bool
+    order_refund_eligible: OrderRefundStatus
     refund_request: RefundRequest
+    summarize_on_exit: bool = False
 
+# Unfortunately we have to know what items to be return to devide
 class RefundProcess(BaseModel):
+
     requires_manual_approval: bool = False
     reason: str | None = None
 
@@ -120,10 +149,6 @@ class CustomerContext(BaseModel):
     last_name: Annotated[str, Field(min_length=1)]
     email: Annotated[str, Field(min_length=1)]
     latest_orders: list[Order] = []
-
-class OrderResult(BaseModel):
-    not_found: bool = False
-    order: Order = None    
     
 
 #########################################
@@ -159,13 +184,37 @@ class GeneralSupportResponse(BaseModel):
     general_inquiry: str
     response: str
 
-class OrderReturnSupportRequest(BaseModel):
+class OrderInitRequest(BaseModel):
+    thread_id: str | None = None
     customer_context: CustomerContext
-    order_number_provided: int   
+    order_number_provided: int
 
-class OrderReturnSupportContinue(BaseModel):
+class OrderStructuredOutput(BaseModel):
+    response: str | None = None
+    escalate: bool = False
+    escalation_reason: Literal[ESCALATE_REASON.HELP_LOST_SHIPMENT, ESCALATE_REASON.HELP_CANCEL_ORDER, ESCALATE_REASON.HELP_ANSWER_ORDER_INQUIRY] | None = None
+    intent_for_return_refund: bool = False
+    order_issue_resolved: bool = False
+
+class OrderInitResponse(BaseModel):
+    thread_id: str
+    target_order: Order | None = None
+    response: str
+
+class OrderContinueRequest(BaseModel):
     thread_id: Annotated[str, Field(min_length=1)]
     user_conversation: Annotated[str, Field(min_length=1, max_length=MAX_MESSAGE_CHARS)]
+
+class OrderContinueResponse(BaseModel):
+    thread_id: str
+    response: str
+    escalation_reason: str | None = None
+    intent_for_return_refund: bool = False
+
+class SummarizeOnExit(BaseModel):
+    thread_id: str    
+
+
    
         
 

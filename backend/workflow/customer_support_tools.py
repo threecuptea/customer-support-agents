@@ -76,7 +76,7 @@ def retrieve_target_order(context: CustomerContext, order_number: int) -> Order 
         Returns:
             an target Order
     """
-    if context.latest_orders:
+    if context.latest_orders and order_number:
         for order in context.latest_orders:
             if order.order_id == order_number:
                 return order

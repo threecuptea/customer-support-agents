@@ -81,7 +81,24 @@ def test_auto_refundable_order(client):
     assert datetime.now(tz= _zoneinfo) - datetime.fromisoformat(order['delivery_date']) < timedelta(days= threshold_days_auto_approve)
     assert datetime.fromisoformat(order['delivery_date']) == datetime.fromisoformat(order['estimated_delivery_date'])
 
-def test_human_refundable_order(client):
+def test_auto_refundable_order_test(client):
+    # An order that has been delivered is allowed to return  
+    email_addr = "sonya_ling1947@yahoo.com"
+    resp = client.post("/api/auth", json={"email_addr": email_addr})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data['email_addr'] == email_addr
+    assert data['is_auth'] == True
+    assert data['role'] == 'customer'
+    assert data['customer_context'] is not None
+    order = data['customer_context']['latest_orders'][1]
+    assert order['status'] == 'delivered'
+    # This is an auto approve return/ refund order
+    assert datetime.now(tz= _zoneinfo) - datetime.fromisoformat(order['delivery_date']) < timedelta(days= threshold_days_auto_approve)
+    assert datetime.fromisoformat(order['delivery_date']) == datetime.fromisoformat(order['estimated_delivery_date'])
+
+
+def test_human_refundable_order_amount(client):
     # An order that has been delivered is allowed to return  
     email_addr = "pamela.brown@cnn.com"
     resp = client.post("/api/auth", json={"email_addr": email_addr})
@@ -97,7 +114,7 @@ def test_human_refundable_order(client):
     assert datetime.now(tz= _zoneinfo) - datetime.fromisoformat(order['delivery_date']) < timedelta(days= threshold_days_auto_approve)
     assert float(order["total_amount_incl_tax"]) / (1 + float(order["tax_applied_rate"])) > threshold_amount_auto_approve
 
-def test_non_refundable_order_due_to_item(client):
+def test_human_refundable_order_due_to_item(client):
     # An order that has been delivered is allowed to return  
     email_addr = "dana.bash@cnn.com"
     resp = client.post("/api/auth", json={"email_addr": email_addr})
@@ -112,7 +129,7 @@ def test_non_refundable_order_due_to_item(client):
     assert order['status'] == 'delivered'
     # This is an auto approve return/ refund order
     assert datetime.now(tz= _zoneinfo) - datetime.fromisoformat(order['delivery_date']) < timedelta(days= threshold_days_auto_approve)
-    assert item.get('non_refundable', False) == True
+    assert item.get('intimate_item', False) == True
 
 def test_order_delivered_date_borderline(client):
     email_addr = "manu.raju@cnn.com"
