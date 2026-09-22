@@ -29,6 +29,13 @@ customer_order_status_map = {
 def adjust_days_demo_data_testable():
     for email, features in demo_customers.items():
         order_refund_status = customer_order_status_map.get(email)
+        if order_refund_status is None:
+            raise ValueError(f"customer_order_status_map is missing an entry for demo customer '{email}'")
+        if len(order_refund_status) != len(features["latest_orders"]):
+            raise ValueError(
+                f"customer_order_status_map['{email}'] has {len(order_refund_status)} status(es) "
+                f"but demo_customers['{email}'] has {len(features['latest_orders'])} order(s); they must line up 1:1"
+            )
         for i, order in enumerate(features["latest_orders"]):
             # backfeed missing data
             if order.get("estimated_delivery_date") and order.get("status") == "delivered":

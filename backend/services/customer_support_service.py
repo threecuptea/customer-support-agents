@@ -88,10 +88,18 @@ async def invoke_order_continue_workflow(support: OrderContinueRequest, request:
     thread_id = support.thread_id
     config = {"configurable": {"thread_id": thread_id}}
     # We cannot inject long-terms memory for each invoke. That should come from `invoke_order_init_workflow``
+    # Guard against a thread_id that was never initialized via /order/init (or whose init failed to find
+    # an order): route_branch/order_continue_chat_node assume target_order is already populated, so without
+    # this check a stale/uninitialized thread_id would crash the graph instead of returning a clear error.
+    existing_state = await graph.aget_state(config)
+    if not existing_state.values.get("target_order"):
+        raise HTTPException(
+            status_code=400,
+            detail="Order inquiry session not found or expired. Please restart from the order selection screen.",
+        )
     try:
        customer_support_state  = await graph.ainvoke({"messages": [HumanMessage(content= support.user_conversation)]}, config)
-       print("***** After graph.ainvoke *****")
-       # escalation_reason is for the future use: communication to CSR in slack  
+       # escalation_reason is for the future use: communication to CSR in slack
        return OrderContinueResponse(
            thread_id=thread_id,
            response=customer_support_state["response"],
@@ -108,8 +116,8 @@ async def invoke_summarize_on_exit(support: SummarizeOnExit, request: Request):
     thread_id = support.thread_id
     config = {"configurable": {"thread_id": thread_id}}
     try:
-        graph.ainvoke({"summarize_on_exit": True}, config)
-        # escalation_reason is for the future use: communication to CSR in slack  
+        await graph.ainvoke({"summarize_on_exit": True}, config)
+        # escalation_reason is for the future use: communication to CSR in slack
     except Exception as exc:
         error_msg = "Error summarize on exit"
         logger.exception(error_msg)

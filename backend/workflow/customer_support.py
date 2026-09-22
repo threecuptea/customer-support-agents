@@ -260,13 +260,14 @@ class CustomerSupportAgent:
         system_msg = SystemMessage(content=SYSTEM_PROMPT)
         order_output: OrderStructuredOutput = await self.order_llm_for_inquiry_chat.ainvoke([system_msg])
         # mock llm will return order_output None
-        if order_output.escalate:
+        if not order_output or order_output.escalate:
+            escalation_reason = order_output.escalation_reason if order_output else ESCALATE_REASON.HELP_ANSWER_ORDER_INQUIRY
             message = ChatMessage(content= ESCALATE_MESSAGE, role= ROLE_AGENT, additional_kwargs={
                     "source": SOURCE_ORDER_INQUIRY})
             return {
-                "messages": [message], 
+                "messages": [message],
                 "response": ESCALATE_MESSAGE,
-                "escalation_reason": f"{order_output.escalation_reason} of order #{state['order_number_provided']}", 
+                "escalation_reason": f"{escalation_reason} of order #{state['order_number_provided']}",
                 "order_issue_escalated": True,
             }
                         
@@ -334,8 +335,8 @@ class CustomerSupportAgent:
 
     # It's not an actual route. It return node by condition.  Get around with conditional edge within conditional edge
     def route_order(self, state: CustomerSupportState) -> str:
-        # Fix an error if order_number not passed or passed as 0.  Let retrieve_target_order instead of order_continue_chat_node handle 
-        if not state["target_order"]:
+        # Fix an error if order_number not passed or passed as 0.  Let retrieve_target_order instead of order_continue_chat_node handle
+        if not state.get("target_order"):
             return "order_init"
         
         return "order_init_done"

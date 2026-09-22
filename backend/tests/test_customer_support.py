@@ -223,7 +223,7 @@ def test_order_init_fail(client):
     assert len(result["messages"]) == 1
     assert isinstance(result["messages"][0], ChatMessage)
     assert result["response"] == SYSTEM_ERROR_MESSAGE
-    result["messages"][0].role == ROLE_AGENT
+    assert result["messages"][0].role == ROLE_AGENT
     assert result["messages"][0].additional_kwargs['source'] == SOURCE_ORDER_RETRIEVAL
 
     

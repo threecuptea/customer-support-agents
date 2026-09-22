@@ -10,7 +10,7 @@ from enum import StrEnum, auto
 MAX_MESSAGE_CHARS = 4_000
 MAX_MESSAGES = 100
 
-MAX_REASON_CHARS = 50
+MAX_REASON_CHARS = 500
 
 # "Help handle a lost shipment", "Help cancel an order", "Help answer an order inquiry that an AI Agent cannot handle"
 
@@ -198,7 +198,7 @@ class OrderStructuredOutput(BaseModel):
 
 class OrderInitResponse(BaseModel):
     thread_id: str
-    target_order: Order
+    target_order: Order | None = None
     response: str
 
 class OrderContinueRequest(BaseModel):
