@@ -462,6 +462,13 @@ export default function OrderInquiryPage() {
                 <ArrowLeft className="w-4 h-4" /> Back to order selection
               </button>
               <button
+                onClick={goToGeneralInquiry}
+                disabled={loading}
+                className="inline-flex items-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-50 text-gray-800 rounded-lg px-4 py-2 text-sm font-medium transition-colors"
+              >
+                <MessageCircleQuestion className="w-4 h-4" /> Ask a general question
+              </button>
+              <button
                 onClick={exit}
                 disabled={loading}
                 className="inline-flex items-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-50 text-gray-800 rounded-lg px-4 py-2 text-sm font-medium transition-colors"

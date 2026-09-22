@@ -214,7 +214,7 @@ describe("OrderInquiryPage", () => {
     expect(screen.getByRole("radio")).toBeInTheDocument();
   });
 
-  it("grays out 'Back to order selection' with only one order", async () => {
+  it("grays out 'Back to order selection' with only one order, but offers general inquiry as an escape hatch", async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(
       jsonResponse({
         thread_id: "t1",
@@ -231,6 +231,7 @@ describe("OrderInquiryPage", () => {
     await screen.findByText("Your order is still in 'transit' status.");
 
     expect(screen.getByRole("button", { name: /back to order selection/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /ask a general question/i })).not.toBeDisabled();
   });
 
   it("lets a multi-order customer go back and pick a different order, reusing thread_id", async () => {
@@ -280,7 +281,7 @@ describe("OrderInquiryPage", () => {
     expect(push).toHaveBeenCalledWith("/customer/others");
   });
 
-  it("calls /api/support/exit before navigating to general inquiry once a thread exists", async () => {
+  it("offers 'Ask a general question' directly on the chat screen and calls /api/support/exit before navigating away, even for a single-order customer", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -293,13 +294,11 @@ describe("OrderInquiryPage", () => {
       .mockResolvedValueOnce(jsonResponse(null));
     vi.stubGlobal("fetch", fetchMock);
 
-    renderWithAuth(<OrderInquiryPage />, { seedSession: sessionWith([orderOlder, orderNewer]) });
+    renderWithAuth(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
     await screen.findByText(/order #1002/i);
-    await userEvent.click(screen.getAllByRole("radio")[0]);
+    await userEvent.click(screen.getByRole("radio"));
     await userEvent.click(screen.getByRole("button", { name: /continue/i }));
     await screen.findByText("Your order is still in 'transit' status.");
-    // Back to order selection so "Ask a general question" is visible again, keeping threadId.
-    await userEvent.click(screen.getByRole("button", { name: /back to order selection/i }));
 
     await userEvent.click(screen.getByRole("button", { name: /ask a general question/i }));
 
