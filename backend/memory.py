@@ -44,7 +44,7 @@ async def load_user_memory(
     try:
         items = await store.asearch(_namespace(user_id), limit=limit)
         if items:
-            notes = ["on " + i.alue.get("timestamp", "") + " "+ i.value.get("text", "") for i in items if i.value.get("text")]
+            notes = ["on " + i.value.get("timestamp", "") + " "+ i.value.get("text", "") for i in items if i.value.get("text")]
             return "\n".join(f"- {n}" for n in notes)
         else:
             return ""
