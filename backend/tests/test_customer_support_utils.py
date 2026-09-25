@@ -6,6 +6,11 @@ from workflow.customer_support_utils import check_if_order_to_return_in_valid_st
     ORIGINAL_ORDER_FOR_RETURN_IS_NOT_DELIVERED, NOT_A_VALID_PRODUCT_ID, NOT_A_VALID_RETURN_QUANTITY
 import uuid
 from main import app
+import logging
+
+logging.basicConfig(level="INFO")
+logger = logging.getLogger(__name__)
+
 
 
 @pytest.fixture()
@@ -49,66 +54,31 @@ def test_check_if_order_to_return_in_valid_state(client):
     return_order.items = [item]
     assert check_if_order_to_return_in_valid_state(return_order, original_order) == True
 
-# 
-def test_get_return_refund_decision_invalid_refundable_state(client):
-    item = ItemToReturn(product_id= "PRD-1031", qty= 1)
-    return_order = OrderToReturn(thread_id= str(uuid.uuid4()), items= [item])
-     
-    email_addr = "jake.tapper@cnn.com" # in 'transit' status and no delivered_date
-    resp = client.post("/api/auth", json={"email_addr": email_addr})
-    data = resp.json()
-    context: CustomerContext = CustomerContext(**data['customer_context'])
-    original_order = context.latest_orders[0]
-    decision = get_return_refund_decision(return_order, original_order)
-    assert decision.order_refund_status == OrderRefundStatus.ORDER_INVALID_REFUNDABLE_STATE
 
-def test_get_return_refund_decision_human_refundable(client):
-    item = ItemToReturn(product_id= "PRD-1099", qty= 1)
-    return_order = OrderToReturn(thread_id= str(uuid.uuid4()), items= [item])
-     
-    email_addr = "pamela.brown@cnn.com" # amount > $500
-    resp = client.post("/api/auth", json={"email_addr": email_addr})
-    data = resp.json()
-    context: CustomerContext = CustomerContext(**data['customer_context'])
-    original_order = context.latest_orders[0]
-    decision = get_return_refund_decision(return_order, original_order)
-    assert decision.order_refund_status == OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT
-    
-def test_get_return_refund_decision_non_refundable_days(client):
-    item = ItemToReturn(product_id= "PRD-1015", qty= 1) # return 1 bike light
-    return_order = OrderToReturn(thread_id= str(uuid.uuid4()), items= [item])
-     
-    email_addr = "wolf.blitzer@cnn.com" # > 35 days of return window
-    resp = client.post("/api/auth", json={"email_addr": email_addr})
-    data = resp.json()
-    context: CustomerContext = CustomerContext(**data['customer_context'])
-    original_order = context.latest_orders[0]
-    decision = get_return_refund_decision(return_order, original_order)
-    assert decision.order_refund_status == OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS
+@pytest.mark.parametrize(
+    "comment, email_addr, expected_order_refund_status",
+    [
+        ("The order is not in 'delivered' status", "jake.tapper@cnn.com", OrderRefundStatus.ORDER_INVALID_REFUNDABLE_STATE),
+        ("The order exceeds amount threshold for auto approve", "pamela.brown@cnn.com", OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT),
+        ("Return a order exceeding its return windown", "wolf.blitzer@cnn.com", OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS),
+        ("The order contains non refundable item", "dana.bash@cnn.com", OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS),
+        ("The order matches auto approve criteria", "anderson.cooper@cnn.com", OrderRefundStatus.ORDER_AUTO_REFUNDABLE),
+    ]
+)    
 
-def test_get_return_refund_decision_non_refundable_items(client):
-    item = ItemToReturn(product_id= "PRD-1002", qty= 1)
-    return_order = OrderToReturn(thread_id= str(uuid.uuid4()), items= [item])
-     
-    email_addr = "dana.bash@cnn.com" # non_refundable item (intimate item here)
+def test_get_return_refund_decision_status(client, comment, email_addr, expected_order_refund_status):
+    logging.info(comment)
+    email_addr = email_addr
     resp = client.post("/api/auth", json={"email_addr": email_addr})
     data = resp.json()
     context: CustomerContext = CustomerContext(**data['customer_context'])
     original_order = context.latest_orders[0]
-    decision = get_return_refund_decision(return_order, original_order)
-    assert decision.order_refund_status == OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS
 
-def test_get_return_refund_decision_auto_refundable(client):
-    item = ItemToReturn(product_id= "PRD-1001", qty= 1)
+    item = ItemToReturn(product_id= original_order.items[0].product_id, qty= 1)
     return_order = OrderToReturn(thread_id= str(uuid.uuid4()), items= [item])
-     
-    email_addr = "anderson.cooper@cnn.com" # non_refundable item (intimate item here)
-    resp = client.post("/api/auth", json={"email_addr": email_addr})
-    data = resp.json()
-    context: CustomerContext = CustomerContext(**data['customer_context'])
-    original_order = context.latest_orders[0]
+        
     decision = get_return_refund_decision(return_order, original_order)
-    assert decision.order_refund_status == OrderRefundStatus.ORDER_AUTO_REFUNDABLE
+    assert decision.order_refund_status == expected_order_refund_status
+     
 
-     
-     
+        
