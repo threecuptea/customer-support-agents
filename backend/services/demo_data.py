@@ -12,13 +12,13 @@ threshold_days_auto_approve = int(os.getenv("DAYS_THRESHOLD_AUTO"))
 
 
 customer_order_status_map = {
-    "wolf.blitzer@cnn.com": [OrderRefundStatus.ORDER_NON_REFUNDABLE_DAYS],
-    "pamela.brown@cnn.com": [OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_AMOUNT],
+    "wolf.blitzer@cnn.com": [OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS],
+    "pamela.brown@cnn.com": [OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT],
     "anderson.cooper@cnn.com": [OrderRefundStatus.ORDER_AUTO_REFUNDABLE],
     "jake.tapper@cnn.com": [OrderRefundStatus.ORDER_IN_TRANSIT],
     "john.king@cnn.com": [OrderRefundStatus.ORDER_IN_PENDING],
     "harry.enten@cnn.com": [OrderRefundStatus.ORDER_DATA_INVALID],
-    "dana.bash@cnn.com": [OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_ITEMS],
+    "dana.bash@cnn.com": [OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS],
     "manu.raju@cnn.com": [OrderRefundStatus.ORDER_DELIVERED_BORDERLINE],
     "sonya_ling1947@yahoo.com": [
         OrderRefundStatus.ORDER_IN_TRANSIT,
@@ -41,10 +41,10 @@ def adjust_days_demo_data_testable():
             if order.get("estimated_delivery_date") and order.get("status") == "delivered":
                 order["delivery_date"] = order["estimated_delivery_date"]
             match order_refund_status[i]:
-                case OrderRefundStatus.ORDER_NON_REFUNDABLE_DAYS:
+                case OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS:
                     order["delivery_date"] = datetime.now(_zoneinfo) - timedelta(days= threshold_days_auto_approve + 3)
                     _auto_adjust_days(order)
-                case OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_AMOUNT | OrderRefundStatus.ORDER_AUTO_REFUNDABLE | OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_ITEMS:
+                case OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT | OrderRefundStatus.ORDER_AUTO_REFUNDABLE | OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS:
                     order["delivery_date"] = datetime.now(_zoneinfo) - timedelta(days= 25)
                     _auto_adjust_days(order)
                 case OrderRefundStatus.ORDER_DELIVERED_BORDERLINE:
@@ -66,8 +66,8 @@ def _auto_adjust_days(order: dict):
             order["estimated_delivery_date"] = order["delivery_date"]
         order["ship_date"] = order["estimated_delivery_date"] - timedelta(days= 5)
         order["order_date"] = order["ship_date"] - timedelta(days= 3)
-    
-#TODO: Modify to have users with multiple orders.           
+
+               
 demo_customers = {
     "anderson.cooper@cnn.com": {
         "customer_id": 32098,
@@ -248,7 +248,7 @@ demo_customers = {
                 "supplier_name": "Victoria's Secret",
                 "unit_price": 64.95,
                 "number_units": 1,
-                "intimate_item": True,
+                "nonrefundable_item": True,
                 },
             ]
         }]  

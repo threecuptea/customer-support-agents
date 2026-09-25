@@ -4,10 +4,11 @@ from fastapi import Request, HTTPException
 import os
 from langchain_core.messages import HumanMessage, SystemMessage
 from models.model import GeneralSupportRequest, GeneralSupportResponse, OrderInitRequest, OrderInitResponse, \
-    OrderContinueRequest, OrderContinueResponse, SummarizeOnExit
+    OrderContinueRequest, OrderContinueResponse, SummarizeOnExit, OrderToReturn, ItemToReturn, Order
 from memory import load_user_memory
 import uuid
 import logging
+from workflow.customer_support_utils import check_if_order_to_return_in_valid_state
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
@@ -55,11 +56,7 @@ async def invoke_order_init_workflow(support: OrderInitRequest, request: Request
     messages = []
     memory = await load_user_memory(graph.store, support.customer_context.customer_id)
     if memory:
-        logger.info(f"load_user_memory= {memory}")
-        messages.append(SystemMessage(content=f"Previous conversations:\n{memory}"))
-    else:
-        logger.info("Unable to find previous memory")
-             
+        messages.append(SystemMessage(content=f"Previous conversations:\n{memory}"))         
     messages.append(HumanMessage(content= f"Order inquiry: {support.order_number_provided}"))
     initial_state = {
             "messages": messages,
@@ -114,7 +111,42 @@ async def invoke_order_continue_workflow(support: OrderContinueRequest, request:
         error_msg = "Error continuing customer-support order_inquery"
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
-            
+
+async def invoke_return_refund_start_workflow(order_to_return: OrderToReturn, request: Request):
+    graph = request.app.state.support_graph
+    thread_id = order_to_return.thread_id
+    config = {"configurable": {"thread_id": thread_id}}
+    existing_state = await graph.aget_state(config)
+    if not existing_state.values.get("target_order") or not existing_state.values.get("customer_context"):
+        raise HTTPException(
+            status_code=400,
+            detail="Return/ refund session not found or expired. Please Exit and re-login.",
+        )
+    messages = []
+    memory = await load_user_memory(graph.store, existing_state.values.get("customer_context").customer_id)
+    if memory:
+        messages.append(SystemMessage(content=f"Previous conversations:\n{memory}"))         
+    try:
+        # verify if the target order and order to return are in a valid state to start a return refund.
+        target_order: Order = existing_state.values.get("target_order")
+        check_if_order_to_return_in_valid_state(order_to_return, target_order)
+        messages.append(HumanMessage(content= f"Return refund: {target_order.order_id}"))
+        initial_state = {
+            "messages": messages,
+            "support_category": "return_refund",
+            "intent_for_return_refund": True,
+        }
+        customer_support_state  = await graph.ainvoke(initial_state, config)
+        # what should I return
+    except ValueError as verr:
+        error_msg = "Error start a return refund request"
+        logger.exception(error_msg)
+        raise HTTPException(status_code=400, detail=f"{error_msg}: {verr}")
+    except Exception as exc:
+        error_msg = "Error start a return refund request"
+        logger.exception(error_msg)
+        raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
+                
 async def invoke_summarize_on_exit(support: SummarizeOnExit, request: Request):
     graph = request.app.state.support_graph
     thread_id = support.thread_id

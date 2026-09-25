@@ -12,7 +12,7 @@ from workflow.llm import get_llm
 from langchain_core.runnables import RunnableConfig
 
 from memory import save_user_memory
-from workflow.customer_support_tools import find_closest_faq, retrieve_target_order, faq_dict
+from workflow.customer_support_utils import find_closest_faq, retrieve_target_order, faq_dict
 
 
 load_dotenv(override=True)
@@ -88,7 +88,7 @@ class CustomerSupportAgent:
             # First time summarising
             summarize_instruction = (
                 "Summarise this customer support conversation in under 5 sentences. "
-                "Include: the customer's name (if mentioned), their issue, "
+                "Include: the customer's name, their issue, "
                 "any order(s) discussed, and what actions were taken so far."
             )
 

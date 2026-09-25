@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from workflow.customer_support_tools import FAQs
+from workflow.customer_support_utils import FAQs
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_PATH = BACKEND_DIR.parent / "frontend" / "lib" / "faq.ts"

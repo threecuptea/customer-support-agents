@@ -129,7 +129,7 @@ def test_human_refundable_order_due_to_item(client):
     assert order['status'] == 'delivered'
     # This is an auto approve return/ refund order
     assert datetime.now(tz= _zoneinfo) - datetime.fromisoformat(order['delivery_date']) < timedelta(days= threshold_days_auto_approve)
-    assert item.get('intimate_item', False) == True
+    assert item.get('nonrefundable_item', False) == True
 
 def test_order_delivered_date_borderline(client):
     email_addr = "manu.raju@cnn.com"

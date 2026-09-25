@@ -1,5 +1,5 @@
 from scripts.export_faq import OUTPUT_PATH, render
-from workflow.customer_support_tools import FAQs
+from workflow.customer_support_utils import FAQs
 
 
 def test_faq_export_is_up_to_date():

@@ -10,10 +10,7 @@ from models.model import FAQMatchEvals, Order, CustomerContext, OrderRevisitEval
 from workflow.customer_support import CustomerSupportAgent, ESCALATE_MESSAGE, FUNCTION_FAQ_FUZZY_MATCH, SOURCE_FAQ_FUZZY_MATCH, SOURCE_FAQ_LLM_MATCH, \
     SOURCE_FAQ_LLM_EVALS, ROLE_FUNCTION_CALL, ROLE_AGENT, FAQ_MATCH_THRESHOLD, SYSTEM_ERROR_MESSAGE, SOURCE_ORDER_RETRIEVAL
 from langchain_core.messages import HumanMessage
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
-_zoneinfo = ZoneInfo("America/New_York")
 
 @pytest.fixture()
 def client():

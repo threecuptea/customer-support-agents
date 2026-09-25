@@ -4,7 +4,6 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Literal, Annotated
 from langgraph.graph import MessagesState
-from zoneinfo import ZoneInfo
 from enum import StrEnum, auto
 
 MAX_MESSAGE_CHARS = 4_000
@@ -27,9 +26,10 @@ class ESCALATE_REASON(StrEnum):
 # the delivered items.  That's what a lot of order inquiry dispute come from and cases will be escalated. 
 class OrderRefundStatus(StrEnum):
     ORDER_AUTO_REFUNDABLE = auto()
-    ORDER_NON_REFUNDABLE_DAYS = auto()
-    ORDER_HUMAN_REFUNDABLE_ITEMS = auto()
-    ORDER_HUMAN_REFUNDABLE_AMOUNT = auto()
+    ORDER_NON_REFUNDABLE_DUE_TO_DAYS = auto()
+    ORDER_NON_REFUNDABLE_DUE_TO_ITEMS = auto()
+    ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT = auto()
+    ORDER_INVALID_REFUNDABLE_STATE = auto()
     # The above are related to return_refund_eligible
     ORDER_IN_TRANSIT = auto()
     ORDER_IN_PENDING = auto()
@@ -55,7 +55,7 @@ class OrderItem(BaseModel):
     supplier_name: Annotated[str, Field(min_length=1)]
     unit_price: Annotated[float, Field(gt=0)]
     number_units: Annotated[int, Field(gt=0)]
-    intimate_item: bool = False
+    nonrefundable_item: bool = False
 
 # All date fields be TZ-aware 
 class Order(BaseModel):
@@ -72,23 +72,23 @@ class Order(BaseModel):
     items: Annotated[list[OrderItem], Field(min_length=1)]
 
 class ReturnedOrderItem(OrderItem):
-    refurbishable: bool = False
+    refurbished_amount: float = 0.0
 
 class ReturnedOrder(BaseModel):
     origin_order_id: Annotated[int, Field(gt=0)]
-    origin_delivery_date: datetime
+    original_delivery_date: datetime
     returned_date: datetime | None = None
-    status: Literal["returned", "partial_returned", "pending"] = 'pending'
-    tax_applied_rate: Annotated[float, Field(ge=0)]
-    amount_refund_incl_tax: Annotated[float, Field(ge=0)] 
+    status: Literal["returned", "pending"] = 'pending'
+    tax_applied_rate: Annotated[float, Field(gt=0)]
+    estimated_amount_refund_incl_tax: float = 0
+    refurbished_amount_incl_tax: float = 0
     items: Annotated[list[ReturnedOrderItem], Field(min_length=1)]
-    processed: bool = False
+    processed_date: datetime | None = None
 
 class RefundRequest(BaseModel):
-    refund_request_id: Annotated[int, Field(gt=0)]
+    refund_request_id: Annotated[int, Field(ge=0)] = 0
     request_date: datetime
     status: Literal["pending", "auto_approve", "auto_reject", "manaul_approve", "manaul_reject", "manual_flag"] = 'pending'
-    expected_amount_refund_incl_tax: Annotated[float, Field(gt=0)] # copied from the ReturnedOrder initially
     requires_manual_approval: bool = False
     manual_approval_reason: str | None = None 
     decided_by: Annotated[str, Field(min_length=1)] | None = None
@@ -138,11 +138,13 @@ class CustomerSupportState(MessagesState):
     summarize_on_exit: bool = False
 
 # Unfortunately we have to know what items to be return to devide
-class RefundProcess(BaseModel):
-
-    requires_manual_approval: bool = False
-    reason: str | None = None
-
+class ReturnRefundDecision(BaseModel):
+    order_refund_status: Literal[OrderRefundStatus.ORDER_AUTO_REFUNDABLE, 
+                                 OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS,
+                                 OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS,
+                                 OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT,
+                                 OrderRefundStatus.ORDER_INVALID_REFUNDABLE_STATE]
+    
  # latest_orders should be by date instead of by count. For example, order_date within the last 45 days.
  # UI should be able to display the summary of recent orders in descending order so that the customer can choose
  # which order is what he/ she is concerned about.   
@@ -156,7 +158,7 @@ class CustomerContext(BaseModel):
     
 
 #########################################
-# The followings are used in authentication/ authorization
+# The followings are used in auth API
 #########################################
 class AuthRequest(BaseModel):
     email_addr: Annotated[str, Field(min_length=1)]
@@ -175,7 +177,7 @@ class AuthResponse(BaseModel):
 
     
 #########################################
-# The followings are used in authentication/ authorization
+# The followings are used in customer_support API
 #########################################
 
 class GeneralSupportRequest(BaseModel):
@@ -216,11 +218,13 @@ class OrderContinueResponse(BaseModel):
     intent_for_return_refund: bool = False
 
 class SummarizeOnExit(BaseModel):
-    thread_id: str    
+    thread_id: str 
 
+class ItemToReturn(BaseModel):
+    product_id: Annotated[str, Field(min_length=1)]
+    qty: Annotated[int, Field(gt=0)]
 
-   
-        
-
+class OrderToReturn(BaseModel):
+    thread_id: Annotated[str, Field(min_length=1)]
+    items: Annotated[list[ItemToReturn], Field(min_length=1)]
     
-

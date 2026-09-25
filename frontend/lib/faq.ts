@@ -59,7 +59,7 @@ export const FAQ_SECTIONS: FaqSection[] = [
       },
       {
         "question": "Are returns free?",
-        "answer": "Yes, we will include the return shipping label in the request confirmation email"
+        "answer": "No, most items you need to pay to ship back.  However, we will pay for defective and damaged items"
       }
     ]
   },
