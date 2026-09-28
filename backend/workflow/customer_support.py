@@ -10,9 +10,10 @@ import logging
 import os
 from workflow.llm import get_llm
 from langchain_core.runnables import RunnableConfig
+from datetime import timedelta
 
 from memory import save_user_memory
-from workflow.customer_support_utils import find_closest_faq, retrieve_target_order, faq_dict
+from workflow.customer_support_utils import find_closest_faq, retrieve_target_order, faq_dict, RETURN_POLICY
 
 
 load_dotenv(override=True)
@@ -24,9 +25,9 @@ ESCALATE_MESSAGE = "I will escalate your inquiry/ request to a human agent and s
 SYSTEM_ERROR_MESSAGE = "System error!! We cannot find your order, please try it later"
 ESCALATE_REASON_FAQ = "Unable to find a satifactory answer to the customer's question"
 
-HEADER_ANSWER_QUESTION = "I don't have an answer to your question."
-HEADER_LOST_SHIPMENT = "You need help to handle your lost shipment."
-HEADER_CANCEL_ORDER = "You need help to cancel your order."
+PREFIX_ANSWER_QUESTION = "I don't have an answer to your question."
+PREFIX_LOST_SHIPMENT = "You need help to handle your lost shipment."
+PREFIX_CANCEL_ORDER = "You need help to cancel your order."
 
 SUMMARIZE_MESSAGE_THRESHOLD = 6
 FUNCTION_FAQ_FUZZY_MATCH = "find_closest_faq"
@@ -75,21 +76,19 @@ class CustomerSupportAgent:
         The summary grows richer turn by turn. Token costs stay nearly flat no matter how long
         the conversation runs.
         """
+        shared_instruction = "Focus on: any order(s) mentioned, order number and product name, and what order/ product issue occurred and what actions were taken."
         existing_summary = state.get("summary", "")
         if existing_summary:
             # Extend the existing summary with new messages
             summarize_instruction = (
                 f"Current summary:\n{existing_summary}\n\n"
                 "Extend this summary with the new messages above. "
-                "Keep it under 5 sentences. Focus on: the customer's name, "
-                "their issue, any order(s) mentioned, and what actions were taken."
+                "Keep it under 5 sentences. " + shared_instruction
             )
         else:
             # First time summarising
             summarize_instruction = (
-                "Summarise this customer support conversation in under 5 sentences. "
-                "Include: the customer's name, their issue, "
-                "any order(s) discussed, and what actions were taken so far."
+                "Summarise this customer support conversation in under 5 sentences. " + shared_instruction
             )
 
         messages = state["messages"] + [HumanMessage(content=summarize_instruction)]
@@ -121,15 +120,17 @@ class CustomerSupportAgent:
         You are an intelligent customer-support agent to help decide if it is helpful to match the customer question
         against FAQs
         Here is the customer's question: {state["general_inquiry"]}.
-        Here are FAQ context: {self.faq_context}.
+        Here is FAQ context: {self.faq_context}.
         Here is the summary of the previous conversation if any: {state.get("summary") if state.get("summary") else "None yet"}.
         There are two matching options:
-        - Matches with fuzz.partial_ratio scorer of python Rapidfuzz library. The fuzz.partial_ratio scorer finds the
-        best-aligned contiguous substring of the shorter string within the longer one and scores their similarity,
+        - Matches with fuzz.partial_ratio scorer of python Rapidfuzz library. The fuzz.partial_ratio process.extractOne finds 
+        the single best matching string from choices of FAQ questions for the customer question
         so it favors cases where the customer's question shares a close substring with an FAQ question, even if the
         two differ in length (e.g. extra words before/after).
         - LLM semantic matching
-        The above options are not mutual exclusive.
+        The above options are NOT mutual exclusive.
+        Some context for your reference.  There is a full return policy document.  LLM semantic matching will be given that 
+        along with FAQs as the context.  However, I extract the majority of content of the return policy into FAQ's questions and answers that Rapidfuzz partial_ratio can count on too. 
         Set `rapid_fuzz_partial_ratio_match_helpful` if you think that the fuzz match option will be helpful.
         Set `llm_semantic_match_helpful` if you think the LLM semantic match will be help.
         state `reason` as needed.
@@ -142,7 +143,7 @@ class CustomerSupportAgent:
         eval = await self.general_llm_for_faq_match_evals.ainvoke([system_msg])
         updates = {"faq_match_evals": eval, "general_issue_resolved": False}
         if not eval or (eval and not eval.rapid_fuzz_partial_ratio_match_helpful and not eval.llm_semantic_match_helpful):
-            response = f"{HEADER_ANSWER_QUESTION} {ESCALATE_MESSAGE}"
+            response = f"{PREFIX_ANSWER_QUESTION} {ESCALATE_MESSAGE}"
             message = ChatMessage(content=response, role= ROLE_AGENT, additional_kwargs={
                 "source": SOURCE_FAQ_LLM_EVALS})
             updates["messages"] = [message]
@@ -172,7 +173,7 @@ class CustomerSupportAgent:
                 "general_issue_resolved": True,
             }
         elif not state["faq_match_evals"].llm_semantic_match_helpful:
-            response = f"{HEADER_ANSWER_QUESTION} {ESCALATE_MESSAGE}"
+            response = f"{PREFIX_ANSWER_QUESTION} {ESCALATE_MESSAGE}"
             message = ChatMessage(content=response, role= ROLE_AGENT, additional_kwargs={
                 "source":SOURCE_FAQ_FUZZY_MATCH})
             return {
@@ -190,7 +191,8 @@ class CustomerSupportAgent:
         SYSTEM_PROMPT = f"""
         You are an intelligent customer-support agent to help match the customer question against FAQs
         Here is the customer's question {state["general_inquiry"]}.
-        Here are FAQ context: {self.faq_context}.
+        Here is FAQ context: {self.faq_context}.
+        Here is the full return policy {RETURN_POLICY}.  
         Set `question` to the 'question' that is most similar to the customer's question among FAQ context.  
         Set `answer` to the corresponding 'answer' of the above `question`.
         Set `confidence_score` based upon your judgement.
@@ -211,7 +213,7 @@ class CustomerSupportAgent:
                 "general_issue_resolved": True,
             }
         else:
-            response = f"{HEADER_ANSWER_QUESTION} {ESCALATE_MESSAGE}"
+            response = f"{PREFIX_ANSWER_QUESTION} {ESCALATE_MESSAGE}"
             message = ChatMessage(content=response, role=ROLE_AGENT, additional_kwargs={
                 "source":SOURCE_FAQ_LLM_MATCH, "faq_match_result": result,
             })
@@ -246,28 +248,42 @@ class CustomerSupportAgent:
             Here is the most recent conversations in sequential order: {recent_conversations if recent_conversations else "None yet"}.
             Here is the summary of the previous conversation: {state.get("summary") if state.get("summary") else "None yet"}.
             The above is the context of this order.
-            DO NOT REPEAT the same response!!  
-            You can wrap up by saying something like 'Anything else I can help you with?' if you find it is at the end of the conversation.
-            set `order_issue_resolved` when it is appropriate.             
-                        
-            Scenarios that we are trying to cover:
 
+            DO NOT REPEAT the same response!! Look for re-visit/ escalate signal!!  
+            If the customer's prior visit for this order is for a lost shipment and he/ she revisit to ask for 
+            help,  set the `escalate` flag to True and set '{ESCALATE_REASON.HELP_LOST_SHIPMENT}' as the `escalate_reason`.
+            If the customer's prior visit for this order is due to a long 'pending' status and he/ she want to cancel the order, 
+            set the `escalate` flag to true and set '{ESCALATE_REASON.HELP_CANCEL_ORDER}' as the `escalate_reason`.
+            If the customer has already expressed his/ her intent for 'exchange or return for refund' regardless if he/ she revisit or not, 
+            set 'intent_for_exchange_or_return_refund' to True.
+            If the customer like to go straight to start a return for refund regardless if he/ she revisit or not, 
+            set 'start_return_for_refund' to True.
+             
+            You can wrap up by saying something like 'Can help you with anything else?' if you find it is at the end of the conversation.
+            Set `order_issue_resolved` when the customer reply with ending signal.
+            Return your response for the above.
+                                   
+            The rest of scenarios that we are trying to cover:
             Find out what the customer is complaining about.
             if the order status is 'delivered' but the customer did not receive the shipment, ask the customer to click the tracking number link to see if there is a delivery photo taken.  
             If yes, is the photo taken in the customer's porch?  If yes, ask the customer to check with his/ her Ring's camera footage if the customer has Ring security system or 
             check with his/ her family members before the customer confirm that the shipment is stolen . UPS would not be responsible for a stolen shipment.  
             If the photo is not taken in the customer's porch or no photo taken, ask the customer to look around the house and/ or check with neighbors.
-            Let the customer know that he/ she can always re-visit us after he/ she exhaust searches assuming the shipment is not stolen. 
-            You will set the `escalate` flag to True if the customer re-visit us as instructed and set '{ESCALATE_REASON.HELP_LOST_SHIPMENT}' as the `escalate_reason`.
-
-            if the order status is 'delivered' and the customer is complaining about item(s) delivered is/ are torn or damaged or bad-quality,
-            tell the customer that the quality problem might be an one-off issue and direct the customer to `e-shopping.com` web site to exchange items if possible.
-            if the customer like to return the product(s), please confirm with him/ her for sure before set the `intent_for_return_refund` to True and tell the customer that we will be happy to process 
-            the return refund if he/ she can help us itemize product(s) to be returned.
+            Let the customer know that he/ she can always re-visit us after he/ she exhaust searches knowing the shipment is not stolen. 
+             
+            if the order status is 'delivered' and the customer is complaining about item(s) delivered for any of the following reason
+            * Wrong Size or Fit
+            * Doesn't Match Description or Photos
+            * Damaged or Defective
+            * Changed Mind or Impulse Buy
+            * Late Delivery
+            * Wrong Item   
+            Ask the customer if he/ she like to exchange or return for refunds if the customer hasn't expressed his/ her intent yet.
 
             if the order status is 'transit', ask the customer to track the whereabouts of the shipping using the UPS's tracking number.
-            if the order status is 'pending', ask the customer to wait for a couple of day.  The customer can always cancel the order if he/ she really want.
-            if the customer intend to cancel the order, you will set the `escalate` flag to true and set '{ESCALATE_REASON.HELP_CANCEL_ORDER}' as the `escalate_reason`
+            if the order status is 'pending', let him/ her know that the order should be fulfilled no later than {(state['target_order'].order_date + timedelta(days= 7)).isoformat()} (within 7 days).  
+            The customer can always call back by then to cancel the order.
+            if the customer like to cancel the order now, you should set the `escalate` flag to true and set '{ESCALATE_REASON.HELP_CANCEL_ORDER}' as the `escalate_reason`
 
             if the customer's conversation lead to an uncovered scenario or that you do not have an answer, please set `escalate` flag to True and set
             '{ESCALATE_REASON.HELP_ANSWER_ORDER_INQUIRY}' as the `escalate_reason`
@@ -282,15 +298,15 @@ class CustomerSupportAgent:
         # mock llm will return order_output None
         if not order_output or order_output.escalate:
             escalation_reason = order_output.escalation_reason if order_output else ESCALATE_REASON.HELP_ANSWER_ORDER_INQUIRY
-            header = ""
+            prefix = ""
             match escalation_reason:
                 case ESCALATE_REASON.HELP_LOST_SHIPMENT:
-                    header = HEADER_LOST_SHIPMENT
+                    prefix = PREFIX_LOST_SHIPMENT
                 case ESCALATE_REASON.HELP_CANCEL_ORDER:
-                    header = HEADER_CANCEL_ORDER
+                    prefix = PREFIX_CANCEL_ORDER
                 case _:
-                    header = HEADER_ANSWER_QUESTION
-            response = f"{header} {ESCALATE_MESSAGE}"                
+                    prefix = PREFIX_ANSWER_QUESTION
+            response = f"{prefix} {ESCALATE_MESSAGE}"                
             message = ChatMessage(content= response, role= ROLE_AGENT, additional_kwargs={
                     "source": SOURCE_ORDER_INQUIRY})
             return {
@@ -298,6 +314,9 @@ class CustomerSupportAgent:
                 "response": response,
                 "escalation_reason": f"{escalation_reason} of order #{state['order_number_provided']}",
                 "order_issue_escalated": True,
+                "intent_for_exchange_or_return_refund": False,
+                "start_return_for_refund": False,
+
             }
                         
         message = AIMessage(content= order_output.response, additional_kwargs={
@@ -306,7 +325,8 @@ class CustomerSupportAgent:
             "messages": [message],
             "response": order_output.response,
             "order_issue_resolved": order_output.order_issue_resolved, # signal writing the summary
-            "intent_for_return_refund": order_output.intent_for_return_refund,
+            "intent_for_exchange_or_return_refund": order_output.intent_for_exchange_or_return_refund,
+            "start_return_for_refund": order_output.start_return_for_refund,
 
         }
 
@@ -342,6 +362,8 @@ class CustomerSupportAgent:
         recent_conversations = "\n".join(
             [f"- {message.content}" for message in state["messages"] if not isinstance(message, SystemMessage)]
         )
+        product_names = [f"'{item.product_name}'" for item in target_order.items]
+        
         SYSTEM_PROMPT = f"""
         You are an intelligent customer-support agent trying to decide whether the customer has already
         discussed order #{target_order.order_id} in a prior conversation, as opposed to raising it for the
@@ -349,7 +371,7 @@ class CustomerSupportAgent:
         Here is the summary of this conversation thread so far, if any: {state.get("summary") if state.get("summary") else "None yet"}.
         Here is what we remember about this customer from past visits, if any: {memory_notes if memory_notes else "None yet"}.
         Here is the most recent conversation in this thread, in sequential order: {recent_conversations if recent_conversations else "None yet"}.
-        Set `is_revisit` to True only if there is clear evidence order #{target_order.order_id} specifically
+        Set `is_revisit` to True only if there is clear evidence order #{target_order.order_id} or products ordered: {"or ".join(product_names)} specifically
         (not just any order) was already discussed — for example a prior mention of a lost shipment, a
         return/ refund request, a cancellation, or any other support issue tied to this order.
         Set `is_revisit` to False if this looks like the first time the customer is raising this order, or if

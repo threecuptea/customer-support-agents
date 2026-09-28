@@ -36,12 +36,25 @@ FAQs = {
         "Do you ship internationally?": "Yes, to select countries. Shipping costs show at checkout.",
         "What if my package is lost or late?": "Check your tracking link first. Contact us if you still have trouble to get it on time",
     },
-    "Returns and Refunds": {
-        "What is your return policy?": "We accept returns within 35 days of delivery for unused items",
-        "Can I still get my refund if my order exceeds the return window of the policy": "Sorry, we have already extended 5 more days.",
+    "Exchange, Returns and Refunds": {
+        "Choose to exchange or return?": "Exchange when your item has wrong size or fit or you want a different color or style or the product arrived broken "
+        "or doesn't work and you want a fresh replacement. Return when the product didn't meet expectations or you change your mind entirely "
+        "or the product you like to exchange with is out of stock", 
+        "How do I start an exchange? ": "Go to e-shopping.com, look for Support -> Echange on the top of the screen and follow the instruction to initiate the exchange. "
+        "We'll include the return shipping label in the confirmation email and ship the exchange once the original item is scanned by the carrier.",
+
+        "What items cannot be returned?": "We cannot accept returns on final sale items, customized items, perishable items, gift cards, or items that have been altered or damaged by the customer. "
+        "Certain high-risk items, such as electronics, luxury goods and intimate items, are marked as non-returnable unless they are defective or damaged upon receipt.",
+
+        "What is your return policy in summary?": "We accept returns within 35 days of delivery for unused items.  The return item must have its tags attached "
+        "and be returned in its original packaging with your receipt or proof of purchase",
+
+        "Can I still get my refund if my order exceeds the return window of the policy": "No, we have already extended 5 more days.",
         "How do I start a return?": "You can talk to me to start a return/ refund request.",
-        "When will I get my refund?": "Refunds usually take 7 to 10 business days after we get the item back.",
-        "Are returns free?": "No, most items you need to pay to ship back.  However, we will pay for defective and damaged items"
+        "When will I get my refund?": "Refunds usually take 3 to 5 business days after we get the item back.",
+
+        "Are returns free?": "We are not charging any re-stocking fees. However, you will return at your own expense unless for defective, damaged or wrong items. "
+        "We do cover the return shipping label if you exchange instead."
     },
     "Orders and Payment": {
         "What payment methods do you accept?": "We take credit/ debit cards, PayPal, Apple Pay, and Google Wallet.",
@@ -52,9 +65,62 @@ FAQs = {
 
 faq_dict = {}
 faq_dict.update(FAQs['Shipping & Delivery'])
-faq_dict.update(FAQs['Returns and Refunds'])
+faq_dict.update(FAQs['Exchange, Returns and Refunds'])
 faq_dict.update(FAQs['Orders and Payment'])
 faq_qst_lst = list(faq_dict.keys())
+
+
+RETURN_POLICY = """
+Overview
+At 'e-shopping.com, we want you to love what you ordered. If something's not quite right, we're here to help.
+
+We have a 35 days return policy, starting from the day you receive your item, to request a return.  We extends 5 more days than most other vendors for the courtesy.
+
+2. What can I return?
+To be eligible for a return, you must provide your receipt or proof of purchase, and:
+
+The item must be in the same condition in which you received it
+The item must be unworn or unused
+The item must still have its tags attached
+The item must be in its original packaging
+We reserve the right to decline return requests if patterns of abuse, such as frequent returns or use of items before returning, are detected.
+
+3. What cannot be returned?
+We cannot accept returns on final sale items, customized items, perishable items, gift cards, or items that have been altered or damaged by the customer.
+
+Certain high-risk items, such as electronics, luxury goods and intimate items, are marked non-returnable unless they are defective or damaged upon receipt.
+
+4. Are there any fees for returns?
+We are not charging any re-stocking fees. However, you will return at your own expense unless an exchange is involved in that case we will cover return shipping labels. Damaged items will be covered in item 6.     
+
+5. How do I start a return?
+To initiate a return, you can contact our customer support web site. You'll need your the email address to login and start the process.
+
+If your return is accepted, We will email you instructions on how and where to send your package.
+
+6. Damages and issues
+Please inspect your order upon receipt and contact us within five days if the item is defective, damaged or if you receive the wrong item, so we can evaluate and address the issue promptly.  We will email you a return shipping label along with instructions on how and where to send your package.
+
+7. Exchanges
+Need a different size, color or style? We offer free exchanges on eligible items within 35 days of delivery.
+
+To request an exchange:
+
+Go to e-shopping.com, look for Support -> Echange on the top of the screen and follow the instruction to initiate the exchange.
+
+We'll ship the exchange once the original item is scanned by the carrier.
+
+Please note:
+
+Exchanges are subject to inventory availability
+Certain items (i.e. final sale or custom products) may not be eligible for an exchange
+If your requested item is out of stock, you can still return your ite for the refund.
+
+8. Refunds
+We will notify you once we've received and inspected your return to let you know if the refund was approved or not. If approved, you’ll be automatically refunded on your original payment method within 3-5 business days. Refunds will only be issued to the original payment method used during the purchase. Please remember it can take some time for your bank or credit card company to process and post the refund too.
+
+If more than 5 business days have passed since we've approved your return, please visit our customer-support site.
+"""
 
 
 # Technically I don't need @tool decorator because it is not calling from LLM

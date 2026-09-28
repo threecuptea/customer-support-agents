@@ -71,7 +71,7 @@ def test_get_return_refund_decision_status(client, comment, email_addr, expected
     email_addr = email_addr
     resp = client.post("/api/auth", json={"email_addr": email_addr})
     data = resp.json()
-    context: CustomerContext = CustomerContext(**data['customer_context'])
+    context = CustomerContext(**data['customer_context'])
     original_order = context.latest_orders[0]
 
     item = ItemToReturn(product_id= original_order.items[0].product_id, qty= 1)

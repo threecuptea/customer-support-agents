@@ -3,10 +3,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 import os
 from models.model import GeneralSupportRequest, GeneralSupportResponse, OrderInitRequest, OrderInitResponse, \
-    OrderContinueRequest, OrderContinueResponse, SummarizeOnExit
+    OrderContinueRequest, OrderContinueResponse, SummarizeOnExit, OrderToReturn
 import logging
 from services.customer_support_service import invoke_general_support_workflow, invoke_order_init_workflow, invoke_order_continue_workflow, \
-    invoke_summarize_on_exit
+    invoke_summarize_on_exit, invoke_return_refund_init_workflow
 
 
 MAX_MESSAGE_CHARS = 4_000
@@ -34,12 +34,12 @@ async def order_support_continue(support: OrderContinueRequest, request: Request
     logger.info(f"Continue order inquiry with : {support.user_conversation}")
     return await invoke_order_continue_workflow(support, request)
 
+@router.post("/return_refund/init")
+async def return_refund_init(order_to_return: OrderToReturn, request: Request):
+    logger.info(f"Initialize a return refund request for {order_to_return.thread_id}")
+    return await invoke_return_refund_init_workflow(order_to_return, request)
+
 @router.post("/exit")
 async def exit_signal(support: SummarizeOnExit, request: Request):
     logger.info(f"Exit request by thread_id : {support.thread_id}")
     await invoke_summarize_on_exit(support, request)
-
-
-
-
-  

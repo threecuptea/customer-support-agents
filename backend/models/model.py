@@ -36,6 +36,15 @@ class OrderRefundStatus(StrEnum):
     ORDER_DATA_INVALID = auto() # for test reason
     ORDER_DELIVERED_BORDERLINE = auto()
 
+class ExchangeReturnReason(StrEnum):
+    WRONG_SIZE_OR_FIT = "Size is too small or too large, different from size chart"
+    NOT_MATCH_DESCRIPTION_OR_PHOTO = "Discrepancies in color, material quality, or features create a gap between customer expectations and reality"
+    DAMAGED_OR_DEFECTIVE = "Items arriving broken, scratched, or non-functional make a return or replacement replacement"
+    CHANGED_MIND_OR_IMPULSE_BUY = "Buyer's remorse to buy it or no longer needed"
+    LATE_DELIVERY = "Products arriving past the needed date, ex. holiday gifts"
+    WRONG_ITEM_SHIPPED = "Possibly pick-and-pack or labeling mistakes in the warehouse"
+
+
 
 #############################################
 #
@@ -56,6 +65,7 @@ class OrderItem(BaseModel):
     unit_price: Annotated[float, Field(gt=0)]
     number_units: Annotated[int, Field(gt=0)]
     nonrefundable_item: bool = False
+    nonrefundable_reason:  Literal["intimate item", "electronics"] | None = None
 
 # All date fields be TZ-aware 
 class Order(BaseModel):
@@ -132,7 +142,8 @@ class CustomerSupportState(MessagesState):
     order_is_revisit: bool = False # set by detect_order_revisit_node; routes order_init straight into order_continue_chat_node
     order_issue_escalated: bool = False
     order_issue_resolved: bool = False
-    intent_for_return_refund: bool
+    intent_for_exchange_or_return_refund: bool = False
+    start_return_for_refund: bool = False
     order_refund_eligible: OrderRefundStatus
     refund_request: RefundRequest
     summarize_on_exit: bool = False
@@ -199,7 +210,8 @@ class OrderStructuredOutput(BaseModel):
     response: str | None = None
     escalate: bool = False
     escalation_reason: Literal[ESCALATE_REASON.HELP_LOST_SHIPMENT, ESCALATE_REASON.HELP_CANCEL_ORDER, ESCALATE_REASON.HELP_ANSWER_ORDER_INQUIRY] | None = None
-    intent_for_return_refund: bool = False
+    intent_for_exchange_or_return_refund: bool = False
+    start_return_for_refund: bool = False
     order_issue_resolved: bool = False
 
 class OrderInitResponse(BaseModel):

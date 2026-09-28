@@ -170,6 +170,9 @@ demo_customers = {
                 "supplier_name": "Coastal Trading",
                 "unit_price": 49.22,
                 "number_units": 1,
+                "nonrefundable_item": True,
+                "nonrefundable_reason": "electronics",
+                
             },
             {
                 "product_id": "PRD-1032",
@@ -177,6 +180,8 @@ demo_customers = {
                 "supplier_name": "Coastal Trading",
                 "unit_price": 61.03,
                 "number_units": 1,
+                "nonrefundable_item": True,
+                "nonrefundable_reason": "electronics",
             }
             ]
         }]  
@@ -249,6 +254,7 @@ demo_customers = {
                 "unit_price": 64.95,
                 "number_units": 1,
                 "nonrefundable_item": True,
+                "nonrefundable_reason": "intimate item",
                 },
             ]
         }]  
@@ -303,7 +309,7 @@ demo_customers = {
             "tracking_number": "1Z99999996479999990",
             "items": [{
                 "product_id": "PRD-1463",
-                "product_name": "PowerBank",
+                "product_name": "Hiking Gloves",
                 "supplier_name": "National Supply Group",
                 "unit_price": 44.74,
                 "number_units": 2,

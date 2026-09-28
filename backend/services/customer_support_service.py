@@ -4,7 +4,7 @@ from fastapi import Request, HTTPException
 import os
 from langchain_core.messages import HumanMessage, SystemMessage
 from models.model import GeneralSupportRequest, GeneralSupportResponse, OrderInitRequest, OrderInitResponse, \
-    OrderContinueRequest, OrderContinueResponse, SummarizeOnExit, OrderToReturn, ItemToReturn, Order
+    OrderContinueRequest, OrderContinueResponse, SummarizeOnExit, OrderToReturn, Order
 from memory import load_user_memory
 import uuid
 import logging
@@ -112,7 +112,7 @@ async def invoke_order_continue_workflow(support: OrderContinueRequest, request:
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
 
-async def invoke_return_refund_start_workflow(order_to_return: OrderToReturn, request: Request):
+async def invoke_return_refund_init_workflow(order_to_return: OrderToReturn, request: Request):
     graph = request.app.state.support_graph
     thread_id = order_to_return.thread_id
     config = {"configurable": {"thread_id": thread_id}}

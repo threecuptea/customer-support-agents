@@ -42,7 +42,7 @@ def test_general_faq_fuzz_match_node_returns_chat_message():
     result = asyncio.run(agent.general_faq_fuzz_match_node(state))
 
     assert result["general_issue_resolved"] is True
-    assert result["response"] == "We accept returns within 35 days of delivery for unused items"
+    assert "We accept returns within 35 days of delivery for unused items" in result["response"]
     assert len(result["messages"]) == 1
     assert isinstance(result["messages"][0], ChatMessage)
     assert result["messages"][0].content == result["response"]
