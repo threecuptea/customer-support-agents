@@ -38,7 +38,7 @@ describe("CustomerSelectionsPage", () => {
     renderWithAuth(<CustomerSelectionsPage />, { seedSession: customerSession });
     expect(await screen.findByText(/hi ms\. lovelace/i)).toBeInTheDocument();
     expect(screen.getByText("Shipping & Delivery")).toBeInTheDocument();
-    expect(screen.getByText("Returns and Refunds")).toBeInTheDocument();
+    expect(screen.getByText("Exchange, Return and Refund")).toBeInTheDocument();
     expect(screen.getByText("Orders and Payment")).toBeInTheDocument();
   });
 

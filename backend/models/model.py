@@ -11,13 +11,18 @@ MAX_MESSAGES = 100
 
 MAX_REASON_CHARS = 500
 
-# "Help handle a lost shipment", "Help cancel an order", "Help answer an order inquiry that an AI Agent cannot handle"
 
+# Eventually, we should have an escalation slack chanel. This message is for CSR (human customer-support representative) to 
+# inform why we escalate this ticket.  However, escalation reason alone is not good enough, need customer, order, return refund
+# all the information
 class ESCALATE_REASON(StrEnum):
     HELP_LOST_SHIPMENT = "Help handle a lost shipment"
     HELP_CANCEL_ORDER = "Help cancel an order"
     HELP_ANSWER_ORDER_INQUIRY = "Help answer an order inquiry that an AI Agent cannot handle"
-
+    HELP_EXPEDITE_EXCHANGE_FOR_DEFECTIVE_WRONG_ITEM = "Help expedite the exchange of defective, broken or wrong item(s)"
+    HELP_CHECK_RETURN_REFUND_STATUS = "Help check the return refund status of an order"
+    HELP_DECIDE_IF_PRICE_MATCH_WITH_COMPETITOR = "Decide if we should offer a refund so we can price match to beat our competitor(s)"
+    
 
 # ORDER_NON_REFUNDABLE_DAYS means an order is non-refundable because the refund request has exceeded the return window.
 # ORDER_HUMAN_REFUNDABLE_ITEMS means an order is non-refundable because the return item(s) are intimate items that CSR need to 
@@ -37,15 +42,27 @@ class OrderRefundStatus(StrEnum):
     ORDER_DELIVERED_BORDERLINE = auto()
 
 class ExchangeReturnReason(StrEnum):
-    WRONG_SIZE_OR_FIT = "Size is too small or too large, different from size chart"
+    WRONG_SIZE_OR_FIT = "Size is too small or too large, different from size chart or just does not fit well"
     NOT_MATCH_DESCRIPTION_OR_PHOTO = "Discrepancies in color, material quality, or features create a gap between customer expectations and reality"
-    DAMAGED_OR_DEFECTIVE = "Items arriving broken, scratched, or non-functional make a return or replacement replacement"
-    CHANGED_MIND_OR_IMPULSE_BUY = "Buyer's remorse to buy it or no longer needed"
-    LATE_DELIVERY = "Products arriving past the needed date, ex. holiday gifts"
+    DAMAGED_DEFECTIVE_OR_MISSING_PARTS = "Items arriving broken, defective or missing parts and make it non-funcional and a return or replacement mandatory"
+    CHANGED_MIND_OR_IMPULSE_BUY = "Buyer's remorse to buy it or just don't want it any more"
+    LATE_DELIVERY_NO_LONGER_NEEDED = "Products arriving past the needed date of a holiday/ event/ project or the event got canceled and no longer needed any more"
     WRONG_ITEM_SHIPPED = "Possibly pick-and-pack or labeling mistakes in the warehouse"
+    BETTER_PRICE_FOUND = "Find a better price in a competitor's site" # possibly price matching
+    DIFFICULT_TO_ASSEMBLY = "The item is overly complex or the instructions are incomprehensive"
+    DIFFERENT_COLOR_OR_STYLE = "Want a different color or style"
+    OTHERS = "None of the above"
 
+    # Other reasons like duplicate gift, gift not liked, accidental dulicate ordeer, incompatible hardware software, difficult assembly to use
 
+class ExchangeReturnRefundAction(StrEnum):
+    EXCHANGE = "exchange"
+    RETURN = "return"
+    PARTIAL_REFUND = "partial_refund"
+    EXPEDITE_EXCHANGE = "expedite_exchange"
+    EXCHANGE_RETURN = "exchange or return"
 
+       
 #############################################
 #
 # The followings are business objects or DAO
@@ -132,7 +149,7 @@ class CustomerSupportState(MessagesState):
     summary: str
     customer_name: str
     customer_context: CustomerContext
-    support_category: Literal["order_inquery", "return_refund", "general/ others"] = 'general/ others'
+    support_category: Literal["order_inquery", "exchange_or_return", "return_refund", "general/ others"] = 'general/ others'
     general_inquiry: str
     faq_match_evals: FAQMatchEvals | None
     escalation_reason: str = None # This is for the future use: escalating and summarizing the reason to slack's CSR channel
@@ -142,9 +159,8 @@ class CustomerSupportState(MessagesState):
     order_is_revisit: bool = False # set by detect_order_revisit_node; routes order_init straight into order_continue_chat_node
     order_issue_escalated: bool = False
     order_issue_resolved: bool = False
-    intent_for_exchange_or_return_refund: bool = False
-    start_return_for_refund: bool = False
     order_refund_eligible: OrderRefundStatus
+    exchange_return_reason: ExchangeOrReturnInput
     refund_request: RefundRequest
     summarize_on_exit: bool = False
 
@@ -209,9 +225,7 @@ class OrderInitRequest(BaseModel):
 class OrderStructuredOutput(BaseModel):
     response: str | None = None
     escalate: bool = False
-    escalation_reason: Literal[ESCALATE_REASON.HELP_LOST_SHIPMENT, ESCALATE_REASON.HELP_CANCEL_ORDER, ESCALATE_REASON.HELP_ANSWER_ORDER_INQUIRY] | None = None
-    intent_for_exchange_or_return_refund: bool = False
-    start_return_for_refund: bool = False
+    escalation_reason: ESCALATE_REASON | None = None
     order_issue_resolved: bool = False
 
 class OrderInitResponse(BaseModel):
@@ -226,8 +240,6 @@ class OrderContinueRequest(BaseModel):
 class OrderContinueResponse(BaseModel):
     thread_id: str
     response: str
-    escalation_reason: str | None = None
-    intent_for_return_refund: bool = False
 
 class SummarizeOnExit(BaseModel):
     thread_id: str 
@@ -239,4 +251,13 @@ class ItemToReturn(BaseModel):
 class OrderToReturn(BaseModel):
     thread_id: Annotated[str, Field(min_length=1)]
     items: Annotated[list[ItemToReturn], Field(min_length=1)]
+
+class ExchangeOrReturnInput(BaseModel):
+    thread_id: Annotated[str, Field(min_length=1)]
+    reason_option: ExchangeReturnReason
+    reason_input: str | None = None
+
+class ExchangeOrReturnOutput(BaseModel):
+    thread_id: str
+    response: str | None = None
     

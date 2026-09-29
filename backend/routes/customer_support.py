@@ -3,10 +3,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 import os
 from models.model import GeneralSupportRequest, GeneralSupportResponse, OrderInitRequest, OrderInitResponse, \
-    OrderContinueRequest, OrderContinueResponse, SummarizeOnExit, OrderToReturn
+    OrderContinueRequest, OrderContinueResponse, SummarizeOnExit, OrderToReturn, ExchangeOrReturnInput, ExchangeOrReturnOutput
 import logging
 from services.customer_support_service import invoke_general_support_workflow, invoke_order_init_workflow, invoke_order_continue_workflow, \
-    invoke_summarize_on_exit, invoke_return_refund_init_workflow
+    invoke_summarize_on_exit, invoke_return_refund_init_workflow, invoke_exchange_return_recommendation_workflow
 
 
 MAX_MESSAGE_CHARS = 4_000
@@ -33,6 +33,11 @@ async def order_support_init(support: OrderInitRequest, request: Request) -> Ord
 async def order_support_continue(support: OrderContinueRequest, request: Request) -> OrderContinueResponse:
     logger.info(f"Continue order inquiry with : {support.user_conversation}")
     return await invoke_order_continue_workflow(support, request)
+
+@router.post("/exchange_return/recommend")
+async def exchange_return_recommend(exchange_return_reason: ExchangeOrReturnInput, request: Request) -> ExchangeOrReturnOutput :
+    logger.info(f"Get exchange or return recommendation based upon the given reason for {exchange_return_reason.thread_id}")
+    return await invoke_exchange_return_recommendation_workflow(exchange_return_reason, request)
 
 @router.post("/return_refund/init")
 async def return_refund_init(order_to_return: OrderToReturn, request: Request):

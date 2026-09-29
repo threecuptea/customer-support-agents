@@ -39,15 +39,15 @@ export const FAQ_SECTIONS: FaqSection[] = [
     ]
   },
   {
-    "title": "Exchange, Returns and Refunds",
+    "title": "Exchange, Return and Refund",
     "entries": [
       {
-        "question": "Choose to exchange or return?",
+        "question": "How do I choose between exchange and return?",
         "answer": "Exchange when your item has wrong size or fit or you want a different color or style or the product arrived broken or doesn't work and you want a fresh replacement. Return when the product didn't meet expectations or you change your mind entirely or the product you like to exchange with is out of stock"
       },
       {
         "question": "How do I start an exchange? ",
-        "answer": "Go to e-shopping.com, look for Support -> Echange on the top of the screen and follow the instruction to initiate the exchange. We'll include the return shipping label in the confirmation email and ship the exchange once the original item is scanned by the carrier."
+        "answer": "Go to e-shopping.com, look for Support -> Echange on the top of the screen then follow the instruction to initiate an exchange. We'll include the return shipping label in the confirmation email and ship the exchange once the original item is scanned by the carrier."
       },
       {
         "question": "What items cannot be returned?",
@@ -81,6 +81,10 @@ export const FAQ_SECTIONS: FaqSection[] = [
       {
         "question": "What payment methods do you accept?",
         "answer": "We take credit/ debit cards, PayPal, Apple Pay, and Google Wallet."
+      },
+      {
+        "question": "Would you price match if your competitor offer a better price?",
+        "answer": "We will price match on selective items."
       },
       {
         "question": "Can I cancel my order?",

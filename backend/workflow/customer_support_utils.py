@@ -36,11 +36,11 @@ FAQs = {
         "Do you ship internationally?": "Yes, to select countries. Shipping costs show at checkout.",
         "What if my package is lost or late?": "Check your tracking link first. Contact us if you still have trouble to get it on time",
     },
-    "Exchange, Returns and Refunds": {
-        "Choose to exchange or return?": "Exchange when your item has wrong size or fit or you want a different color or style or the product arrived broken "
+    "Exchange, Return and Refund": {
+        "How do I choose between exchange and return?": "Exchange when your item has wrong size or fit or you want a different color or style or the product arrived broken "
         "or doesn't work and you want a fresh replacement. Return when the product didn't meet expectations or you change your mind entirely "
         "or the product you like to exchange with is out of stock", 
-        "How do I start an exchange? ": "Go to e-shopping.com, look for Support -> Echange on the top of the screen and follow the instruction to initiate the exchange. "
+        "How do I start an exchange? ": "Go to e-shopping.com, look for Support -> Echange on the top of the screen then follow the instruction to initiate an exchange. "
         "We'll include the return shipping label in the confirmation email and ship the exchange once the original item is scanned by the carrier.",
 
         "What items cannot be returned?": "We cannot accept returns on final sale items, customized items, perishable items, gift cards, or items that have been altered or damaged by the customer. "
@@ -58,6 +58,7 @@ FAQs = {
     },
     "Orders and Payment": {
         "What payment methods do you accept?": "We take credit/ debit cards, PayPal, Apple Pay, and Google Wallet.",
+        "Would you price match if your competitor offer a better price?": "We will price match on selective items.", 
         "Can I cancel my order?": "You can cancel your order as long as the order is in pending status.  You cannot cancel an order once it has been shipped and in transit status.",
         "Is my payment secure?": "Yes. All data is encrypted via SSL.",
     }    
@@ -65,7 +66,7 @@ FAQs = {
 
 faq_dict = {}
 faq_dict.update(FAQs['Shipping & Delivery'])
-faq_dict.update(FAQs['Exchange, Returns and Refunds'])
+faq_dict.update(FAQs['Exchange, Return and Refund'])
 faq_dict.update(FAQs['Orders and Payment'])
 faq_qst_lst = list(faq_dict.keys())
 

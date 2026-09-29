@@ -1,6 +1,6 @@
 from __future__ import annotations
 from models.model import CustomerSupportState, FAQMatchEvals, FAQMatchResult, Order, OrderStructuredOutput,\
-    ESCALATE_REASON, OrderRevisitEval
+    ESCALATE_REASON, OrderRevisitEval, ExchangeReturnRefundAction, ExchangeReturnReason, ExchangeOrReturnInput
 
 from langgraph.graph import END, START, StateGraph
 from langchain_core.messages import HumanMessage, RemoveMessage, SystemMessage, AIMessage, ChatMessage
@@ -28,6 +28,12 @@ ESCALATE_REASON_FAQ = "Unable to find a satifactory answer to the customer's que
 PREFIX_ANSWER_QUESTION = "I don't have an answer to your question."
 PREFIX_LOST_SHIPMENT = "You need help to handle your lost shipment."
 PREFIX_CANCEL_ORDER = "You need help to cancel your order."
+PREFIX_CHECK_RETURN_REFIND_STATUS = "You need help to check the return refund status of your order."
+PREFIX_NEED_EXPEDIT_REPLACEMENT = "need to expedite a replacement"
+PREFIX_RCVD_DAMAGED_PRODUCT = "You received broken or defective items or a product with missing parts"
+PREFIX_RCVD_WRONG_ITEM = "You received an wrong item"
+PREFIX_FOUND_BETTER_PRICE = "You found that our competitor offer a better price and we like to see if we can price match that."
+
 
 SUMMARIZE_MESSAGE_THRESHOLD = 6
 FUNCTION_FAQ_FUZZY_MATCH = "find_closest_faq"
@@ -36,6 +42,7 @@ SOURCE_FAQ_LLM_MATCH = "faq_llm_match"
 SOURCE_FAQ_LLM_EVALS = "faq_llm_evals"
 SOURCE_ORDER_RETRIEVAL = "retrieve_target_order"
 SOURCE_ORDER_INQUIRY = "order_inquiry"
+SOURCE_EXCHANGE_RETURN_REASON = "exchange_return_reason"
 ROLE_FUNCTION_CALL = "function"
 ROLE_AGENT = "assistant"
 
@@ -76,7 +83,8 @@ class CustomerSupportAgent:
         The summary grows richer turn by turn. Token costs stay nearly flat no matter how long
         the conversation runs.
         """
-        shared_instruction = "Focus on: any order(s) mentioned, order number and product name, and what order/ product issue occurred and what actions were taken."
+        shared_instruction = "Focus on: any order(s) mentioned, order number and product name, and what order/ product issue occurred and what actions were taken." \
+        "Record the exchange/ return reason if any"
         existing_summary = state.get("summary", "")
         if existing_summary:
             # Extend the existing summary with new messages
@@ -241,26 +249,31 @@ class CustomerSupportAgent:
         recent_conversations = "\n".join(
             [f"- {message.content}" for message in state['messages'] if not isinstance(message, SystemMessage)]
         )
+        # Make best use of state['order_is_revisit'] flag
+        # Switch to initiate the 'Exchange or return for refund' by the customer.  Separate revisit handling and don't 
+        # asssume the escalation unless the confirmation is received.
+        # Also make `order_issue_resolved` criteria clearer
         SYSTEM_PROMPT = f"""
             You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her order.
             Here is the target order {state['target_order'].model_dump_json()}
+            {'The customer is revisting the same order' if state['order_is_revisit'] else ''}
             Here is what we remember about this customer from past visits, if any: {memory_notes if memory_notes else "None yet"}.
             Here is the most recent conversations in sequential order: {recent_conversations if recent_conversations else "None yet"}.
             Here is the summary of the previous conversation: {state.get("summary") if state.get("summary") else "None yet"}.
             The above is the context of this order.
 
             DO NOT REPEAT the same response!! Look for re-visit/ escalate signal!!  
-            If the customer's prior visit for this order is for a lost shipment and he/ she revisit to ask for 
-            help,  set the `escalate` flag to True and set '{ESCALATE_REASON.HELP_LOST_SHIPMENT}' as the `escalate_reason`.
-            If the customer's prior visit for this order is due to a long 'pending' status and he/ she want to cancel the order, 
+            If the customer is revisting the same order and the prior visit is for a lost shipment and we haven't had recent conversations
+            regarding to the lost shipment yet, ask if he/ she has found it and if needs our help.
+            (Continued) If we have started recent conversations and he/ she like our help for the lost shipment,  
+            set the `escalate` flag to True and set '{ESCALATE_REASON.HELP_LOST_SHIPMENT}' as the `escalate_reason`.
+            If the customer is revisting the same order and the prior visit is due to a long 'pending' status and the order is still 'pending'
+            and and we haven't had recent conversations for the long 'pending' order, ask if he/ she like to cancel the order.
+            (Continued) If we have started recent conversations and he/ she like to cancel the order
             set the `escalate` flag to true and set '{ESCALATE_REASON.HELP_CANCEL_ORDER}' as the `escalate_reason`.
-            If the customer has already expressed his/ her intent for 'exchange or return for refund' regardless if he/ she revisit or not, 
-            set 'intent_for_exchange_or_return_refund' to True.
-            If the customer like to go straight to start a return for refund regardless if he/ she revisit or not, 
-            set 'start_return_for_refund' to True.
-             
-            You can wrap up by saying something like 'Can help you with anything else?' if you find it is at the end of the conversation.
-            Set `order_issue_resolved` when the customer reply with ending signal.
+            
+            You can wrap up by saying something like 'Can I help you with anything else?' if you find it is at the end of the conversation.
+            Set `order_issue_resolved` when the customer reply with an ending signal.
             Return your response for the above.
                                    
             The rest of scenarios that we are trying to cover:
@@ -271,25 +284,34 @@ class CustomerSupportAgent:
             If the photo is not taken in the customer's porch or no photo taken, ask the customer to look around the house and/ or check with neighbors.
             Let the customer know that he/ she can always re-visit us after he/ she exhaust searches knowing the shipment is not stolen. 
              
-            if the order status is 'delivered' and the customer is complaining about item(s) delivered for any of the following reason
+            if the customer is revisiting the same order and complained about item(s) delivered before or
+            the customer is complaining about item(s) delivered for any of the following reasons or more
             * Wrong Size or Fit
             * Doesn't Match Description or Photos
             * Damaged or Defective
             * Changed Mind or Impulse Buy
             * Late Delivery
             * Wrong Item   
-            Ask the customer if he/ she like to exchange or return for refunds if the customer hasn't expressed his/ her intent yet.
+            Tell the customer he/ she can press 'Intend to Exchange or Return for Refund' button if he/ she want to do that and we will help the process.
 
             if the order status is 'transit', ask the customer to track the whereabouts of the shipping using the UPS's tracking number.
             if the order status is 'pending', let him/ her know that the order should be fulfilled no later than {(state['target_order'].order_date + timedelta(days= 7)).isoformat()} (within 7 days).  
             The customer can always call back by then to cancel the order.
             if the customer like to cancel the order now, you should set the `escalate` flag to true and set '{ESCALATE_REASON.HELP_CANCEL_ORDER}' as the `escalate_reason`
 
+            The customer-support agent app currently is not supporting checking the return refund status of a specific order.  Delegate it to human customer-support representative
+            by setting the `escalate` flag to true and set '{ESCALATE_REASON.HELP_CHECK_RETURN_REFUND_STATUS}' as the `escalate_reason`
+
+            If the customer ask a general inquiry not related to his/ her recent order, ask him/ her to click 'general inquiry' button. The agent there 
+            will be happy to help.
+
             if the customer's conversation lead to an uncovered scenario or that you do not have an answer, please set `escalate` flag to True and set
             '{ESCALATE_REASON.HELP_ANSWER_ORDER_INQUIRY}' as the `escalate_reason`
 
             set `response` to what you want to reply 
             """
+            # It's possible that the customer also ask some 'general inquiry', will direct the customer to click 'general inquiry' button for now. 
+            # Try not to use too many tokens
         
         system_msg = SystemMessage(content=SYSTEM_PROMPT)
         logger.info("order_continue_chat_node prompt for order #%s:\n%s", state['order_number_provided'], SYSTEM_PROMPT)
@@ -304,6 +326,8 @@ class CustomerSupportAgent:
                     prefix = PREFIX_LOST_SHIPMENT
                 case ESCALATE_REASON.HELP_CANCEL_ORDER:
                     prefix = PREFIX_CANCEL_ORDER
+                case ESCALATE_REASON.HELP_CHECK_RETURN_REFUND_STATUS:
+                    prefix = PREFIX_CHECK_RETURN_REFIND_STATUS    
                 case _:
                     prefix = PREFIX_ANSWER_QUESTION
             response = f"{prefix} {ESCALATE_MESSAGE}"                
@@ -313,10 +337,7 @@ class CustomerSupportAgent:
                 "messages": [message],
                 "response": response,
                 "escalation_reason": f"{escalation_reason} of order #{state['order_number_provided']}",
-                "order_issue_escalated": True,
-                "intent_for_exchange_or_return_refund": False,
-                "start_return_for_refund": False,
-
+                "order_issue_escalated": True,               
             }
                         
         message = AIMessage(content= order_output.response, additional_kwargs={
@@ -325,9 +346,6 @@ class CustomerSupportAgent:
             "messages": [message],
             "response": order_output.response,
             "order_issue_resolved": order_output.order_issue_resolved, # signal writing the summary
-            "intent_for_exchange_or_return_refund": order_output.intent_for_exchange_or_return_refund,
-            "start_return_for_refund": order_output.start_return_for_refund,
-
         }
 
     # Preparation only: retrieve the order and set it on state. Deliberately separate from
@@ -412,6 +430,67 @@ class CustomerSupportAgent:
             "response": response,
         }
 
+    ##########################################################################
+    #       Exchange or return survey, assume no interaction is needed
+    ##########################################################################
+    # This is not a chat screen and do have buttons to direct to other screen, including 'start a return refund'. Design a static response
+    # for now.
+    def get_recommended_action(self, reason: ExchangeOrReturnInput) -> tuple[ExchangeReturnReason, ExchangeReturnRefundAction] :
+        if reason:
+            match reason.reason_option:
+                case ExchangeReturnReason.DAMAGED_DEFECTIVE_OR_MISSING_PARTS | ExchangeReturnReason.WRONG_ITEM_SHIPPED:
+                    return reason.reason_option, ExchangeReturnRefundAction.EXPEDITE_EXCHANGE
+                case ExchangeReturnReason.BETTER_PRICE_FOUND:
+                    return reason.reason_option, ExchangeReturnRefundAction.PARTIAL_REFUND
+                case ExchangeReturnReason.WRONG_SIZE_OR_FIT | ExchangeReturnReason.DIFFERENT_COLOR_OR_STYLE:
+                    return  reason.reason_option, ExchangeReturnRefundAction.EXCHANGE
+                case _:
+                    return reason.reason_option, ExchangeReturnRefundAction.RETURN
+
+        return None, ExchangeReturnRefundAction.RETURN        
+
+    async def exchange_return_reason_recommendation_node(self, state: CustomerSupportState) -> dict[str, Any]:
+        # Will validate at the service level
+        reason, action = self.get_recommended_action(state['exchange_return_reason'])
+        if action == ExchangeReturnRefundAction.EXPEDITE_EXCHANGE:
+            if reason == ExchangeReturnReason.DAMAGED_DEFECTIVE_OR_MISSING_PARTS:
+                prefix = f'{PREFIX_RCVD_DAMAGED_PRODUCT} and {PREFIX_NEED_EXPEDIT_REPLACEMENT}'
+            else:
+                prefix = f'{PREFIX_RCVD_WRONG_ITEM} and {PREFIX_NEED_EXPEDIT_REPLACEMENT}'
+            response = f"{prefix} {ESCALATE_MESSAGE}"                
+            message = ChatMessage(content= response, role= ROLE_AGENT, additional_kwargs={
+                    "source": SOURCE_EXCHANGE_RETURN_REASON})
+            return {
+                "messages": [message],
+                "response": response,
+                "escalation_reason": f"{ESCALATE_REASON.HELP_EXPEDITE_EXCHANGE_FOR_DEFECTIVE_WRONG_ITEM} of order #{state['order_number_provided']}",       
+            }
+        elif action == ExchangeReturnRefundAction.PARTIAL_REFUND:
+            prefix = PREFIX_FOUND_BETTER_PRICE
+            response = f"{prefix} {ESCALATE_MESSAGE}"                
+            message = ChatMessage(content= response, role= ROLE_AGENT, additional_kwargs={
+                    "source": SOURCE_EXCHANGE_RETURN_REASON})
+            return {
+                "messages": [message],
+                "response": response,
+                "escalation_reason": f"{ESCALATE_REASON.HELP_DECIDE_IF_PRICE_MATCH_WITH_COMPETITOR} of order #{state['order_number_provided']}",       
+            }
+        elif action == ExchangeReturnRefundAction.EXCHANGE:
+            response = f"""We recommend 'exchange' since you want a different size, color or style. 
+            Go to e-shopping.com, look for Support -> Echange on the top of the screen then follow the instruction to initiate an exchange.
+            You can come back here to press “Start return for refund process” button if we are unable to find an suitable item to exchange with. 
+            """
+            message = ChatMessage(content= response, role= ROLE_AGENT, additional_kwargs={
+                "source": SOURCE_EXCHANGE_RETURN_REASON})
+            return { "messages": [message], "response": response}
+        else: # return
+            response = f"""We recommend 'Return' based upon the reason you provided. Press “Start return for refund process” button to initiate.
+            However, if you have a purchase item in your mind and like to take advantage of a return shipping label we offer for an exchange,   
+            just go to e-shopping.com, look for Support -> Echange on the top of the screen then follow the instruction to initiate an exchange instead."""
+            message = ChatMessage(content= response, role= ROLE_AGENT, additional_kwargs={
+                "source": SOURCE_EXCHANGE_RETURN_REASON})
+            return { "messages": [message], "response": response}
+                        
 
     ###############################################
     #            Routes after a node
@@ -424,6 +503,8 @@ class CustomerSupportAgent:
         match state['support_category']:
             case "general/ others":
                 return "general_faq"
+            case "exchange_or_return":
+                return "exchange_or_return"
             case _:
                 return self.route_order(state)       
 
@@ -472,13 +553,10 @@ class CustomerSupportAgent:
         return "general_faq_llm_match_node"
 
     def route_after_order_continue_chat(self, state: CustomerSupportState) -> str:
-            if self._should_summarize(state, 
-                                      state.get("intent_for_return_refund") or  
-                                      state.get("order_issue_escalated") or 
-                                      state.get("order_issue_resolved")):
-                return "summarize_node"
-            return END 
-     
+        if self._should_summarize(state, state.get("order_issue_escalated") or state.get("order_issue_resolved")):
+            return "summarize_node"
+        return END 
+    
 
     ###############################################
     #            Build the support graph
@@ -490,6 +568,7 @@ class CustomerSupportAgent:
         builder.add_conditional_edges(START, self.route_branch,
                                       {"summarize_node": "summarize_node",
                                        "general_faq": "general_faq_eval_node",
+                                       "exchange_or_return": "exchange_return_reason_recommendation_node",
                                        "order_init": "retrieve_target_order_node",
                                        "order_init_done": "order_continue_chat_node"})
         
@@ -524,6 +603,9 @@ class CustomerSupportAgent:
 
         builder.add_conditional_edges("order_continue_chat_node", self.route_after_order_continue_chat,
             {"summarize_node": "summarize_node", END: END})
+
+        builder.add_node("exchange_return_reason_recommendation_node", self.exchange_return_reason_recommendation_node)
+        builder.add_edge("exchange_return_reason_recommendation_node", "summarize_node")
         
         graph = builder.compile(checkpointer = self.checkpointer, store = self.store)
         self.graph = graph

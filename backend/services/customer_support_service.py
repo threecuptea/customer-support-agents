@@ -4,7 +4,7 @@ from fastapi import Request, HTTPException
 import os
 from langchain_core.messages import HumanMessage, SystemMessage
 from models.model import GeneralSupportRequest, GeneralSupportResponse, OrderInitRequest, OrderInitResponse, \
-    OrderContinueRequest, OrderContinueResponse, SummarizeOnExit, OrderToReturn, Order
+    OrderContinueRequest, OrderContinueResponse, SummarizeOnExit, OrderToReturn, Order, ExchangeOrReturnInput, ExchangeOrReturnOutput
 from memory import load_user_memory
 import uuid
 import logging
@@ -69,7 +69,6 @@ async def invoke_order_init_workflow(support: OrderInitRequest, request: Request
             "order_issue_escalated": False,
             "order_issue_resolved": False,
             "escalation_reason": None,
-            "intent_for_return_refund": False,
             "summarize_on_exit": False,
     }    
     try:
@@ -104,13 +103,35 @@ async def invoke_order_continue_workflow(support: OrderContinueRequest, request:
        return OrderContinueResponse(
            thread_id=thread_id,
            response=customer_support_state["response"],
-           escalation_reason= customer_support_state["escalation_reason"],
-           intent_for_return_refund= customer_support_state["intent_for_return_refund"],
        )
     except Exception as exc:
-        error_msg = "Error continuing customer-support order_inquery"
+        error_msg = "Error continuing customer-support order_inquiry"
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
+
+async def invoke_exchange_return_recommendation_workflow(exchange_return_reason: ExchangeOrReturnInput, request: Request) -> ExchangeOrReturnOutput:
+    graph = request.app.state.support_graph
+    thread_id = exchange_return_reason.thread_id
+    config = {"configurable": {"thread_id": thread_id}}
+    messages = []
+    messages.append(HumanMessage(content= f"The customers' exchange/ return reason: {exchange_return_reason.reason_option.value}"))
+    initial_state = {
+        "messages": messages,
+        "support_category": "exchange_or_return",
+        "exchange_return_reason": exchange_return_reason,
+        "escalation_reason": None,    
+    }     
+    try:
+        customer_support_state  = await graph.ainvoke(initial_state, config)
+        return ExchangeOrReturnOutput(
+            thread_id=thread_id,
+            response=customer_support_state["response"],
+        )
+    except Exception as exc:
+        error_msg = "Error getting exchange or return recommendation based upon the given reason"
+        logger.exception(error_msg)
+        raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
+
 
 async def invoke_return_refund_init_workflow(order_to_return: OrderToReturn, request: Request):
     graph = request.app.state.support_graph
@@ -134,7 +155,6 @@ async def invoke_return_refund_init_workflow(order_to_return: OrderToReturn, req
         initial_state = {
             "messages": messages,
             "support_category": "return_refund",
-            "intent_for_return_refund": True,
         }
         customer_support_state  = await graph.ainvoke(initial_state, config)
         # what should I return
