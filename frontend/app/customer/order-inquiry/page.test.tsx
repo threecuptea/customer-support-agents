@@ -29,7 +29,8 @@ const orderOlder: Order = {
       supplier_name: "Acme",
       unit_price: 25,
       number_units: 2,
-      intimate_item: false,
+      nonrefundable_item: false,
+      nonrefundable_reason: null,
     },
   ],
 };
@@ -52,7 +53,8 @@ const orderNewer: Order = {
       supplier_name: "Beta",
       unit_price: 30,
       number_units: 1,
-      intimate_item: false,
+      nonrefundable_item: false,
+      nonrefundable_reason: null,
     },
   ],
 };

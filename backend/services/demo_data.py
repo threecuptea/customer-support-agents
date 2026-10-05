@@ -12,17 +12,18 @@ threshold_days_auto_approve = int(os.getenv("DAYS_THRESHOLD_AUTO"))
 
 
 customer_order_status_map = {
-    "wolf.blitzer@cnn.com": [OrderRefundStatus.ORDER_NON_REFUNDABLE_DAYS],
-    "pamela.brown@cnn.com": [OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_AMOUNT],
+    "wolf.blitzer@cnn.com": [OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS],
+    "pamela.brown@cnn.com": [OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT],
     "anderson.cooper@cnn.com": [OrderRefundStatus.ORDER_AUTO_REFUNDABLE],
     "jake.tapper@cnn.com": [OrderRefundStatus.ORDER_IN_TRANSIT],
     "john.king@cnn.com": [OrderRefundStatus.ORDER_IN_PENDING],
     "harry.enten@cnn.com": [OrderRefundStatus.ORDER_DATA_INVALID],
-    "dana.bash@cnn.com": [OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_ITEMS],
+    "dana.bash@cnn.com": [OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS],
     "manu.raju@cnn.com": [OrderRefundStatus.ORDER_DELIVERED_BORDERLINE],
     "sonya_ling1947@yahoo.com": [
         OrderRefundStatus.ORDER_IN_TRANSIT,
-        OrderRefundStatus.ORDER_AUTO_REFUNDABLE]
+        OrderRefundStatus.ORDER_AUTO_REFUNDABLE],
+    "abby.phillip@cnn.com": [OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS],    
 }
 
 
@@ -41,10 +42,10 @@ def adjust_days_demo_data_testable():
             if order.get("estimated_delivery_date") and order.get("status") == "delivered":
                 order["delivery_date"] = order["estimated_delivery_date"]
             match order_refund_status[i]:
-                case OrderRefundStatus.ORDER_NON_REFUNDABLE_DAYS:
+                case OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS:
                     order["delivery_date"] = datetime.now(_zoneinfo) - timedelta(days= threshold_days_auto_approve + 3)
                     _auto_adjust_days(order)
-                case OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_AMOUNT | OrderRefundStatus.ORDER_AUTO_REFUNDABLE | OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_ITEMS:
+                case OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT | OrderRefundStatus.ORDER_AUTO_REFUNDABLE | OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS:
                     order["delivery_date"] = datetime.now(_zoneinfo) - timedelta(days= 25)
                     _auto_adjust_days(order)
                 case OrderRefundStatus.ORDER_DELIVERED_BORDERLINE:
@@ -66,8 +67,8 @@ def _auto_adjust_days(order: dict):
             order["estimated_delivery_date"] = order["delivery_date"]
         order["ship_date"] = order["estimated_delivery_date"] - timedelta(days= 5)
         order["order_date"] = order["ship_date"] - timedelta(days= 3)
-    
-#TODO: Modify to have users with multiple orders.           
+
+               
 demo_customers = {
     "anderson.cooper@cnn.com": {
         "customer_id": 32098,
@@ -94,36 +95,36 @@ demo_customers = {
         }], 
     },
     "wolf.blitzer@cnn.com": {
-            "customer_id": 32099,
-            "first_name": "Wolf",
-            "last_name": "Blitzer",
-            "title": "Mr.",
-            "email": "wolf.blitzer@cnn.com",
-            "latest_orders":[{
-                "order_id": 123457,
-                "order_date": datetime(2026, 7, 1, 21, 5, 0, tzinfo= _zoneinfo),
-                "total_amount_incl_tax": 84.30,
-                "tax_applied_rate": 0.075,
-                "status": "delivered",
-                "ship_date": datetime(2026, 7, 3, 19, 45, 0, tzinfo= _zoneinfo),
-                "estimated_delivery_date": datetime(2026, 7, 7, 12, 45, 0, tzinfo= _zoneinfo),
-                "tracking_number": "1Z9999993178999999",
-                "items": [{
-                    "product_id": "PRD-1015",
-                    "product_name": "Bike Light",
-                    "supplier_name": "Premier Merchandize",
-                    "unit_price": 30.26,
-                    "number_units": 2,
-                },
-                {
-                    "product_id": "PRD-1022",
-                    "product_name": "Water Bottle",
-                    "supplier_name": "United Imports",
-                    "unit_price": 17.9,
-                    "number_units": 1,
-                }]
-            }]  
-        },
+        "customer_id": 32099,
+        "first_name": "Wolf",
+        "last_name": "Blitzer",
+        "title": "Mr.",
+        "email": "wolf.blitzer@cnn.com",
+        "latest_orders":[{
+            "order_id": 123457,
+            "order_date": datetime(2026, 7, 1, 21, 5, 0, tzinfo= _zoneinfo),
+            "total_amount_incl_tax": 84.30,
+            "tax_applied_rate": 0.075,
+            "status": "delivered",
+            "ship_date": datetime(2026, 7, 3, 19, 45, 0, tzinfo= _zoneinfo),
+            "estimated_delivery_date": datetime(2026, 7, 7, 12, 45, 0, tzinfo= _zoneinfo),
+            "tracking_number": "1Z9999993178999999",
+            "items": [{
+                "product_id": "PRD-1015",
+                "product_name": "Bike Light",
+                "supplier_name": "Premier Merchandize",
+                "unit_price": 30.26,
+                "number_units": 2,
+            },
+            {
+                "product_id": "PRD-1022",
+                "product_name": "Water Bottle",
+                "supplier_name": "United Imports",
+                "unit_price": 17.9,
+                "number_units": 1,
+            }]
+        }]  
+    },
     "pamela.brown@cnn.com": {
         "customer_id": 32100,
         "first_name": "Pamela",
@@ -140,9 +141,9 @@ demo_customers = {
             "estimated_delivery_date": datetime(2026, 8, 1, 14, 30, 0, tzinfo= _zoneinfo),
             "tracking_number": "1Z9999993182999999",
             "items": [{
-                "product_id": "PRD-1099",
-                "product_name": "Sterling Silver White Sapphire Pendant Necklace",
-                "supplier_name": "Costal Trading",
+                "product_id": "PRD-1999",
+                "product_name": "Cannondale Trail 3 Mountain Bike",
+                "supplier_name": "REI",
                 "unit_price": 529.99,
                 "number_units": 1,
                 },
@@ -248,7 +249,8 @@ demo_customers = {
                 "supplier_name": "Victoria's Secret",
                 "unit_price": 64.95,
                 "number_units": 1,
-                "intimate_item": True,
+                "nonrefundable_item": True,
+                "nonrefundable_reason": "intimate item",
                 },
             ]
         }]  
@@ -303,7 +305,7 @@ demo_customers = {
             "tracking_number": "1Z99999996479999990",
             "items": [{
                 "product_id": "PRD-1463",
-                "product_name": "PowerBank",
+                "product_name": "Hiking Gloves",
                 "supplier_name": "National Supply Group",
                 "unit_price": 44.74,
                 "number_units": 2,
@@ -325,6 +327,33 @@ demo_customers = {
                 "unit_price": 67.60,
                 "number_units": 1,
             }]  
+        }]  
+    },
+    "abby.phillip@cnn.com": {
+        "customer_id": 32107,
+        "first_name": "Abby",
+        "last_name": "Phillip",
+        "title": "Ms.",
+        "email": "abby.phillip@cnn.com",
+        "latest_orders":[{
+            "order_id": 123465,
+            "order_date": datetime(2026, 7, 25, 21, 10, 0, tzinfo= _zoneinfo),
+            "total_amount_incl_tax": 503.68,
+            "tax_applied_rate": 0.095,
+            "status": "delivered",
+            "ship_date": datetime(2026, 7, 28, 19, 45, 0, tzinfo= _zoneinfo),
+            "estimated_delivery_date": datetime(2026, 8, 1, 14, 30, 0, tzinfo= _zoneinfo),
+            "tracking_number": "1Z9999993182999999",
+            "items": [{
+                "product_id": "PRD-1099",
+                "product_name": "Sterling Silver White Sapphire Pendant Necklace",
+                "supplier_name": "Costal Trading",
+                "unit_price": 459.99,
+                "number_units": 1,
+                "nonrefundable_item": True,
+                "nonrefundable_reason": "luxury goods",
+                },
+            ]
         }]  
     },
 }

@@ -39,15 +39,27 @@ export const FAQ_SECTIONS: FaqSection[] = [
     ]
   },
   {
-    "title": "Returns and Refunds",
+    "title": "Exchange, Return and Refund",
     "entries": [
       {
-        "question": "What is your return policy?",
-        "answer": "We accept returns within 35 days of delivery for unused items"
+        "question": "How do I choose between exchange and return?",
+        "answer": "Exchange when your item has wrong size or fit or you want a different color or style or the product arrived broken or doesn't work and you want a fresh replacement. Return when the product didn't meet expectations or you change your mind entirely or the product you like to exchange with is out of stock"
+      },
+      {
+        "question": "How do I start an exchange? ",
+        "answer": "Go to e-shopping.com, look for Support -> Echange on the top of the screen then follow the instruction to initiate an exchange. We'll include the return shipping label in the confirmation email and ship the exchange once the original item is scanned by the carrier."
+      },
+      {
+        "question": "What items cannot be returned?",
+        "answer": "We cannot accept returns on final sale items, customized items, perishable items, gift cards, or items that have been altered or damaged by the customer. Certain high-risk items, such as luxury goods and intimate items, are marked as non-returnable unless they are defective or damaged upon receipt."
+      },
+      {
+        "question": "What is your return policy in summary?",
+        "answer": "We accept returns within 35 days of delivery for unused items.  The return item must have its tags attached and be returned in its original packaging with your receipt or proof of purchase"
       },
       {
         "question": "Can I still get my refund if my order exceeds the return window of the policy",
-        "answer": "Sorry, we have already extended 5 more days."
+        "answer": "No, we have already extended 5 more days."
       },
       {
         "question": "How do I start a return?",
@@ -55,11 +67,11 @@ export const FAQ_SECTIONS: FaqSection[] = [
       },
       {
         "question": "When will I get my refund?",
-        "answer": "Refunds usually take 7 to 10 business days after we get the item back."
+        "answer": "Refunds usually take 3 to 5 business days after we get the item back."
       },
       {
         "question": "Are returns free?",
-        "answer": "Yes, we will include the return shipping label in the request confirmation email"
+        "answer": "We are not charging any re-stocking fees. However, you will return at your own expense unless for defective, damaged or wrong items. We do cover the return shipping label if you exchange instead."
       }
     ]
   },
@@ -69,6 +81,10 @@ export const FAQ_SECTIONS: FaqSection[] = [
       {
         "question": "What payment methods do you accept?",
         "answer": "We take credit/ debit cards, PayPal, Apple Pay, and Google Wallet."
+      },
+      {
+        "question": "Would you price match if your competitor offer a better price?",
+        "answer": "We will price match on selective items."
       },
       {
         "question": "Can I cancel my order?",

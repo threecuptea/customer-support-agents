@@ -8,12 +8,12 @@ import pytest
 from main import app
 from models.model import FAQMatchEvals, Order, CustomerContext, OrderRevisitEval
 from workflow.customer_support import CustomerSupportAgent, ESCALATE_MESSAGE, FUNCTION_FAQ_FUZZY_MATCH, SOURCE_FAQ_FUZZY_MATCH, SOURCE_FAQ_LLM_MATCH, \
-    SOURCE_FAQ_LLM_EVALS, ROLE_FUNCTION_CALL, ROLE_AGENT, FAQ_MATCH_THRESHOLD, SYSTEM_ERROR_MESSAGE, SOURCE_ORDER_RETRIEVAL
+    SOURCE_FAQ_LLM_EVALS, ROLE_FUNCTION, ROLE_AGENT, FAQ_MATCH_THRESHOLD, SYSTEM_ERROR_MESSAGE, SOURCE_ORDER_RETRIEVAL, SOURCE_ORDER_INQUIRY, PREFIX_ANSWER_QUESTION
 from langchain_core.messages import HumanMessage
-from datetime import datetime
-from zoneinfo import ZoneInfo
+import uuid
 
-_zoneinfo = ZoneInfo("America/New_York")
+shared_thread_id = str(uuid.uuid4())
+shared_order_id = 12462
 
 @pytest.fixture()
 def client():
@@ -45,15 +45,15 @@ def test_general_faq_fuzz_match_node_returns_chat_message():
     result = asyncio.run(agent.general_faq_fuzz_match_node(state))
 
     assert result["general_issue_resolved"] is True
-    assert result["response"] == "We accept returns within 35 days of delivery for unused items"
+    assert "We accept returns within 35 days of delivery for unused items" in result["response"]
     assert len(result["messages"]) == 1
     assert isinstance(result["messages"][0], ChatMessage)
     assert result["messages"][0].content == result["response"]
-    assert result["messages"][0].role == ROLE_FUNCTION_CALL
+    assert result["messages"][0].role == ROLE_FUNCTION
     assert result["messages"][0].name == FUNCTION_FAQ_FUZZY_MATCH
     assert result["messages"][0].additional_kwargs['faq_match_result']
     assert result["messages"][0].additional_kwargs['faq_match_result'].confidence_score > FAQ_MATCH_THRESHOLD
-
+    
 
 def test_general_faq_fuzz_match_node_escalates_on_low_confidence():
     agent = CustomerSupportAgent(checkpointer=None, store=None)
@@ -110,7 +110,6 @@ def test_general_support_endpoint_escalates_under_mock_llm(client):
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data["general_inquiry"] == "What is your return policy?"
     # It comes from mocked llm issue, always negative
     assert ESCALATE_MESSAGE in data["response"]
     assert data["thread_id"]
@@ -285,7 +284,7 @@ def test_route_after_detect_order_revisit():
     assert agent.route_after_detect_order_revisit({}) == "order_init_static_response_node"
 
 
-def test_routes(client):
+def test_routes_up_to_order(client):
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     state = {
        "support_category": "general/ others",
@@ -317,7 +316,7 @@ def test_routes(client):
     assert agent.route_branch(state) == "order_init_done"
     
 
-def test_invoke_order_init_and_continue(client):
+def test_invoke_order_init_workflow(client):
     email_addr = "anderson.cooper@cnn.com"
     resp = client.post("/api/auth", json={"email_addr": email_addr})
     assert resp.status_code == 200
@@ -348,33 +347,59 @@ def test_invoke_order_init_and_continue(client):
     assert snapshot_init.values["target_order"]
     assert snapshot_init.values["summary"]
 
-    #TODO how can we improve LLM to make it more useful in unit tests.
-    # Will get {'detail': "Error continuing customer-support order_inquery: 'NoneType' object has no attribute 'escalate'"} because
-    # mock LLM return order_output: OrderStructuredOutput  None
-    """
-    result_continue = client.post(
-        "/api/support/order/continue",
-        json={"thread_id": thread_id, "user_conversation": "The Earbuds are not in high-quality as expected. I like to return and get the refund"},
+def test_invoke_order_continue_workflow(client):
+    email_addr = "anderson.cooper@cnn.com"
+    resp = client.post("/api/auth", json={"email_addr": email_addr})
+    assert resp.status_code == 200
+    data = resp.json()
+    context: CustomerContext = CustomerContext(**data['customer_context'])
+    target_order_id = context.latest_orders[0].order_id
+    # I got into Object of type CustomerContext is not JSON serializable error. 
+    # I must use Pydantic's built-in serialization methods rather than Python's standard json.dumps()
+    # Native Pydantic dict conversion
+    resp = client.post(
+        "/api/support/order/init",
+        json={"customer_context": context.model_dump(mode= "json"), "order_number_provided": target_order_id},
     )
-    """
-
-
-
-        
-
-
-
-
-
-
-
     
+    thread_id = resp.json()["thread_id"]
+    resp = client.post(
+            "/api/support/order/continue",
+            json={"thread_id": thread_id, "user_conversation": "I did not receive the shipment."},
+    )
+    assert resp.status_code == 200
+    assert PREFIX_ANSWER_QUESTION in resp.json()["response"]
+
+    graph = client.app.state.support_graph
+    config = {"configurable": {"thread_id": thread_id}}
+    snapshot = asyncio.run(graph.aget_state(config))
+
+    messages = snapshot.values["messages"]
+    assert isinstance(messages[-1], ChatMessage)
+    chat_message = messages[-1]
+    assert chat_message.role == ROLE_AGENT
+    assert chat_message.additional_kwargs["source"] ==SOURCE_ORDER_INQUIRY
+    assert PREFIX_ANSWER_QUESTION in chat_message.content
 
 
-
-
-
-
-
-            
+def test_invoke_order_continue_workflow_error(client):
+    email_addr = "anderson.cooper@cnn.com"
+    resp = client.post("/api/auth", json={"email_addr": email_addr})
+    assert resp.status_code == 200
+    data = resp.json()
+    context: CustomerContext = CustomerContext(**data['customer_context'])
+    target_order_id = context.latest_orders[0].order_id
+    # I got into Object of type CustomerContext is not JSON serializable error. 
+    # I must use Pydantic's built-in serialization methods rather than Python's standard json.dumps()
+    # Native Pydantic dict conversion
+    resp = client.post(
+        "/api/support/order/init",
+        json={"customer_context": context.model_dump(mode= "json"), "order_number_provided": target_order_id + 1},
+    )
     
+    thread_id = resp.json()["thread_id"]
+    resp = client.post(
+            "/api/support/order/continue",
+            json={"thread_id": thread_id, "user_conversation": "I did not receive the shipment."},
+    )
+    assert resp.status_code == 400
