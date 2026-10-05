@@ -30,16 +30,19 @@ class ESCALATE_REASON(StrEnum):
 # ORDER_DELIVERED_BORDERLINE are order supposed to be delivered according to the carrier but the customer does not see
 # the delivered items.  That's what a lot of order inquiry dispute come from and cases will be escalated. 
 class OrderRefundStatus(StrEnum):
-    ORDER_AUTO_REFUNDABLE = auto()
-    ORDER_NON_REFUNDABLE_DUE_TO_DAYS = auto()
-    ORDER_NON_REFUNDABLE_DUE_TO_ITEMS = auto()
-    ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT = auto()
-    ORDER_INVALID_REFUNDABLE_STATE = auto()
+    ORDER_AUTO_REFUNDABLE = "The return/ refund request has been approved by an automatic agent."
+    ORDER_NON_REFUNDABLE_DUE_TO_DAYS = "The return/ refund request has been rejected by an automatic agent because it has passed the return window deadline"
+    ORDER_NON_REFUNDABLE_DUE_TO_ITEMS = "The return/ refund request has been rejected by an automatic agent because it includes a non-refundable item"
+    ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT = "The return/ refund request requires a customer-support representative's manual approval because it exceeds the automatic authorized refund amount"
+    ORDER_INVALID_REFUNDABLE_STATE = "The return/ refund request is in a invalid state to proceed."
+
     # The above are related to return_refund_eligible
     ORDER_IN_TRANSIT = auto()
     ORDER_IN_PENDING = auto()
     ORDER_DATA_INVALID = auto() # for test reason
     ORDER_DELIVERED_BORDERLINE = auto()
+
+
 
 class ExchangeReturnReason(StrEnum):
     WRONG_SIZE_OR_FIT = "Size is too small or too large, different from size chart or just does not fit well"
@@ -60,7 +63,6 @@ class ExchangeReturnRefundAction(StrEnum):
     RETURN = "return"
     PARTIAL_REFUND = "partial_refund"
     EXPEDITE_EXCHANGE = "expedite_exchange"
-    EXCHANGE_RETURN = "exchange or return"
 
        
 #############################################
@@ -82,7 +84,7 @@ class OrderItem(BaseModel):
     unit_price: Annotated[float, Field(gt=0)]
     number_units: Annotated[int, Field(gt=0)]
     nonrefundable_item: bool = False
-    nonrefundable_reason:  Literal["intimate item", "electronics"] | None = None
+    nonrefundable_reason:  Literal["intimate item", "luxury goods"] | None = None
 
 # All date fields be TZ-aware 
 class Order(BaseModel):
@@ -115,13 +117,14 @@ class ReturnedOrder(BaseModel):
 class RefundRequest(BaseModel):
     refund_request_id: Annotated[int, Field(ge=0)] = 0
     request_date: datetime
-    status: Literal["pending", "auto_approve", "auto_reject", "manaul_approve", "manaul_reject", "manual_flag"] = 'pending'
+    status: Literal["pending", "auto_approve", "auto_reject", "wait_for_manual_review", "manaul_approve", "manaul_reject", "manual_flag"] = 'pending'
     requires_manual_approval: bool = False
-    manual_approval_reason: str | None = None 
+    requires_manual_approval_reason: str | None = None
+    notes_for_human_review_override: str | None = None 
     decided_by: Annotated[str, Field(min_length=1)] | None = None
     decision_reason: Annotated[str, Field(min_length=1, max_length=MAX_REASON_CHARS)] | None = None
     decided_date: datetime | None = None
-    returned_order: ReturnedOrder | None = None
+    returned_order: ReturnedOrder
 
 class FAQMatchEvals(BaseModel):
     rapid_fuzz_partial_ratio_match_helpful: bool = False
@@ -159,13 +162,19 @@ class CustomerSupportState(MessagesState):
     order_is_revisit: bool = False # set by detect_order_revisit_node; routes order_init straight into order_continue_chat_node
     order_issue_escalated: bool = False
     order_issue_resolved: bool = False
-    order_refund_eligible: OrderRefundStatus
     exchange_return_reason: ExchangeOrReturnInput
-    refund_request: RefundRequest
+    order_to_return: OrderToReturn
+    initial_return_refund_decision: ReturnRefundInitialDecision
+    refund_request_to_process: RefundRequest = None
+    proceed_to_process_return_refund: bool = False
+    assigned_refund_request_id: int = 0
+    desire_to_chat_return_refund: bool = False
+    request_human_review_return_refund: bool = False
+    notes_for_human_review_override: str = None
     summarize_on_exit: bool = False
 
 # Unfortunately we have to know what items to be return to devide
-class ReturnRefundDecision(BaseModel):
+class ReturnRefundInitialDecision(BaseModel):
     order_refund_status: Literal[OrderRefundStatus.ORDER_AUTO_REFUNDABLE, 
                                  OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS,
                                  OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS,
@@ -207,15 +216,14 @@ class AuthResponse(BaseModel):
 # The followings are used in customer_support API
 #########################################
 
+class GenericResponse(BaseModel):
+    thread_id: str
+    response: str
+
 class GeneralSupportRequest(BaseModel):
     thread_id: str | None = None
     customer_context: CustomerContext
     general_inquiry: str
-
-class GeneralSupportResponse(BaseModel):
-    thread_id: Annotated[str, Field(min_length=1)]
-    general_inquiry: str
-    response: str
 
 class OrderInitRequest(BaseModel):
     thread_id: str | None = None
@@ -223,23 +231,17 @@ class OrderInitRequest(BaseModel):
     order_number_provided: int
 
 class OrderStructuredOutput(BaseModel):
-    response: str | None = None
+    response: str
     escalate: bool = False
     escalation_reason: ESCALATE_REASON | None = None
     order_issue_resolved: bool = False
 
-class OrderInitResponse(BaseModel):
-    thread_id: str
+class OrderInitResponse(GenericResponse):
     target_order: Order | None = None
-    response: str
 
-class OrderContinueRequest(BaseModel):
+class GenericChatInput(BaseModel):
     thread_id: Annotated[str, Field(min_length=1)]
     user_conversation: Annotated[str, Field(min_length=1, max_length=MAX_MESSAGE_CHARS)]
-
-class OrderContinueResponse(BaseModel):
-    thread_id: str
-    response: str
 
 class SummarizeOnExit(BaseModel):
     thread_id: str 
@@ -257,7 +259,30 @@ class ExchangeOrReturnInput(BaseModel):
     reason_option: ExchangeReturnReason
     reason_input: str | None = None
 
-class ExchangeOrReturnOutput(BaseModel):
+class GenericResponse(BaseModel):
     thread_id: str
-    response: str | None = None
+    response: str
+
+class InitialReturnRefundResponse(GenericResponse):
+    initial_return_refund_decision: ReturnRefundInitialDecision
+    refund_request_to_process: RefundRequest | None = None
+
+class ReturnRefundStructuredOutput(BaseModel):
+    response: str
+    request_human_review_return_refund: bool = False
+    
+class ReturnRefundProcessRequest(BaseModel):
+    thread_id: Annotated[str, Field(min_length=1)]
+    notes_for_human_review_override: str | None = None
+
+class ReturnRefundProcessResponse(GenericResponse):
+    refund_request_to_process: RefundRequest
+    assigned_refund_request_id: Annotated[int, Field(gt=0)]
+
+class ReturnRefundChatResponse(GenericResponse):
+    request_human_review_return_refund: bool = False
+
+
+    
+        
     

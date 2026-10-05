@@ -1,6 +1,7 @@
 from __future__ import annotations
 from models.model import CustomerSupportState, FAQMatchEvals, FAQMatchResult, Order, OrderStructuredOutput,\
-    ESCALATE_REASON, OrderRevisitEval, ExchangeReturnRefundAction, ExchangeReturnReason, ExchangeOrReturnInput
+    ESCALATE_REASON, OrderRevisitEval, ExchangeReturnRefundAction, ExchangeReturnReason, ExchangeOrReturnInput, OrderToReturn, OrderRefundStatus, \
+    ReturnRefundStructuredOutput
 
 from langgraph.graph import END, START, StateGraph
 from langchain_core.messages import HumanMessage, RemoveMessage, SystemMessage, AIMessage, ChatMessage
@@ -11,9 +12,12 @@ import os
 from workflow.llm import get_llm
 from langchain_core.runnables import RunnableConfig
 from datetime import timedelta
-
+import copy
 from memory import save_user_memory
-from workflow.customer_support_utils import find_closest_faq, retrieve_target_order, faq_dict, RETURN_POLICY
+from workflow.customer_support_utils import find_closest_faq, retrieve_target_order, faq_dict, RETURN_POLICY, \
+    get_initial_return_refund_decision, threshold_amount_auto_approve, threshold_days_auto_approve
+
+from workflow.return_refund_utils import ThreadSafeCounter, refund_requests_processing_dict 
 
 
 load_dotenv(override=True)
@@ -21,7 +25,7 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
 FAQ_MATCH_THRESHOLD = 75.0
-ESCALATE_MESSAGE = "I will escalate your inquiry/ request to a human agent and somebody will contact you within 3 business days"
+ESCALATE_MESSAGE = "I will escalate your inquiry/ request to a human agent and somebody will contact you within 3 business days."
 SYSTEM_ERROR_MESSAGE = "System error!! We cannot find your order, please try it later"
 ESCALATE_REASON_FAQ = "Unable to find a satifactory answer to the customer's question"
 
@@ -29,21 +33,26 @@ PREFIX_ANSWER_QUESTION = "I don't have an answer to your question."
 PREFIX_LOST_SHIPMENT = "You need help to handle your lost shipment."
 PREFIX_CANCEL_ORDER = "You need help to cancel your order."
 PREFIX_CHECK_RETURN_REFIND_STATUS = "You need help to check the return refund status of your order."
-PREFIX_NEED_EXPEDIT_REPLACEMENT = "need to expedite a replacement"
+PREFIX_NEED_EXPEDIT_REPLACEMENT = "need to expedite a replacement."
 PREFIX_RCVD_DAMAGED_PRODUCT = "You received broken or defective items or a product with missing parts"
 PREFIX_RCVD_WRONG_ITEM = "You received an wrong item"
 PREFIX_FOUND_BETTER_PRICE = "You found that our competitor offer a better price and we like to see if we can price match that."
+SUFFIX_RCVD_DAMAGED_WRONG_ITEM = "A photo of proof might be required."
 
 
 SUMMARIZE_MESSAGE_THRESHOLD = 6
 FUNCTION_FAQ_FUZZY_MATCH = "find_closest_faq"
+FUNCTION_GET_INITIAL_DECISION = "get_initial_return_refund_decision"
 SOURCE_FAQ_FUZZY_MATCH = "faq_fuzzy_match"
 SOURCE_FAQ_LLM_MATCH = "faq_llm_match"
 SOURCE_FAQ_LLM_EVALS = "faq_llm_evals"
 SOURCE_ORDER_RETRIEVAL = "retrieve_target_order"
 SOURCE_ORDER_INQUIRY = "order_inquiry"
 SOURCE_EXCHANGE_RETURN_REASON = "exchange_return_reason"
-ROLE_FUNCTION_CALL = "function"
+SOURCE_RETURN_REFUND_PROCESS = "return_refund_process"
+
+
+ROLE_FUNCTION = "function"
 ROLE_AGENT = "assistant"
 
 
@@ -62,8 +71,11 @@ class CustomerSupportAgent:
         self.order_llm_for_inquiry_chat = get_llm().with_structured_output(OrderStructuredOutput)
         # Classification, not conversation — low temperature for consistency across near-identical inputs.
         self.order_llm_for_revisit_eval = get_llm(temperature=0.0).with_structured_output(OrderRevisitEval)
+        self.return_refund_llm = get_llm().with_structured_output(ReturnRefundStructuredOutput)
 
+        self.return_refund_counter = ThreadSafeCounter(initial_value = 1000)
 
+        
     ###############################################
     #               Summarize Node
     ###############################################
@@ -172,7 +184,7 @@ class CustomerSupportAgent:
             response = result.answer
             # Originally I want to use ToolMessage but that requires tool-call_id which will link back to AIMessage.
             # But I can use function call and not need to use LLM bind_tools
-            message = ChatMessage(content=response, role= ROLE_FUNCTION_CALL, name=FUNCTION_FAQ_FUZZY_MATCH, additional_kwargs={
+            message = ChatMessage(content=response, role= ROLE_FUNCTION, name=FUNCTION_FAQ_FUZZY_MATCH, additional_kwargs={
                 "faq_match_result": result
             })
             return {
@@ -265,11 +277,11 @@ class CustomerSupportAgent:
             DO NOT REPEAT the same response!! Look for re-visit/ escalate signal!!  
             If the customer is revisting the same order and the prior visit is for a lost shipment and we haven't had recent conversations
             regarding to the lost shipment yet, ask if he/ she has found it and if needs our help.
-            (Continued) If we have started recent conversations and he/ she like our help for the lost shipment,  
+            If we have started recent conversations and he/ she like our help for the lost shipment,  
             set the `escalate` flag to True and set '{ESCALATE_REASON.HELP_LOST_SHIPMENT}' as the `escalate_reason`.
-            If the customer is revisting the same order and the prior visit is due to a long 'pending' status and the order is still 'pending'
-            and and we haven't had recent conversations for the long 'pending' order, ask if he/ she like to cancel the order.
-            (Continued) If we have started recent conversations and he/ she like to cancel the order
+            If the customer is revisting the same order and the prior visit is due to a long 'pending' status and the order is still 'pending',
+            ask if he/ she like to cancel the order.
+            If we have started recent conversations and he/ she like to cancel the order
             set the `escalate` flag to true and set '{ESCALATE_REASON.HELP_CANCEL_ORDER}' as the `escalate_reason`.
             
             You can wrap up by saying something like 'Can I help you with anything else?' if you find it is at the end of the conversation.
@@ -284,7 +296,7 @@ class CustomerSupportAgent:
             If the photo is not taken in the customer's porch or no photo taken, ask the customer to look around the house and/ or check with neighbors.
             Let the customer know that he/ she can always re-visit us after he/ she exhaust searches knowing the shipment is not stolen. 
              
-            if the customer is revisiting the same order and complained about item(s) delivered before or
+            if the customer is revisiting the same order and complained about item(s) delivered before for any of the following reasons or
             the customer is complaining about item(s) delivered for any of the following reasons or more
             * Wrong Size or Fit
             * Doesn't Match Description or Photos
@@ -292,12 +304,12 @@ class CustomerSupportAgent:
             * Changed Mind or Impulse Buy
             * Late Delivery
             * Wrong Item   
-            Tell the customer he/ she can press 'Intend to Exchange or Return for Refund' button if he/ she want to do that and we will help the process.
+            Tell the customer he/ she can press 'Like to Exchange or Return for Refund' button if he/ she want to do that and we will help the process.
 
             if the order status is 'transit', ask the customer to track the whereabouts of the shipping using the UPS's tracking number.
             if the order status is 'pending', let him/ her know that the order should be fulfilled no later than {(state['target_order'].order_date + timedelta(days= 7)).isoformat()} (within 7 days).  
             The customer can always call back by then to cancel the order.
-            if the customer like to cancel the order now, you should set the `escalate` flag to true and set '{ESCALATE_REASON.HELP_CANCEL_ORDER}' as the `escalate_reason`
+            If the customer like to cancel the order now, you should set the `escalate` flag to true and set '{ESCALATE_REASON.HELP_CANCEL_ORDER}' as the `escalate_reason`
 
             The customer-support agent app currently is not supporting checking the return refund status of a specific order.  Delegate it to human customer-support representative
             by setting the `escalate` flag to true and set '{ESCALATE_REASON.HELP_CHECK_RETURN_REFUND_STATUS}' as the `escalate_reason`
@@ -329,7 +341,7 @@ class CustomerSupportAgent:
                 case ESCALATE_REASON.HELP_CHECK_RETURN_REFUND_STATUS:
                     prefix = PREFIX_CHECK_RETURN_REFIND_STATUS    
                 case _:
-                    prefix = PREFIX_ANSWER_QUESTION
+                    prefix = ESCALATE_REASON.HELP_ANSWER_ORDER_INQUIRY
             response = f"{prefix} {ESCALATE_MESSAGE}"                
             message = ChatMessage(content= response, role= ROLE_AGENT, additional_kwargs={
                     "source": SOURCE_ORDER_INQUIRY})
@@ -431,11 +443,11 @@ class CustomerSupportAgent:
         }
 
     ##########################################################################
-    #       Exchange or return survey, assume no interaction is needed
+    #   Exchange or return reason survey, assume no interaction is needed
     ##########################################################################
-    # This is not a chat screen and do have buttons to direct to other screen, including 'start a return refund'. Design a static response
-    # for now.
+    # This is not a chat screen and do have buttons to direct to other screen, including 'start a return refund'. Design a static response for now
     def get_recommended_action(self, reason: ExchangeOrReturnInput) -> tuple[ExchangeReturnReason, ExchangeReturnRefundAction] :
+        # In the real word, reason.reason_option and reason.reason_input should be persisted.
         if reason:
             match reason.reason_option:
                 case ExchangeReturnReason.DAMAGED_DEFECTIVE_OR_MISSING_PARTS | ExchangeReturnReason.WRONG_ITEM_SHIPPED:
@@ -451,13 +463,13 @@ class CustomerSupportAgent:
 
     async def exchange_return_reason_recommendation_node(self, state: CustomerSupportState) -> dict[str, Any]:
         # Will validate at the service level
-        reason, action = self.get_recommended_action(state['exchange_return_reason'])
+        reason, action = self.get_recommended_action(state.get('exchange_return_reason'))
         if action == ExchangeReturnRefundAction.EXPEDITE_EXCHANGE:
             if reason == ExchangeReturnReason.DAMAGED_DEFECTIVE_OR_MISSING_PARTS:
                 prefix = f'{PREFIX_RCVD_DAMAGED_PRODUCT} and {PREFIX_NEED_EXPEDIT_REPLACEMENT}'
             else:
                 prefix = f'{PREFIX_RCVD_WRONG_ITEM} and {PREFIX_NEED_EXPEDIT_REPLACEMENT}'
-            response = f"{prefix} {ESCALATE_MESSAGE}"                
+            response = f"{prefix} {ESCALATE_MESSAGE} {SUFFIX_RCVD_DAMAGED_WRONG_ITEM}"                
             message = ChatMessage(content= response, role= ROLE_AGENT, additional_kwargs={
                     "source": SOURCE_EXCHANGE_RETURN_REASON})
             return {
@@ -478,7 +490,7 @@ class CustomerSupportAgent:
         elif action == ExchangeReturnRefundAction.EXCHANGE:
             response = f"""We recommend 'exchange' since you want a different size, color or style. 
             Go to e-shopping.com, look for Support -> Echange on the top of the screen then follow the instruction to initiate an exchange.
-            You can come back here to press “Start return for refund process” button if we are unable to find an suitable item to exchange with. 
+            You can come back here to press “Start return for refund process” button if we are unable to find an suitable item to exchange for. 
             """
             message = ChatMessage(content= response, role= ROLE_AGENT, additional_kwargs={
                 "source": SOURCE_EXCHANGE_RETURN_REASON})
@@ -492,6 +504,150 @@ class CustomerSupportAgent:
             return { "messages": [message], "response": response}
                         
 
+    ##########################################################################
+    #   Return refund process
+    ##########################################################################
+    async def initial_return_refund_decision_node(self, state: CustomerSupportState) -> dict[str, Any]:
+        order_to_return: OrderToReturn = state["order_to_return"]
+        target_order: Order = state["target_order"]
+        refund_request, initial_decision = get_initial_return_refund_decision(order_to_return, target_order)
+        messages = []
+        
+        if refund_request:
+            messages.append(ChatMessage(content=initial_decision.order_refund_status.value, role= ROLE_FUNCTION, name=FUNCTION_GET_INITIAL_DECISION, 
+                additional_kwargs={
+                "return_order": target_order.order_id, "return_item": order_to_return.items}))
+            match initial_decision.order_refund_status:
+                case OrderRefundStatus.ORDER_AUTO_REFUNDABLE:
+                    response = "Congratulations!! It's in my authority to approve your request."
+                case OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT:
+                    response = f"""It's not in my authority to approve your request because the refund amount before tax has exceeded my authorized amount threshold: ${threshold_amount_auto_approve}.
+                    Your request requires a manual approval and the request details can be sent to a Slack app channel and an on-duty customer support representative
+                    can approve it shortly.
+                    """
+                # don't automatically offer a escalate human review unless the customer insist
+                case OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS:
+                    response = f"""
+                    I am sorry that I have to reject your return refund request because your request come too late and has passed {threshold_days_auto_approve} days of the return window deadline.
+                    """
+                case OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS:
+                    response = f"""
+                    I am sorry that I have to reject your return refund request because you are trying to return a non-refundable item.
+                    """
+            response += " Press 'Process the request' to proceed, press 'Cancel and Exit' to cancel the request or press 'I like to chat' to chat for a futher discussion"        
+            return {
+                "response": response, 
+                "messages": messages, 
+                "initial_return_refund_decision": initial_decision, 
+                "refund_request_to_process": refund_request,
+                }
+
+        messages.append(ChatMessage(content=initial_decision.order_refund_status.value, role= ROLE_FUNCTION, name=FUNCTION_GET_INITIAL_DECISION))
+        return {
+            "response": initial_decision.order_refund_status.value, 
+            "messages": messages, 
+            "initial_return_refund_decision": initial_decision, 
+            "refund_request_to_process": None,
+        }
+
+    async def return_refund_process_node(self, state: CustomerSupportState) -> dict[str, Any]:    
+        temp_request = copy.deepcopy(state["refund_request_to_process"])
+        initial_decision = state["initial_return_refund_decision"]
+        response = ""
+        match initial_decision.order_refund_status:
+            case OrderRefundStatus.ORDER_AUTO_REFUNDABLE:
+                temp_request.status = 'auto_approve'
+                temp_request.decided_by = 'Agent'
+                temp_request.decided_date = temp_request.request_date
+                response = "You would receive a confirmation email with instructions on how and where to send your package."
+            case OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS | OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS:
+                reason = "the request has passed the return window deadline." if initial_decision.order_refund_status == OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS else \
+                "the request includes a non-refundable item."
+                if state.get("notes_for_human_review_override"):
+                    temp_request.status = 'wait_for_manual_review'
+                    temp_request.requires_manual_approval = True
+                    temp_request.requires_manual_approval_reason = reason
+                    temp_request.notes_for_human_review_override = state["notes_for_human_review_override"]
+                    response = "You would receive an email of a human review result regarding to your refund request shortly. " \
+                        "If approved, Your email will have the instructions on how and where to send your package."
+                else:    
+                    temp_request.status = 'auto_reject'
+                    temp_request.decided_by = 'Agent'
+                    temp_request.decided_date = temp_request.request_date
+                    temp_request.decision_reason = reason
+                    response = "You would receive a rejection email and detail the underlined reason."
+            case OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT:
+                temp_request.status = 'wait_for_manual_review'
+                temp_request.requires_manual_approval = True
+                temp_request.requires_manual_approval_reason = "the request exceeds the automatic authorized refund amount"
+                response = "You would receive an email of a human review result regarding to your refund request shortly. " \
+                    "If approved, Your email will have the instructions on how and where to send your package."
+            case _:
+                return {}
+        assigned_refund_request_id = self.return_refund_counter.increment()
+        temp_request.refund_request_id = assigned_refund_request_id
+        refund_requests_processing_dict[assigned_refund_request_id] = temp_request
+        message = ChatMessage(content=response, role= ROLE_AGENT, additional_kwargs={"source": SOURCE_RETURN_REFUND_PROCESS})
+        
+        return {
+            "response": response,
+            "messages": [message],
+            "assigned_refund_request_id" : assigned_refund_request_id,
+            "refund_request_to_process": temp_request
+        }
+            
+    async def return_refund_chat_node(self, state: CustomerSupportState) -> dict[str, Any]:
+        memory_notes = "\n".join(
+            [f"- {message.content}" for message in state['messages'] if isinstance(message, SystemMessage)]
+        )
+        recent_conversations = "\n".join(
+            [f"- {message.content}" for message in state['messages'] if not isinstance(message, SystemMessage)]
+        )
+        SYSTEM_PROMPT = f"""
+            You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her return/ refund request.
+            Here is the updated refund request: {state['refund_request_to_process'].model_dump_json()}
+            Here is the initial return refund decision: {state['initial_return_refund_decision'].model_dump_json()}
+            Here is what we remember about this customer from past visits, if any: {memory_notes if memory_notes else "None yet"}.
+            Here is the most recent conversations in sequential order: {recent_conversations if recent_conversations else "None yet"}.
+            Here is the summary of the previous conversation: {state.get("summary") if state.get("summary") else "None yet"}.
+            To help you answer a general return refund question, here is the return policy ontext: {RETURN_POLICY}
+
+            If {state["assigned_refund_request_id"]} > 0, it means that we have already process the customer's refund request.
+            You can wrap up the conversation. Ask the customer if 'we can help him/ her with anything else, if not, he/ she can simply press 'Exit' button
+
+            If the customer says that he/ she hasn't receieved an email regarding to his/ her human review result of the refund request 
+            ({state['request_human_review_return_refund'] and state["assigned_refund_request_id"] > 0 }),
+            let him/ her know that an on-duty customer support representative usually will respond within 15 minutes and no more than 30 minutes and  
+            So far we always respond on time. The customer-support agent app currently is not supporting checking the return refund status yet. 
+            If he/ she hasn't received the email after 30 minutes, he/ she can always re-visit us, go to 'order inquiry' and tell the agent he/ she like to
+            talk to a human customer-support representative for his/ her return refund request status.  The agent will escalate it to a CSR for the help.
+
+            If the initial return refund decision show that the customer's request has been rejected, the customer complain about it and our record show 
+            that he/ she hasn't requested for a human review of his/ her return/ refund request yet ({state['request_human_review_return_refund']} == false),
+            tell the customer that he/ she has one chance to ask for a human review of his/ her request. 
+            Tell the customer that the customer-support-agent app has already integrated with Slack app, the request details can be sent to a Slack channel and 
+            an on-duty customer support representative can review it shortly if the customer decide to do that.
+            Approving or not is subject to the on-duty CSR's reasonable discretion. If the customer decide to request a human review,
+            go ahead to set `request_human_review_return_refund` to True and let the customer to know there will be an input box shown in the next screen and he/ she can 
+            state the reason why the customer think that his/ her request should be approved. The customer should input his/ her reason and press 'Process the request' to proceed.
+
+            If the initial return refund decision show that the customer's request has been rejected, the cutomer does not complain about it,  
+            DO NOT voluntarily offer this option. Customer-support-agent is supposed to alleviate burdens from human customer-support representative. 
+
+            set `response` to what you want to reply  
+        """
+        system_msg = SystemMessage(content=SYSTEM_PROMPT)
+        output: ReturnRefundStructuredOutput = await self.return_refund_llm.ainvoke([system_msg])
+        response = output.response if output else ""
+        message = AIMessage(content= response , additional_kwargs={
+            "source":SOURCE_ORDER_INQUIRY}) 
+        return {
+            "messages": [message],
+            "response": response, 
+            "request_human_review_return_refund": output.request_human_review_return_refund if output else False,
+        }
+           
+        
     ###############################################
     #            Routes after a node
     ###############################################
@@ -505,17 +661,30 @@ class CustomerSupportAgent:
                 return "general_faq"
             case "exchange_or_return":
                 return "exchange_or_return"
+            case "return_refund":
+                return self.route_return_refund(state)
             case _:
                 return self.route_order(state)       
 
     # It's not an actual route. It return node by condition.  Get around with conditional edge within conditional edge
     def route_order(self, state: CustomerSupportState) -> str:
-        # Fix an error if order_number not passed or passed as 0.  Let retrieve_target_order instead of order_continue_chat_node handle
         if not state.get("target_order"):
             return "order_init"
-
         return "order_init_done"
 
+    def route_return_refund(self, state: CustomerSupportState) -> str:
+        if not state.get("initial_return_refund_decision"):
+            return "return_refund_init"
+        elif state.get("proceed_to_process_return_refund") and not state.get("assigned_refund_request_id"):
+            return "return_refund_process"
+        elif state.get("desire_to_chat_return_refund"):
+            return "return_refund_chat"
+        else:
+            # We can always go to return refund itemized and process screen
+            # What buttons will UI display is a big issues.  How does UI know it?
+            # Also if there is any scenario that I did not cover
+            return "return_refund_done_or_unknown"
+    
     def route_after_retrieve_target_order(self, state: CustomerSupportState) -> str:
         if not state.get("target_order"):
             # retrieve_target_order_node already built the SYSTEM_ERROR_MESSAGE response
@@ -555,8 +724,13 @@ class CustomerSupportAgent:
     def route_after_order_continue_chat(self, state: CustomerSupportState) -> str:
         if self._should_summarize(state, state.get("order_issue_escalated") or state.get("order_issue_resolved")):
             return "summarize_node"
-        return END 
-    
+        return END
+
+    def route_after_return_refund_chat(self, state: CustomerSupportState) -> str:
+        if self._should_summarize(state):
+            return "summarize_node"
+        return END     
+         
 
     ###############################################
     #            Build the support graph
@@ -568,7 +742,11 @@ class CustomerSupportAgent:
         builder.add_conditional_edges(START, self.route_branch,
                                       {"summarize_node": "summarize_node",
                                        "general_faq": "general_faq_eval_node",
-                                       "exchange_or_return": "exchange_return_reason_recommendation_node",
+                                       "exchange_or_return": "exchange_return_reason_recommendation_node", 
+                                       "return_refund_init": "initial_return_refund_decision_node",
+                                       "return_refund_process": "return_refund_process_node",
+                                       "return_refund_chat": "return_refund_chat_node",
+                                       "return_refund_done_or_unknown": END,
                                        "order_init": "retrieve_target_order_node",
                                        "order_init_done": "order_continue_chat_node"})
         
@@ -606,6 +784,17 @@ class CustomerSupportAgent:
 
         builder.add_node("exchange_return_reason_recommendation_node", self.exchange_return_reason_recommendation_node)
         builder.add_edge("exchange_return_reason_recommendation_node", "summarize_node")
+
+        builder.add_node("initial_return_refund_decision_node", self.initial_return_refund_decision_node)
+        builder.add_edge("initial_return_refund_decision_node", "summarize_node")
+
+        builder.add_node("return_refund_process_node", self.return_refund_process_node)
+        builder.add_edge("return_refund_process_node", "summarize_node")
+        # Eventually need to move summarize content to customer_support_utils so that we can summarize the result after human review come back from slack
+        builder.add_node("return_refund_chat_node", self.return_refund_chat_node)
+        builder.add_conditional_edges("return_refund_chat_node", self.route_after_return_refund_chat,
+            {"summarize_node": "summarize_node", END: END})
+
         
         graph = builder.compile(checkpointer = self.checkpointer, store = self.store)
         self.graph = graph

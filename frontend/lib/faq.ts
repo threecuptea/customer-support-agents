@@ -51,7 +51,7 @@ export const FAQ_SECTIONS: FaqSection[] = [
       },
       {
         "question": "What items cannot be returned?",
-        "answer": "We cannot accept returns on final sale items, customized items, perishable items, gift cards, or items that have been altered or damaged by the customer. Certain high-risk items, such as electronics, luxury goods and intimate items, are marked as non-returnable unless they are defective or damaged upon receipt."
+        "answer": "We cannot accept returns on final sale items, customized items, perishable items, gift cards, or items that have been altered or damaged by the customer. Certain high-risk items, such as luxury goods and intimate items, are marked as non-returnable unless they are defective or damaged upon receipt."
       },
       {
         "question": "What is your return policy in summary?",

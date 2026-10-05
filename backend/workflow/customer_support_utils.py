@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from langchain_core.tools import tool
 from rapidfuzz import process, fuzz
-from models.model import CustomerContext, Order, RefundRequest, ReturnRefundDecision, FAQMatchResult, OrderToReturn, \
+from models.model import CustomerContext, Order, RefundRequest, ReturnRefundInitialDecision, FAQMatchResult, OrderToReturn, \
     ReturnedOrderItem, ReturnedOrder, OrderRefundStatus
 from dotenv import load_dotenv
 import os
@@ -44,7 +44,7 @@ FAQs = {
         "We'll include the return shipping label in the confirmation email and ship the exchange once the original item is scanned by the carrier.",
 
         "What items cannot be returned?": "We cannot accept returns on final sale items, customized items, perishable items, gift cards, or items that have been altered or damaged by the customer. "
-        "Certain high-risk items, such as electronics, luxury goods and intimate items, are marked as non-returnable unless they are defective or damaged upon receipt.",
+        "Certain high-risk items, such as luxury goods and intimate items, are marked as non-returnable unless they are defective or damaged upon receipt.",
 
         "What is your return policy in summary?": "We accept returns within 35 days of delivery for unused items.  The return item must have its tags attached "
         "and be returned in its original packaging with your receipt or proof of purchase",
@@ -71,7 +71,7 @@ faq_dict.update(FAQs['Orders and Payment'])
 faq_qst_lst = list(faq_dict.keys())
 
 
-RETURN_POLICY = """
+RETURN_POLICY = f"""
 Overview
 At 'e-shopping.com, we want you to love what you ordered. If something's not quite right, we're here to help.
 
@@ -89,7 +89,7 @@ We reserve the right to decline return requests if patterns of abuse, such as fr
 3. What cannot be returned?
 We cannot accept returns on final sale items, customized items, perishable items, gift cards, or items that have been altered or damaged by the customer.
 
-Certain high-risk items, such as electronics, luxury goods and intimate items, are marked non-returnable unless they are defective or damaged upon receipt.
+Certain high-risk items, such as luxury goods and intimate items, are marked non-returnable unless they are defective or damaged upon receipt.
 
 4. Are there any fees for returns?
 We are not charging any re-stocking fees. However, you will return at your own expense unless an exchange is involved in that case we will cover return shipping labels. Damaged items will be covered in item 6.     
@@ -100,7 +100,9 @@ To initiate a return, you can contact our customer support web site. You'll need
 If your return is accepted, We will email you instructions on how and where to send your package.
 
 6. Damages and issues
-Please inspect your order upon receipt and contact us within five days if the item is defective, damaged or if you receive the wrong item, so we can evaluate and address the issue promptly.  We will email you a return shipping label along with instructions on how and where to send your package.
+Please inspect your order upon receipt and contact us within five days if the item is defective, damaged or if you receive the wrong item, so we can evaluate and address the issue promptly.
+A photo of proof might be required for such a request and the request could be denied if it comes too late.   
+We will email you a return shipping label along with instructions on how and where to send your package once your request has been approved.
 
 7. Exchanges
 Need a different size, color or style? We offer free exchanges on eligible items within 35 days of delivery.
@@ -118,10 +120,18 @@ Certain items (i.e. final sale or custom products) may not be eligible for an ex
 If your requested item is out of stock, you can still return your ite for the refund.
 
 8. Refunds
-We will notify you once we've received and inspected your return to let you know if the refund was approved or not. If approved, you’ll be automatically refunded on your original payment method within 3-5 business days. Refunds will only be issued to the original payment method used during the purchase. Please remember it can take some time for your bank or credit card company to process and post the refund too.
+We will notify you once we've received and inspected your return to let you know if the refund was approved or not. If approved, you'll be automatically refunded on your original payment method within 3-5 business days. Refunds will only be issued to the original payment method used during the purchase. Please remember it can take some time for your bank or credit card company to process and post the refund too.
 
 If more than 5 business days have passed since we've approved your return, please visit our customer-support site.
+
+9. What will take to get the approval for a return refund request?
+An AI agent will automatically approve such a request if the return amount before tax is within ${threshold_amount_auto_approve} and is requested within the return window of {threshold_days_auto_approve} days.
+A customer-support representative is required to approve if the amount is more than ${threshold_amount_auto_approve}.
+An AI agent will automatically reject a return order if the request pass the return window deadline or the returned item is nonrefundable.
+However, the customer has one chance to request for approval from a customer-support representative.  The decision is subject to his/ her discretion.
 """
+
+
 
 
 # Technically I don't need @tool decorator because it is not calling from LLM
@@ -182,7 +192,9 @@ def _populateRefundRequest(order_to_return: OrderToReturn, original_order: Order
             supplier_name= item.supplier_name, 
             unit_price= item.unit_price, 
             number_units= r_item.qty, 
-            nonrefundable_item= item.nonrefundable_item))
+            nonrefundable_item= item.nonrefundable_item, 
+            nonrefundable_reason = item.nonrefundable_reason
+            ))
     returned_order = ReturnedOrder(
         origin_order_id= original_order.order_id, 
         original_delivery_date= original_order.delivery_date, 
@@ -205,10 +217,10 @@ def _calculate_amount_refund_incl_tax(refund_request: RefundRequest) -> float:
     for item in refund_request.returned_order.items:
         total_before_tax += item.unit_price * item.number_units
 
-    return total_before_tax * (1 + refund_request.returned_order.tax_applied_rate)
+    return round(total_before_tax * (1 + refund_request.returned_order.tax_applied_rate), 2)
 
 
-def _get_initial_return_refund_decision(refund_request: RefundRequest) -> ReturnRefundDecision:
+def _get_initial_return_refund_decision(refund_request: RefundRequest) -> ReturnRefundInitialDecision:
     """ Return initial return refund decision
     It compares two thresholds: 
     `threshold_amount_auto_approve`, and `threshold_days_auto_approve`
@@ -229,16 +241,16 @@ def _get_initial_return_refund_decision(refund_request: RefundRequest) -> Return
     returned_order = refund_request.returned_order 
     if returned_order.estimated_amount_refund_incl_tax / (1 + returned_order.tax_applied_rate) > \
         threshold_amount_auto_approve:
-        return ReturnRefundDecision(order_refund_status= OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT) 
+        return ReturnRefundInitialDecision(order_refund_status= OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT) 
             # reason=f"The refund amount excluding tax has exceeded the auto-approval amount threshold: {threshold_amount_auto_approve}")
     if refund_request.request_date - returned_order.original_delivery_date > timedelta(days=threshold_days_auto_approve):
-        return ReturnRefundDecision(order_refund_status= OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS)
+        return ReturnRefundInitialDecision(order_refund_status= OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS)
             # reason=f"The refund request date has exceeded the return window: {threshold_days_auto_approve} days")
     # Do a simple handling for now. Not to take multiple order item into consideration
     if any([item.nonrefundable_item for item in returned_order.items]):
-        return ReturnRefundDecision(order_refund_status= OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS)
+        return ReturnRefundInitialDecision(order_refund_status= OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS)
 
-    return ReturnRefundDecision(order_refund_status= OrderRefundStatus.ORDER_AUTO_REFUNDABLE)
+    return ReturnRefundInitialDecision(order_refund_status= OrderRefundStatus.ORDER_AUTO_REFUNDABLE)
             
 def check_if_order_to_return_in_valid_state(return_order: OrderToReturn, original_order: Order) -> bool:
     """ Check if we can put together a valid `RefundRequest` to process 
@@ -265,7 +277,7 @@ def check_if_order_to_return_in_valid_state(return_order: OrderToReturn, origina
             raise ValueError(f"The return {item_return.qty} units of {item_return.product_id} is {NOT_A_VALID_RETURN_QUANTITY}: {original_order.order_id}.")
     return True    
 
-def get_return_refund_decision(return_order: OrderToReturn, original_order: Order) -> ReturnRefundDecision:
+def get_initial_return_refund_decision(return_order: OrderToReturn, original_order: Order) -> tuple[RefundRequest, ReturnRefundInitialDecision]:
     """ Get ReturnRefundDecision with OrderRefundStatus signals how we should handle return refund
         It goes through the following steps:
             check_if_order_to_return_in_valid_state:  to pre-check and flag/ exclude all abnormal cases
@@ -276,14 +288,16 @@ def get_return_refund_decision(return_order: OrderToReturn, original_order: Orde
         return_order: OrderToReturn with items of product_id and quantity to return
         original_order: the referenced original Order
     Returns:
+        RefundRequest so that the customer will know total amount will be refunded.
         ReturnRefundDecision with OrderRefundStatus
     """
     try:
         check_if_order_to_return_in_valid_state(return_order, original_order)
     except ValueError as verr:
-        return ReturnRefundDecision(order_refund_status= OrderRefundStatus.ORDER_INVALID_REFUNDABLE_STATE)
+        # It should not come here. The service layer has validate before invoke the graph
+        return (None, ReturnRefundInitialDecision(order_refund_status= OrderRefundStatus.ORDER_INVALID_REFUNDABLE_STATE))
     refund_request: RefundRequest = _populateRefundRequest(return_order, original_order)
-    amount_refund_incl_tax = _calculate_amount_refund_incl_tax(refund_request)
-    refund_request.returned_order.estimated_amount_refund_incl_tax = amount_refund_incl_tax
+    refund_request.returned_order.estimated_amount_refund_incl_tax = _calculate_amount_refund_incl_tax(refund_request)
     
-    return _get_initial_return_refund_decision(refund_request)
+    initial_decision: ReturnRefundInitialDecision = _get_initial_return_refund_decision(refund_request)
+    return (refund_request, initial_decision)

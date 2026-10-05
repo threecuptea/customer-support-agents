@@ -1,8 +1,8 @@
 from fastapi.testclient import TestClient
 import pytest
 
-from models.model import OrderToReturn, ItemToReturn, CustomerContext, OrderRefundStatus, ReturnRefundDecision
-from workflow.customer_support_utils import check_if_order_to_return_in_valid_state, get_return_refund_decision, \
+from models.model import OrderToReturn, ItemToReturn, CustomerContext, OrderRefundStatus
+from workflow.customer_support_utils import check_if_order_to_return_in_valid_state, get_initial_return_refund_decision, \
     ORIGINAL_ORDER_FOR_RETURN_IS_NOT_DELIVERED, NOT_A_VALID_PRODUCT_ID, NOT_A_VALID_RETURN_QUANTITY
 import uuid
 from main import app
@@ -77,7 +77,7 @@ def test_get_return_refund_decision_status(client, comment, email_addr, expected
     item = ItemToReturn(product_id= original_order.items[0].product_id, qty= 1)
     return_order = OrderToReturn(thread_id= str(uuid.uuid4()), items= [item])
         
-    decision = get_return_refund_decision(return_order, original_order)
+    _, decision = get_initial_return_refund_decision(return_order, original_order)
     assert decision.order_refund_status == expected_order_refund_status
      
 

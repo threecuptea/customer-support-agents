@@ -22,7 +22,8 @@ customer_order_status_map = {
     "manu.raju@cnn.com": [OrderRefundStatus.ORDER_DELIVERED_BORDERLINE],
     "sonya_ling1947@yahoo.com": [
         OrderRefundStatus.ORDER_IN_TRANSIT,
-        OrderRefundStatus.ORDER_AUTO_REFUNDABLE]
+        OrderRefundStatus.ORDER_AUTO_REFUNDABLE],
+    "abby.phillip@cnn.com": [OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS],    
 }
 
 
@@ -94,36 +95,36 @@ demo_customers = {
         }], 
     },
     "wolf.blitzer@cnn.com": {
-            "customer_id": 32099,
-            "first_name": "Wolf",
-            "last_name": "Blitzer",
-            "title": "Mr.",
-            "email": "wolf.blitzer@cnn.com",
-            "latest_orders":[{
-                "order_id": 123457,
-                "order_date": datetime(2026, 7, 1, 21, 5, 0, tzinfo= _zoneinfo),
-                "total_amount_incl_tax": 84.30,
-                "tax_applied_rate": 0.075,
-                "status": "delivered",
-                "ship_date": datetime(2026, 7, 3, 19, 45, 0, tzinfo= _zoneinfo),
-                "estimated_delivery_date": datetime(2026, 7, 7, 12, 45, 0, tzinfo= _zoneinfo),
-                "tracking_number": "1Z9999993178999999",
-                "items": [{
-                    "product_id": "PRD-1015",
-                    "product_name": "Bike Light",
-                    "supplier_name": "Premier Merchandize",
-                    "unit_price": 30.26,
-                    "number_units": 2,
-                },
-                {
-                    "product_id": "PRD-1022",
-                    "product_name": "Water Bottle",
-                    "supplier_name": "United Imports",
-                    "unit_price": 17.9,
-                    "number_units": 1,
-                }]
-            }]  
-        },
+        "customer_id": 32099,
+        "first_name": "Wolf",
+        "last_name": "Blitzer",
+        "title": "Mr.",
+        "email": "wolf.blitzer@cnn.com",
+        "latest_orders":[{
+            "order_id": 123457,
+            "order_date": datetime(2026, 7, 1, 21, 5, 0, tzinfo= _zoneinfo),
+            "total_amount_incl_tax": 84.30,
+            "tax_applied_rate": 0.075,
+            "status": "delivered",
+            "ship_date": datetime(2026, 7, 3, 19, 45, 0, tzinfo= _zoneinfo),
+            "estimated_delivery_date": datetime(2026, 7, 7, 12, 45, 0, tzinfo= _zoneinfo),
+            "tracking_number": "1Z9999993178999999",
+            "items": [{
+                "product_id": "PRD-1015",
+                "product_name": "Bike Light",
+                "supplier_name": "Premier Merchandize",
+                "unit_price": 30.26,
+                "number_units": 2,
+            },
+            {
+                "product_id": "PRD-1022",
+                "product_name": "Water Bottle",
+                "supplier_name": "United Imports",
+                "unit_price": 17.9,
+                "number_units": 1,
+            }]
+        }]  
+    },
     "pamela.brown@cnn.com": {
         "customer_id": 32100,
         "first_name": "Pamela",
@@ -140,9 +141,9 @@ demo_customers = {
             "estimated_delivery_date": datetime(2026, 8, 1, 14, 30, 0, tzinfo= _zoneinfo),
             "tracking_number": "1Z9999993182999999",
             "items": [{
-                "product_id": "PRD-1099",
-                "product_name": "Sterling Silver White Sapphire Pendant Necklace",
-                "supplier_name": "Costal Trading",
+                "product_id": "PRD-1999",
+                "product_name": "Cannondale Trail 3 Mountain Bike",
+                "supplier_name": "REI",
                 "unit_price": 529.99,
                 "number_units": 1,
                 },
@@ -170,9 +171,6 @@ demo_customers = {
                 "supplier_name": "Coastal Trading",
                 "unit_price": 49.22,
                 "number_units": 1,
-                "nonrefundable_item": True,
-                "nonrefundable_reason": "electronics",
-                
             },
             {
                 "product_id": "PRD-1032",
@@ -180,8 +178,6 @@ demo_customers = {
                 "supplier_name": "Coastal Trading",
                 "unit_price": 61.03,
                 "number_units": 1,
-                "nonrefundable_item": True,
-                "nonrefundable_reason": "electronics",
             }
             ]
         }]  
@@ -331,6 +327,33 @@ demo_customers = {
                 "unit_price": 67.60,
                 "number_units": 1,
             }]  
+        }]  
+    },
+    "abby.phillip@cnn.com": {
+        "customer_id": 32107,
+        "first_name": "Abby",
+        "last_name": "Phillip",
+        "title": "Ms.",
+        "email": "abby.phillip@cnn.com",
+        "latest_orders":[{
+            "order_id": 123465,
+            "order_date": datetime(2026, 7, 25, 21, 10, 0, tzinfo= _zoneinfo),
+            "total_amount_incl_tax": 503.68,
+            "tax_applied_rate": 0.095,
+            "status": "delivered",
+            "ship_date": datetime(2026, 7, 28, 19, 45, 0, tzinfo= _zoneinfo),
+            "estimated_delivery_date": datetime(2026, 8, 1, 14, 30, 0, tzinfo= _zoneinfo),
+            "tracking_number": "1Z9999993182999999",
+            "items": [{
+                "product_id": "PRD-1099",
+                "product_name": "Sterling Silver White Sapphire Pendant Necklace",
+                "supplier_name": "Costal Trading",
+                "unit_price": 459.99,
+                "number_units": 1,
+                "nonrefundable_item": True,
+                "nonrefundable_reason": "luxury goods",
+                },
+            ]
         }]  
     },
 }
