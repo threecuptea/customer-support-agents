@@ -6,9 +6,9 @@ from langchain_core.messages import ChatMessage
 import pytest
 
 from main import app
-from models.model import FAQMatchEvals, Order, CustomerContext, OrderRevisitEval, ESCALATE_REASON
+from models.model import FAQMatchEvals, Order, CustomerContext, OrderRevisitEval
 from workflow.customer_support import CustomerSupportAgent, ESCALATE_MESSAGE, FUNCTION_FAQ_FUZZY_MATCH, SOURCE_FAQ_FUZZY_MATCH, SOURCE_FAQ_LLM_MATCH, \
-    SOURCE_FAQ_LLM_EVALS, ROLE_FUNCTION, ROLE_AGENT, FAQ_MATCH_THRESHOLD, SYSTEM_ERROR_MESSAGE, SOURCE_ORDER_RETRIEVAL, SOURCE_ORDER_INQUIRY
+    SOURCE_FAQ_LLM_EVALS, ROLE_FUNCTION, ROLE_AGENT, FAQ_MATCH_THRESHOLD, SYSTEM_ERROR_MESSAGE, SOURCE_ORDER_RETRIEVAL, SOURCE_ORDER_INQUIRY, PREFIX_ANSWER_QUESTION
 from langchain_core.messages import HumanMessage
 import uuid
 
@@ -368,18 +368,18 @@ def test_invoke_order_continue_workflow(client):
             json={"thread_id": thread_id, "user_conversation": "I did not receive the shipment."},
     )
     assert resp.status_code == 200
-    ESCALATE_REASON.HELP_ANSWER_ORDER_INQUIRY in resp.json()["response"]
+    assert PREFIX_ANSWER_QUESTION in resp.json()["response"]
 
     graph = client.app.state.support_graph
     config = {"configurable": {"thread_id": thread_id}}
     snapshot = asyncio.run(graph.aget_state(config))
 
     messages = snapshot.values["messages"]
-    isinstance(messages[-1], ChatMessage)
+    assert isinstance(messages[-1], ChatMessage)
     chat_message = messages[-1]
     assert chat_message.role == ROLE_AGENT
     assert chat_message.additional_kwargs["source"] ==SOURCE_ORDER_INQUIRY
-    ESCALATE_REASON.HELP_ANSWER_ORDER_INQUIRY in chat_message.content
+    assert PREFIX_ANSWER_QUESTION in chat_message.content
 
 
 def test_invoke_order_continue_workflow_error(client):

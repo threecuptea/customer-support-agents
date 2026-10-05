@@ -108,7 +108,7 @@ class ReturnedOrder(BaseModel):
     original_delivery_date: datetime
     returned_date: datetime | None = None
     status: Literal["returned", "pending"] = 'pending'
-    tax_applied_rate: Annotated[float, Field(gt=0)]
+    tax_applied_rate: Annotated[float, Field(ge=0)]
     estimated_amount_refund_incl_tax: float = 0
     refurbished_amount_incl_tax: float = 0
     items: Annotated[list[ReturnedOrderItem], Field(min_length=1)]
@@ -258,10 +258,6 @@ class ExchangeOrReturnInput(BaseModel):
     thread_id: Annotated[str, Field(min_length=1)]
     reason_option: ExchangeReturnReason
     reason_input: str | None = None
-
-class GenericResponse(BaseModel):
-    thread_id: str
-    response: str
 
 class InitialReturnRefundResponse(GenericResponse):
     initial_return_refund_decision: ReturnRefundInitialDecision

@@ -113,6 +113,15 @@ async def invoke_exchange_return_recommendation_workflow(exchange_return_reason:
     graph = request.app.state.support_graph
     thread_id = exchange_return_reason.thread_id
     config = {"configurable": {"thread_id": thread_id}}
+    # Guard against a thread_id that was never initialized via /order/init: this node reads
+    # state["order_number_provided"] without a fallback, so a missing/stale thread_id would
+    # otherwise crash the graph instead of returning a clear error.
+    existing_state = await graph.aget_state(config)
+    if not existing_state.values.get("target_order"):
+        raise HTTPException(
+            status_code=400,
+            detail="Order inquiry session not found or expired. Please restart from the order selection screen.",
+        )
     messages = []
     messages.append(HumanMessage(content= f"The customers' exchange/ return reason: {exchange_return_reason.reason_option.value}"))
     initial_state = {
@@ -186,12 +195,16 @@ async def invoke_return_refund_process_workflow(request_to_process: ReturnRefund
             status_code=400,
             detail="Return/ refund session not found or expired. Please Exit and re-login.",
         )
+    if existing_state.values.get("assigned_refund_request_id"):
+        raise HTTPException(
+            status_code=400,
+            detail="This return/ refund request has already been processed.",
+        )
     try:
         message = HumanMessage(content= f"Please process return refund for order id: {refund_request.returned_order.origin_order_id}")
         initial_state = {
             "messages": [message],
             "proceed_to_process_return_refund": True,
-            "assigned_refund_request_id": 0,
             "notes_for_human_review_override": request_to_process.notes_for_human_review_override
         }
         customer_support_state  = await graph.ainvoke(initial_state, config)

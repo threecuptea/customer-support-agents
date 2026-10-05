@@ -341,7 +341,7 @@ class CustomerSupportAgent:
                 case ESCALATE_REASON.HELP_CHECK_RETURN_REFUND_STATUS:
                     prefix = PREFIX_CHECK_RETURN_REFIND_STATUS    
                 case _:
-                    prefix = ESCALATE_REASON.HELP_ANSWER_ORDER_INQUIRY
+                    prefix = PREFIX_ANSWER_QUESTION
             response = f"{prefix} {ESCALATE_MESSAGE}"                
             message = ChatMessage(content= response, role= ROLE_AGENT, additional_kwargs={
                     "source": SOURCE_ORDER_INQUIRY})
@@ -798,11 +798,6 @@ class CustomerSupportAgent:
         
         graph = builder.compile(checkpointer = self.checkpointer, store = self.store)
         self.graph = graph
-        # Find a way to draw the mermaid image.
-        # from IPython.display import Image, display
-        # display(Image(graph.get_graph().draw_mermaid_png()))
-
-        
         return graph
     
 

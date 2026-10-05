@@ -88,14 +88,14 @@ def test_invoke_exchange_return_recommendation(client, reason_option, in_respons
     assert snapshot.values.get("summary")
     assert len(snapshot.values["messages"]) == 2
     messages = snapshot.values["messages"]
-    isinstance(messages[-1], ChatMessage)
+    assert isinstance(messages[-1], ChatMessage)
     chat_message = messages[-1]
     assert chat_message.role == ROLE_AGENT
     assert chat_message.additional_kwargs["source"] == SOURCE_EXCHANGE_RETURN_REASON
     assert in_response in chat_message.content
     escalation_reason = snapshot.values.get("escalation_reason")
     if in_escalation_message:
-        in_escalation_message in escalation_reason
+        assert in_escalation_message in escalation_reason
     else:
         assert not escalation_reason   
     
@@ -161,10 +161,10 @@ def test_invoke_return_refund_init_workflow(client, email_addr, expected_order_r
     assert snapshot.values.get("summary")
     assert len(snapshot.values["messages"]) == 2
     messages = snapshot.values["messages"]
-    isinstance(messages[-1], ChatMessage)
+    assert isinstance(messages[-1], ChatMessage)
     chat_message = messages[-1]
     assert chat_message.role == ROLE_FUNCTION
-    assert chat_message.content == expected_order_refund_status.value    
+    assert chat_message.content == expected_order_refund_status.value
 
     
 def test_invoke_return_refund_init_workflow_error(client):
@@ -274,7 +274,7 @@ def test_invoke_return_refund_process_workflow_(client, email_addr, expected_ord
 
     assert data["initial_return_refund_decision"]
     initial_decision: ReturnRefundInitialDecision = ReturnRefundInitialDecision(**data["initial_return_refund_decision"])
-    initial_decision.order_refund_status == expected_order_refund_status
+    assert initial_decision.order_refund_status == expected_order_refund_status
 
     resp_process = client.post(
             "/api/support/return_refund/process",
@@ -292,7 +292,7 @@ def test_invoke_return_refund_process_workflow_(client, email_addr, expected_ord
     if decided_by:
         assert refund_request_to_process.decided_by == decided_by
     if decision_reason:
-        refund_request_to_process.decision_reason
+        assert refund_request_to_process.decision_reason == decision_reason
     assert refund_request_to_process.requires_manual_approval == requires_manual_approval
     if requires_manual_approval_reason:
         assert refund_request_to_process.requires_manual_approval_reason == requires_manual_approval_reason
@@ -303,14 +303,22 @@ def test_invoke_return_refund_process_workflow_(client, email_addr, expected_ord
     assert snapshot.values.get("summary")
     assert len(snapshot.values["messages"]) == 2
     messages = snapshot.values["messages"]
-    isinstance(messages[-1], ChatMessage)
+    assert isinstance(messages[-1], ChatMessage)
     chat_message = messages[-1]
     assert chat_message.role == ROLE_AGENT
-    assert chat_message.additional_kwargs["source"] == SOURCE_RETURN_REFUND_PROCESS     
+    assert chat_message.additional_kwargs["source"] == SOURCE_RETURN_REFUND_PROCESS
+
+    # A refund request is processed exactly once: a second /process call for the same
+    # thread must not mint another assigned_refund_request_id or duplicate the dict entry.
+    resp_process_again = client.post(
+            "/api/support/return_refund/process",
+            json={"thread_id": thread_id})
+    assert resp_process_again.status_code == 400
+    assert refund_requests_processing_dict[assigned_refund_request_id] == refund_request_to_process
 
 
 @pytest.mark.parametrize(
-    "email_addr, expected_order_refund_status, in_response, request_status, requires_manual_approval_reason, notes_to_human_reviwer", 
+    "email_addr, expected_order_refund_status, in_response, request_status, requires_manual_approval_reason, notes_to_human_reviwer",
     [
         ("wolf.blitzer@cnn.com", OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS,
         "You would receive an email of a human review result regarding to your refund request shortly.",
@@ -349,7 +357,7 @@ def test_invoke_return_refund_process_workflow_human_override(client, email_addr
 
     assert data["initial_return_refund_decision"]
     initial_decision: ReturnRefundInitialDecision = ReturnRefundInitialDecision(**data["initial_return_refund_decision"])
-    initial_decision.order_refund_status == expected_order_refund_status
+    assert initial_decision.order_refund_status == expected_order_refund_status
 
     resp_process = client.post(
             "/api/support/return_refund/process",

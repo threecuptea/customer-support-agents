@@ -11,7 +11,8 @@ export interface OrderItem {
   supplier_name: string;
   unit_price: number;
   number_units: number;
-  intimate_item: boolean;
+  nonrefundable_item: boolean;
+  nonrefundable_reason: "intimate item" | "luxury goods" | null;
 }
 
 export interface Order {
