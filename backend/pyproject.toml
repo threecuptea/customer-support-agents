@@ -22,6 +22,7 @@ dependencies = [
     "langgraph-checkpoint-postgres>=3.1.0",
     "psycopg[binary,pool]>=3.3.4",
     "rapidfuzz>=3.14.5",
+    "ipython>=9.17.1",
 ]
 
 [dependency-groups]

@@ -631,7 +631,7 @@ class CustomerSupportAgent:
             go ahead to set `request_human_review_return_refund` to True and let the customer to know there will be an input box shown in the next screen and he/ she can 
             state the reason why the customer think that his/ her request should be approved. The customer should input his/ her reason and press 'Process the request' to proceed.
 
-            If the initial return refund decision show that the customer's request has been rejected, the cutomer does not complain about it,  
+            If the initial return refund decision show that the customer's request has been rejected and the cutomer does not complain about it,  
             DO NOT voluntarily offer this option. Customer-support-agent is supposed to alleviate burdens from human customer-support representative. 
 
             set `response` to what you want to reply  
@@ -798,6 +798,11 @@ class CustomerSupportAgent:
         
         graph = builder.compile(checkpointer = self.checkpointer, store = self.store)
         self.graph = graph
+        # Find a way to draw the mermaid image.
+        # from IPython.display import Image, display
+        # display(Image(graph.get_graph().draw_mermaid_png()))
+
+        
         return graph
     
 
