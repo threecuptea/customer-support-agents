@@ -638,13 +638,24 @@ class CustomerSupportAgent:
         """
         system_msg = SystemMessage(content=SYSTEM_PROMPT)
         output: ReturnRefundStructuredOutput = await self.return_refund_llm.ainvoke([system_msg])
-        response = output.response if output else ""
-        message = AIMessage(content= response , additional_kwargs={
-            "source":SOURCE_ORDER_INQUIRY}) 
+        # mock llm will return output None; mirrors order_continue_chat_node's same guard.
+        if not output:
+            response = f"{PREFIX_ANSWER_QUESTION} {ESCALATE_MESSAGE}"
+            message = ChatMessage(content= response, role= ROLE_AGENT, additional_kwargs={
+                "source": SOURCE_ORDER_INQUIRY})
+            return {
+                "messages": [message],
+                "response": response,
+                # Preserve whatever was already decided in an earlier turn rather than
+                # resetting it to False just because this turn's LLM call came back empty.
+                "request_human_review_return_refund": state.get("request_human_review_return_refund", False),
+            }
+        message = AIMessage(content= output.response , additional_kwargs={
+            "source":SOURCE_ORDER_INQUIRY})
         return {
             "messages": [message],
-            "response": response, 
-            "request_human_review_return_refund": output.request_human_review_return_refund if output else False,
+            "response": output.response,
+            "request_human_review_return_refund": output.request_human_review_return_refund,
         }
            
         

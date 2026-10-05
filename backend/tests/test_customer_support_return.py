@@ -9,7 +9,7 @@ from main import app
 from models.model import Order, CustomerContext, ExchangeOrReturnInput, ExchangeReturnReason, ExchangeReturnRefundAction, ESCALATE_REASON, \
     ReturnRefundInitialDecision, RefundRequest, OrderRefundStatus, OrderToReturn, ItemToReturn
 from workflow.customer_support import CustomerSupportAgent, ROLE_FUNCTION, ROLE_AGENT, SOURCE_EXCHANGE_RETURN_REASON, SOURCE_RETURN_REFUND_PROCESS, \
-    PREFIX_NEED_EXPEDIT_REPLACEMENT, PREFIX_RCVD_DAMAGED_PRODUCT, PREFIX_RCVD_WRONG_ITEM, PREFIX_FOUND_BETTER_PRICE
+    PREFIX_NEED_EXPEDIT_REPLACEMENT, PREFIX_RCVD_DAMAGED_PRODUCT, PREFIX_RCVD_WRONG_ITEM, PREFIX_FOUND_BETTER_PRICE, ESCALATE_MESSAGE
 from workflow.return_refund_utils import refund_requests_processing_dict
 import uuid
 
@@ -439,4 +439,20 @@ def test_invoke_return_refund_chat_workflow(client):
     assert resp.status_code ==200
     data = resp.json()
     assert not data["request_human_review_return_refund"]
+
+    # Mock LLM always returns None for with_structured_output, so return_refund_chat_node
+    # must fall back to an escalate response rather than the "" it used to return, and must
+    # not stomp request_human_review_return_refund back to False once it's already True.
+    assert data["response"]
+    assert ESCALATE_MESSAGE in data["response"]
+
+    graph = client.app.state.support_graph
+    config = {"configurable": {"thread_id": thread_id}}
+    asyncio.run(graph.aupdate_state(config, {"request_human_review_return_refund": True}))
+    resp = client.post(
+        "/api/support/return_refund/chat",
+        json={"thread_id": thread_id, "user_conversation": "Please let a human review this"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["request_human_review_return_refund"]
     

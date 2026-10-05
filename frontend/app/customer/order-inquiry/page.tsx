@@ -9,11 +9,12 @@ import {
   ArrowLeft,
   PackageSearch,
   MessageCircleQuestion,
+  Undo2,
   User,
   Bot,
-  Undo2,
 } from "lucide-react";
 import { useAuth, useRequireRole, Order } from "../../../lib/auth-context";
+import { useOrderInquiry } from "../../../lib/order-inquiry-context";
 
 // Backend API base URL — defaults to same-origin (single-container deploy).
 // Override with NEXT_PUBLIC_API_URL at build time for other setups.
@@ -25,17 +26,13 @@ interface OrderInitResponse {
   response: string;
 }
 
-interface OrderContinueResponse {
+// Mirrors backend's GenericResponse — CSA-13 dropped the order-continue-specific
+// escalation_reason/intent_for_return_refund fields that used to live here; the
+// customer now tells us they want to return/refund by pressing a button instead
+// (see the "Like to Exchange or Return for Refund" button below).
+interface GenericResponse {
   thread_id: string;
   response: string;
-  escalation_reason: string | null;
-  intent_for_return_refund: boolean;
-}
-
-interface Exchange {
-  question: string | null; // null for the deterministic first reply from /order/init
-  answer: string;
-  intentForReturnRefund?: boolean;
 }
 
 function formatDate(iso: string | null | undefined): string {
@@ -65,16 +62,28 @@ function statusBadgeClasses(status: Order["status"]): string {
   }
 }
 
+// Exchange/return is only offered once the order has actually been delivered —
+// there's nothing to return before then. Retrofitted per CSA-11's comments.
+function canExchangeOrReturn(order: Order): boolean {
+  return order.status === "delivered" && !!order.delivery_date;
+}
+
 export default function OrderInquiryPage() {
   const { session, isLoading } = useRequireRole("customer");
   const { logout } = useAuth();
   const router = useRouter();
+  const {
+    threadId,
+    setThreadId,
+    targetOrder,
+    setTargetOrder,
+    exchanges,
+    setExchanges,
+    resetForNewOrder,
+    leaveOrderThread,
+  } = useOrderInquiry();
 
-  const [step, setStep] = useState<"select" | "chat">("select");
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
-  const [threadId, setThreadId] = useState<string | null>(null);
-  const [targetOrder, setTargetOrder] = useState<Order | null>(null);
-  const [exchanges, setExchanges] = useState<Exchange[]>([]);
   const [conversation, setConversation] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -84,25 +93,14 @@ export default function OrderInquiryPage() {
   const customer = session.customer_context;
   if (!customer) return null;
 
+  // Derived, not stored: targetOrder already lives in shared context and
+  // survives navigating to/from the return/refund screen, so re-deriving the
+  // step from it (rather than tracking a separate piece of local state) means
+  // coming back from that screen lands back on the chat step automatically.
+  const step: "select" | "chat" = targetOrder ? "chat" : "select";
   const orders = sortOrdersDescending(customer.latest_orders);
   const canChangeOrder = orders.length > 1;
   const greetingName = `${customer.title} ${customer.last_name}`;
-
-  // Best-effort: tells the backend to summarize this order thread before it's
-  // abandoned (Exit, or navigating away to a different support flow). Never
-  // blocks the caller on failure.
-  const leaveOrderThread = async () => {
-    if (!threadId) return;
-    try {
-      await fetch(`${API_URL}/support/exit`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ thread_id: threadId }),
-      });
-    } catch {
-      // Best-effort: never block navigation on this call failing.
-    }
-  };
 
   const exit = async () => {
     await leaveOrderThread();
@@ -115,10 +113,12 @@ export default function OrderInquiryPage() {
     router.push("/customer/others");
   };
 
+  const goToExchangeOrReturn = () => {
+    router.push("/customer/order-inquiry/return");
+  };
+
   const backToSelection = () => {
-    setStep("select");
-    setTargetOrder(null);
-    setExchanges([]);
+    resetForNewOrder();
     setSelectedOrderId(null);
     setConversation("");
     setError(null);
@@ -148,7 +148,6 @@ export default function OrderInquiryPage() {
       }
       setTargetOrder(data.target_order);
       setExchanges([{ question: null, answer: data.response }]);
-      setStep("chat");
     } catch {
       setError("Could not reach support. Please try again.");
     } finally {
@@ -175,15 +174,8 @@ export default function OrderInquiryPage() {
         return;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: OrderContinueResponse = await res.json();
-      setExchanges((prev) => [
-        ...prev,
-        {
-          question: trimmed,
-          answer: data.response,
-          intentForReturnRefund: data.intent_for_return_refund,
-        },
-      ]);
+      const data: GenericResponse = await res.json();
+      setExchanges((prev) => [...prev, { question: trimmed, answer: data.response }]);
       setConversation("");
     } catch {
       setError("Could not reach support. Please try again.");
@@ -375,6 +367,7 @@ export default function OrderInquiryPage() {
                   <tr>
                     <th className="py-1.5 text-left font-medium text-gray-600">Item</th>
                     <th className="py-1.5 text-right font-medium text-gray-600">Qty</th>
+                    <th className="py-1.5 text-left font-medium text-gray-600 pl-3">Refundable</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -382,6 +375,17 @@ export default function OrderInquiryPage() {
                     <tr key={item.product_id}>
                       <td className="py-1.5">{item.product_name}</td>
                       <td className="py-1.5 text-right">{item.number_units}</td>
+                      <td className="py-1.5 pl-3">
+                        {item.nonrefundable_item ? (
+                          <span className="inline-block text-xs font-medium rounded-full px-2 py-0.5 border bg-red-50 text-red-700 border-red-200">
+                            No{item.nonrefundable_reason ? ` — ${item.nonrefundable_reason}` : ""}
+                          </span>
+                        ) : (
+                          <span className="inline-block text-xs font-medium rounded-full px-2 py-0.5 border bg-emerald-50 text-emerald-700 border-emerald-200">
+                            Yes
+                          </span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -401,17 +405,8 @@ export default function OrderInquiryPage() {
                   )}
                   <div className="flex items-start gap-2">
                     <Bot className="w-5 h-5 text-brand-blue shrink-0 mt-1" />
-                    <div className="space-y-1">
-                      <div className="bg-white border border-gray-100 rounded-lg rounded-tl-none px-3 py-2 text-sm text-gray-800 max-w-[85%] break-words shadow-soft">
-                        {exchange.answer}
-                      </div>
-                      {exchange.intentForReturnRefund && (
-                        // Temporary marker until the return/refund ticket builds the real
-                        // itemized-return screen — tear down once that lands.
-                        <span className="inline-flex items-center gap-1 text-xs font-medium text-brand-purple bg-brand-purple/10 border border-brand-purple/30 rounded-full px-2 py-0.5">
-                          <Undo2 className="w-3 h-3" /> Return requested
-                        </span>
-                      )}
+                    <div className="bg-white border border-gray-100 rounded-lg rounded-tl-none px-3 py-2 text-sm text-gray-800 max-w-[85%] break-words shadow-soft">
+                      {exchange.answer}
                     </div>
                   </div>
                 </div>
@@ -453,6 +448,15 @@ export default function OrderInquiryPage() {
             </div>
 
             <div className="flex flex-wrap justify-center gap-3">
+              {canExchangeOrReturn(targetOrder) && (
+                <button
+                  onClick={goToExchangeOrReturn}
+                  disabled={loading}
+                  className="inline-flex items-center gap-1.5 bg-brand-purple hover:bg-brand-purple/90 disabled:opacity-50 text-white rounded-lg px-4 py-2 text-sm font-medium transition-colors"
+                >
+                  <Undo2 className="w-4 h-4" /> Like to Exchange or Return for Refund
+                </button>
+              )}
               <button
                 onClick={backToSelection}
                 disabled={!canChangeOrder || loading}
