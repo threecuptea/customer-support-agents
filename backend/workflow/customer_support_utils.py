@@ -43,14 +43,15 @@ FAQs = {
         "How do I start an exchange? ": "Go to e-shopping.com, look for Support -> Echange on the top of the screen then follow the instruction to initiate an exchange. "
         "We'll include the return shipping label in the confirmation email and ship the exchange once the original item is scanned by the carrier.",
 
+        "What is your return policy in summary?": "We accept returns within 35 days of delivery for unused items.  The return item must have its tags attached "
+        "and be returned in its original packaging with your receipt or proof of purchase",
+        "How do I start a return?": "You can talk to me to start a return/ refund request.",
+
         "What items cannot be returned?": "We cannot accept returns on final sale items, customized items, perishable items, gift cards, or items that have been altered or damaged by the customer. "
         "Certain high-risk items, such as luxury goods and intimate items, are marked as non-returnable unless they are defective or damaged upon receipt.",
 
-        "What is your return policy in summary?": "We accept returns within 35 days of delivery for unused items.  The return item must have its tags attached "
-        "and be returned in its original packaging with your receipt or proof of purchase",
-
         "Can I still get my refund if my order exceeds the return window of the policy": "No, we have already extended 5 more days.",
-        "How do I start a return?": "You can talk to me to start a return/ refund request.",
+        
         "When will I get my refund?": "Refunds usually take 3 to 5 business days after we get the item back.",
 
         "Are returns free?": "We are not charging any re-stocking fees. However, you will return at your own expense unless for defective, damaged or wrong items. "

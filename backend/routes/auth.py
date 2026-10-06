@@ -14,7 +14,6 @@ from services.demo_data import adjust_days_demo_data_testable
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/auth", tags=['auth'])
 load_dotenv(override= True)
 
 @asynccontextmanager

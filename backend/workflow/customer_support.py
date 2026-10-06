@@ -50,6 +50,7 @@ SOURCE_ORDER_RETRIEVAL = "retrieve_target_order"
 SOURCE_ORDER_INQUIRY = "order_inquiry"
 SOURCE_EXCHANGE_RETURN_REASON = "exchange_return_reason"
 SOURCE_RETURN_REFUND_PROCESS = "return_refund_process"
+SOURCE_RETURN_REFUND_CHAT = "return_refund_chat"
 
 
 ROLE_FUNCTION = "function"
@@ -62,6 +63,7 @@ class CustomerSupportAgent:
         self.store = store
         # I can override model and provider to use overrides if needed
         self.summarize_llm = get_llm()
+        
        
         # FAQ matching
         # Selected models should be customized by their speciality and strength in the production
@@ -261,6 +263,7 @@ class CustomerSupportAgent:
         recent_conversations = "\n".join(
             [f"- {message.content}" for message in state['messages'] if not isinstance(message, SystemMessage)]
         )
+        logger.info(f"order_continue_chat_node beginning state for order #{state['order_number_provided']}:\nmemory notes: {memory_notes}\nrecent conversations: {recent_conversations}")
         # Make best use of state['order_is_revisit'] flag
         # Switch to initiate the 'Exchange or return for refund' by the customer.  Separate revisit handling and don't 
         # asssume the escalation unless the confirmation is received.
@@ -291,7 +294,7 @@ class CustomerSupportAgent:
             The rest of scenarios that we are trying to cover:
             Find out what the customer is complaining about.
             if the order status is 'delivered' but the customer did not receive the shipment, ask the customer to click the tracking number link to see if there is a delivery photo taken.  
-            If yes, is the photo taken in the customer's porch?  If yes, ask the customer to check with his/ her Ring's camera footage if the customer has Ring security system or 
+            If yes, is the photo taken in the customer's porch?  If yes, ask the customer to check with his/ her camera footage if the customer has Ring or SimpliSafe security system or 
             check with his/ her family members before the customer confirm that the shipment is stolen . UPS would not be responsible for a stolen shipment.  
             If the photo is not taken in the customer's porch or no photo taken, ask the customer to look around the house and/ or check with neighbors.
             Let the customer know that he/ she can always re-visit us after he/ she exhaust searches knowing the shipment is not stolen. 
@@ -326,9 +329,8 @@ class CustomerSupportAgent:
             # Try not to use too many tokens
         
         system_msg = SystemMessage(content=SYSTEM_PROMPT)
-        logger.info("order_continue_chat_node prompt for order #%s:\n%s", state['order_number_provided'], SYSTEM_PROMPT)
         order_output: OrderStructuredOutput = await self.order_llm_for_inquiry_chat.ainvoke([system_msg])
-        logger.info("order_continue_chat_node result for order #%s: %s", state['order_number_provided'], order_output)
+        logger.info("order_continue_chat_node structured output for order #%s: %s", state['order_number_provided'], order_output)
         # mock llm will return order_output None
         if not order_output or order_output.escalate:
             escalation_reason = order_output.escalation_reason if order_output else ESCALATE_REASON.HELP_ANSWER_ORDER_INQUIRY
@@ -393,7 +395,8 @@ class CustomerSupportAgent:
             [f"- {message.content}" for message in state["messages"] if not isinstance(message, SystemMessage)]
         )
         product_names = [f"'{item.product_name}'" for item in target_order.items]
-        
+        logger.info(f"detect_order_revisit_node beginning state for order #{state['order_number_provided']}:\nmemory notes: {memory_notes}\nrecent conversations: {recent_conversations}")
+
         SYSTEM_PROMPT = f"""
         You are an intelligent customer-support agent trying to decide whether the customer has already
         discussed order #{target_order.order_id} in a prior conversation, as opposed to raising it for the
@@ -408,9 +411,8 @@ class CustomerSupportAgent:
         you are not sure.
         """
         system_msg = SystemMessage(content=SYSTEM_PROMPT)
-        logger.info("detect_order_revisit_node prompt for order #%s:\n%s", target_order.order_id, SYSTEM_PROMPT)
         eval: OrderRevisitEval = await self.order_llm_for_revisit_eval.ainvoke([system_msg])
-        logger.info("detect_order_revisit_node result for order #%s: %s", target_order.order_id, eval)
+        logger.info("detect_order_revisit_node structured output for order #%s: %s", target_order.order_id, eval)
         return {"order_is_revisit": bool(eval and eval.is_revisit)}
 
     # Fresh-inquiry path only: deterministic, no LLM call, assumes retrieve_target_order_node
@@ -534,7 +536,7 @@ class CustomerSupportAgent:
                     response = f"""
                     I am sorry that I have to reject your return refund request because you are trying to return a non-refundable item.
                     """
-            response += " Press 'Process the request' to proceed, press 'Cancel and Exit' to cancel the request or press 'I like to chat' to chat for a futher discussion"        
+            response += " Press 'Process the request' to proceed based on the initial decision, press 'Cancel' to cancel the request or press 'I like to chat' to chat for a futher discussion"        
             return {
                 "response": response, 
                 "messages": messages, 
@@ -603,6 +605,7 @@ class CustomerSupportAgent:
         recent_conversations = "\n".join(
             [f"- {message.content}" for message in state['messages'] if not isinstance(message, SystemMessage)]
         )
+        logger.info(f"return_refund_chat_node beginning state for order #{state['order_number_provided']}, assigned_refund_request_id={state['assigned_refund_request_id']}:\nmemory notes: {memory_notes}\nrecent conversations: {recent_conversations}")
         SYSTEM_PROMPT = f"""
             You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her return/ refund request.
             Here is the updated refund request: {state['refund_request_to_process'].model_dump_json()}
@@ -610,39 +613,40 @@ class CustomerSupportAgent:
             Here is what we remember about this customer from past visits, if any: {memory_notes if memory_notes else "None yet"}.
             Here is the most recent conversations in sequential order: {recent_conversations if recent_conversations else "None yet"}.
             Here is the summary of the previous conversation: {state.get("summary") if state.get("summary") else "None yet"}.
-            To help you answer a general return refund question, here is the return policy ontext: {RETURN_POLICY}
 
-            If {state["assigned_refund_request_id"]} > 0, it means that we have already process the customer's refund request.
-            You can wrap up the conversation. Ask the customer if 'we can help him/ her with anything else, if not, he/ she can simply press 'Exit' button
+            DO NOT REPEAT the same response!!
 
-            If the customer says that he/ she hasn't receieved an email regarding to his/ her human review result of the refund request 
-            ({state['request_human_review_return_refund'] and state["assigned_refund_request_id"] > 0 }),
-            let him/ her know that an on-duty customer support representative usually will respond within 15 minutes and no more than 30 minutes and  
-            So far we always respond on time. The customer-support agent app currently is not supporting checking the return refund status yet. 
-            If he/ she hasn't received the email after 30 minutes, he/ she can always re-visit us, go to 'order inquiry' and tell the agent he/ she like to
-            talk to a human customer-support representative for his/ her return refund request status.  The agent will escalate it to a CSR for the help.
-
-            If the initial return refund decision show that the customer's request has been rejected, the customer complain about it and our record show 
-            that he/ she hasn't requested for a human review of his/ her return/ refund request yet ({state['request_human_review_return_refund']} == false),
-            tell the customer that he/ she has one chance to ask for a human review of his/ her request. 
+            If `request_human_review_return_refund` == True and `assigned_refund_request_id` == 0 (it means that we haven't processed the customer's refund request), 
+            tell the customer that he/ she should input the reason why he/ she thinks the request should be approved in the 'notes to reviewer' input field,
+            then press `Process the request` button.
+                        
+            If the `initial_return_refund_decision` shows that the customer's request has been rejected by an automatic agent, the customer complain about it and our record shows 
+            that `request_human_review_return_refund` == False, tell the customer that he/ she has one chance to ask for a human review of his/ her request.
             Tell the customer that the customer-support-agent app has already integrated with Slack app, the request details can be sent to a Slack channel and 
             an on-duty customer support representative can review it shortly if the customer decide to do that.
-            Approving or not is subject to the on-duty CSR's reasonable discretion. If the customer decide to request a human review,
-            go ahead to set `request_human_review_return_refund` to True and let the customer to know there will be an input box shown in the next screen and he/ she can 
-            state the reason why the customer think that his/ her request should be approved. The customer should input his/ her reason and press 'Process the request' to proceed.
+            Ask the customer explicitly 'Would you like me to initiate a human review of your request?'  Set `request_human_review_return_refund` to True if the customer say 'yes' to confirm it.
+                    
+            If the initial return refund decision show that the customer's request has been rejected and the cutomer DOES NOT complain about it,  
+            DO NOT voluntarily offer a human review of his/ her request. Customer-support-agent is supposed to alleviate burdens from huan customer-support representative. 
+    
+            If the customer ask how long it will take human review and you haven't explained it yet,
+            let him/ her know that an on-duty customer support representative usually will respond within 15 minutes and no more than 30 minutes.  
+            Additionally, to help you answer a general return refund question, here is the return policy ontext: {RETURN_POLICY}
 
-            If the initial return refund decision show that the customer's request has been rejected and the cutomer does not complain about it,  
-            DO NOT voluntarily offer this option. Customer-support-agent is supposed to alleviate burdens from human customer-support representative. 
+            You can just wrap up the conversation by asking "if we can help him/ her with anything else, if not, the customer can simply press 'Exit' button"
+            if you have answered all the customer's questions.
 
             set `response` to what you want to reply  
         """
         system_msg = SystemMessage(content=SYSTEM_PROMPT)
         output: ReturnRefundStructuredOutput = await self.return_refund_llm.ainvoke([system_msg])
+        logger.info("return_refund_chat_node structured output for order #%s: %s", state['order_number_provided'], output)
+        
         # mock llm will return output None; mirrors order_continue_chat_node's same guard.
         if not output:
             response = f"{PREFIX_ANSWER_QUESTION} {ESCALATE_MESSAGE}"
             message = ChatMessage(content= response, role= ROLE_AGENT, additional_kwargs={
-                "source": SOURCE_ORDER_INQUIRY})
+                "source": SOURCE_RETURN_REFUND_CHAT})
             return {
                 "messages": [message],
                 "response": response,
@@ -650,8 +654,9 @@ class CustomerSupportAgent:
                 # resetting it to False just because this turn's LLM call came back empty.
                 "request_human_review_return_refund": state.get("request_human_review_return_refund", False),
             }
+        
         message = AIMessage(content= output.response , additional_kwargs={
-            "source":SOURCE_ORDER_INQUIRY})
+            "source": SOURCE_RETURN_REFUND_CHAT})
         return {
             "messages": [message],
             "response": output.response,

@@ -245,6 +245,7 @@ def test_detect_order_revisit_node_defaults_false_under_mock(client):
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     state = {
         "target_order": context.latest_orders[0],
+        "order_number_provided": context.latest_orders[0].order_id,
         "summary": "",
         "messages": [],
     }
@@ -263,6 +264,7 @@ def test_detect_order_revisit_node_true_when_llm_confirms(client):
     agent.order_llm_for_revisit_eval = _FakeRevisitLLM()
     state = {
         "target_order": context.latest_orders[0],
+        "order_number_provided": context.latest_orders[0].order_id,
         "summary": "Customer previously reported this order's shipment as lost.",
         "messages": [],
     }
