@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderWithAuth, jsonResponse } from "../../../lib/test-utils";
+import { renderWithOrderInquiry, jsonResponse } from "../../../lib/test-utils";
 import { Order } from "../../../lib/auth-context";
 import OrderInquiryPage from "./page";
 
@@ -82,12 +82,12 @@ beforeEach(() => {
 
 describe("OrderInquiryPage", () => {
   it("redirects to / when there is no customer session", async () => {
-    renderWithAuth(<OrderInquiryPage />);
+    renderWithOrderInquiry(<OrderInquiryPage />);
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/"));
   });
 
   it("lists orders sorted descending by order_date, with customer name and email", async () => {
-    renderWithAuth(<OrderInquiryPage />, {
+    renderWithOrderInquiry(<OrderInquiryPage />, {
       seedSession: sessionWith([orderOlder, orderNewer]),
     });
     expect(await screen.findByText(/ms\. ling \(sonya@x\.com\)/i)).toBeInTheDocument();
@@ -107,7 +107,7 @@ describe("OrderInquiryPage", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    renderWithAuth(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
+    renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
     await screen.findByText(/order #1002/i);
 
     await userEvent.click(screen.getByRole("radio"));
@@ -133,7 +133,7 @@ describe("OrderInquiryPage", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    renderWithAuth(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
+    renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
     await screen.findByText(/order #1002/i);
 
     await userEvent.click(screen.getByRole("radio"));
@@ -147,7 +147,7 @@ describe("OrderInquiryPage", () => {
     expect(screen.queryByPlaceholderText(/haven't received/i)).not.toBeInTheDocument();
   });
 
-  it("continues the conversation, reuses thread_id, and shows the return-intent badge", async () => {
+  it("continues the conversation and reuses thread_id", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -158,16 +158,11 @@ describe("OrderInquiryPage", () => {
         })
       )
       .mockResolvedValueOnce(
-        jsonResponse({
-          thread_id: "t1",
-          response: "We'll be happy to process the return.",
-          escalation_reason: null,
-          intent_for_return_refund: true,
-        })
+        jsonResponse({ thread_id: "t1", response: "We'll be happy to process the return." })
       );
     vi.stubGlobal("fetch", fetchMock);
 
-    renderWithAuth(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
+    renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
     await screen.findByText(/order #1002/i);
     await userEvent.click(screen.getByRole("radio"));
     await userEvent.click(screen.getByRole("button", { name: /continue/i }));
@@ -178,11 +173,85 @@ describe("OrderInquiryPage", () => {
     await userEvent.click(screen.getByRole("button", { name: /send/i }));
 
     expect(await screen.findByText("We'll be happy to process the return.")).toBeInTheDocument();
-    expect(screen.getByText(/return requested/i)).toBeInTheDocument();
 
     const secondBody = JSON.parse(fetchMock.mock.calls[1][1].body);
     expect(secondBody.thread_id).toBe("t1");
     expect(secondBody.user_conversation).toBe("The item is damaged, I want a refund");
+  });
+
+  it("shows a 'Refundable' column flagging nonrefundable items with their reason", async () => {
+    const orderWithIntimateItem: Order = {
+      ...orderOlder,
+      items: [
+        { ...orderOlder.items[0] },
+        {
+          product_id: "P3",
+          product_name: "Silk Bra",
+          supplier_name: "Acme",
+          unit_price: 40,
+          number_units: 1,
+          nonrefundable_item: true,
+          nonrefundable_reason: "intimate item",
+        },
+      ],
+    };
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      jsonResponse({
+        thread_id: "t1",
+        target_order: orderWithIntimateItem,
+        response: "Your order was delivered.",
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderWithIntimateItem]) });
+    await screen.findByText(/order #1001/i);
+    await userEvent.click(screen.getByRole("radio"));
+    await userEvent.click(screen.getByRole("button", { name: /continue/i }));
+
+    await screen.findByText("Your order was delivered.");
+    expect(screen.getByText("Yes")).toBeInTheDocument();
+    expect(screen.getByText(/no — intimate item/i)).toBeInTheDocument();
+  });
+
+  it("shows 'Like to Exchange or Return for Refund' only once the order is delivered, and navigates to the return screen", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      jsonResponse({
+        thread_id: "t1",
+        target_order: orderOlder,
+        response: "Your order was delivered.",
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderOlder]) });
+    await screen.findByText(/order #1001/i);
+    await userEvent.click(screen.getByRole("radio"));
+    await userEvent.click(screen.getByRole("button", { name: /continue/i }));
+    await screen.findByText("Your order was delivered.");
+
+    const returnButton = screen.getByRole("button", { name: /exchange or return for refund/i });
+    await userEvent.click(returnButton);
+    expect(push).toHaveBeenCalledWith("/customer/order-inquiry/return");
+  });
+
+  it("hides 'Like to Exchange or Return for Refund' for an order that hasn't been delivered yet", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      jsonResponse({
+        thread_id: "t1",
+        target_order: orderNewer,
+        response: "Your order is still in 'transit' status.",
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
+    await screen.findByText(/order #1002/i);
+    await userEvent.click(screen.getByRole("radio"));
+    await userEvent.click(screen.getByRole("button", { name: /continue/i }));
+    await screen.findByText("Your order is still in 'transit' status.");
+
+    expect(screen.queryByRole("button", { name: /exchange or return for refund/i })).not.toBeInTheDocument();
   });
 
   it("restarts from selection with an error when /order/continue returns 400", async () => {
@@ -202,7 +271,7 @@ describe("OrderInquiryPage", () => {
       });
     vi.stubGlobal("fetch", fetchMock);
 
-    renderWithAuth(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
+    renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
     await screen.findByText(/order #1002/i);
     await userEvent.click(screen.getByRole("radio"));
     await userEvent.click(screen.getByRole("button", { name: /continue/i }));
@@ -226,7 +295,7 @@ describe("OrderInquiryPage", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    renderWithAuth(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
+    renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
     await screen.findByText(/order #1002/i);
     await userEvent.click(screen.getByRole("radio"));
     await userEvent.click(screen.getByRole("button", { name: /continue/i }));
@@ -255,7 +324,7 @@ describe("OrderInquiryPage", () => {
       );
     vi.stubGlobal("fetch", fetchMock);
 
-    renderWithAuth(<OrderInquiryPage />, { seedSession: sessionWith([orderOlder, orderNewer]) });
+    renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderOlder, orderNewer]) });
     await screen.findByText(/order #1002/i);
     const radios = screen.getAllByRole("radio");
     await userEvent.click(radios[0]); // newer order, listed first
@@ -277,7 +346,7 @@ describe("OrderInquiryPage", () => {
   });
 
   it("navigates to general inquiry", async () => {
-    renderWithAuth(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
+    renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
     await screen.findByText(/order #1002/i);
     await userEvent.click(screen.getByRole("button", { name: /ask a general question/i }));
     expect(push).toHaveBeenCalledWith("/customer/others");
@@ -296,7 +365,7 @@ describe("OrderInquiryPage", () => {
       .mockResolvedValueOnce(jsonResponse(null));
     vi.stubGlobal("fetch", fetchMock);
 
-    renderWithAuth(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
+    renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
     await screen.findByText(/order #1002/i);
     await userEvent.click(screen.getByRole("radio"));
     await userEvent.click(screen.getByRole("button", { name: /continue/i }));
@@ -312,7 +381,7 @@ describe("OrderInquiryPage", () => {
   });
 
   it("shows an empty state and no Continue button when the customer has no recent orders", async () => {
-    renderWithAuth(<OrderInquiryPage />, { seedSession: sessionWith([]) });
+    renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([]) });
     expect(await screen.findByText(/don't have any recent orders/i)).toBeInTheDocument();
     expect(screen.queryByRole("radio")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^continue$/i })).not.toBeInTheDocument();
@@ -322,7 +391,7 @@ describe("OrderInquiryPage", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    renderWithAuth(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
+    renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
     await screen.findByText(/order #1002/i);
     await userEvent.click(screen.getAllByRole("button", { name: /exit/i })[0]);
 
@@ -344,7 +413,7 @@ describe("OrderInquiryPage", () => {
       .mockResolvedValueOnce(jsonResponse(null));
     vi.stubGlobal("fetch", fetchMock);
 
-    renderWithAuth(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
+    renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
     await screen.findByText(/order #1002/i);
     await userEvent.click(screen.getByRole("radio"));
     await userEvent.click(screen.getByRole("button", { name: /continue/i }));

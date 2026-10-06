@@ -53,7 +53,7 @@ async def return_refund_process(request_to_process: ReturnRefundProcessRequest, 
 
 @router.post("/return_refund/chat")
 async def return_refund_chat(support: GenericChatInput, request: Request) -> ReturnRefundChatResponse:
-    logger.info(f"Initialize a return refund request for thread: {support.thread_id}")
+    logger.info(f"Chat about a return refund request for thread: {support.thread_id}")
     return await invoke_return_refund_chat_workflow(support, request)
 
 @router.post("/exit")

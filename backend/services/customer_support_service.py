@@ -244,7 +244,7 @@ async def invoke_return_refund_chat_workflow(support: GenericChatInput, request:
         )
         
     except Exception as exc:
-        error_msg = f"Error process a return refund request for thread: {refund_request.returned_order.origin_order_id}"
+        error_msg = f"Error chat about a return refund request for thread: {refund_request.returned_order.origin_order_id}"
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
 

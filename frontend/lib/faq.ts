@@ -50,20 +50,20 @@ export const FAQ_SECTIONS: FaqSection[] = [
         "answer": "Go to e-shopping.com, look for Support -> Echange on the top of the screen then follow the instruction to initiate an exchange. We'll include the return shipping label in the confirmation email and ship the exchange once the original item is scanned by the carrier."
       },
       {
-        "question": "What items cannot be returned?",
-        "answer": "We cannot accept returns on final sale items, customized items, perishable items, gift cards, or items that have been altered or damaged by the customer. Certain high-risk items, such as luxury goods and intimate items, are marked as non-returnable unless they are defective or damaged upon receipt."
-      },
-      {
         "question": "What is your return policy in summary?",
         "answer": "We accept returns within 35 days of delivery for unused items.  The return item must have its tags attached and be returned in its original packaging with your receipt or proof of purchase"
       },
       {
-        "question": "Can I still get my refund if my order exceeds the return window of the policy",
-        "answer": "No, we have already extended 5 more days."
-      },
-      {
         "question": "How do I start a return?",
         "answer": "You can talk to me to start a return/ refund request."
+      },
+      {
+        "question": "What items cannot be returned?",
+        "answer": "We cannot accept returns on final sale items, customized items, perishable items, gift cards, or items that have been altered or damaged by the customer. Certain high-risk items, such as luxury goods and intimate items, are marked as non-returnable unless they are defective or damaged upon receipt."
+      },
+      {
+        "question": "Can I still get my refund if my order exceeds the return window of the policy",
+        "answer": "No, we have already extended 5 more days."
       },
       {
         "question": "When will I get my refund?",
