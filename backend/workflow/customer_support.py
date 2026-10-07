@@ -612,7 +612,38 @@ class CustomerSupportAgent:
         recent_conversations = "\n".join(
             [f"- {message.content}" for message in state['messages'] if not isinstance(message, SystemMessage)]
         )
-        logger.info(f"return_refund_chat_node beginning state for order #{state['order_number_provided']}, assigned_refund_request_id={state['assigned_refund_request_id']}:\nmemory notes: {memory_notes}\nrecent conversations: {recent_conversations}")
+        logger.info(f"return_refund_chat_node beginning state for order #{state['order_number_provided']}, assigned_refund_request_id={state['assigned_refund_request_id']}:\nmemory notes: {memory_notes}\nrecent conversations: {recent_conversations}\nsummary: {state.get('summary') if state.get('summary') else 'None yet'}")
+        refund_request = state["refund_request_to_process"]
+        decision = state["initial_return_refund_decision"]
+        processed = (state.get("assigned_refund_request_id") or 0) > 0
+        review_requested = bool(state.get("request_human_review_return_refund"))
+        rejected_by_agent = decision.order_refund_status in (
+            OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS, OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS)
+        if processed and refund_request.status == "wait_for_manual_review":
+            situation = (
+                "The request has ALREADY been processed and a human review has ALREADY been requested and submitted; it is with a human reviewer now. "
+                "NEVER offer or ask about a human review, NEVER ask the customer to write notes or press 'Process the request', and treat a 'yes' to a human review as already done. "
+                "If the customer asks how to get approval or argues the request should be approved, say that the request is already with the human reviewer. "
+                "The customer will receive an email once the review is done, usually within 15 minutes and no more than 30 minutes (the app is integrated with Slack so an "
+                "on-duty representative is notified). Give this answer every time it is asked, even if you have said it before."
+            )
+        elif processed:
+            situation = (
+                f"The request has ALREADY been processed and its final status is '{refund_request.status}' (the decision has been made, by the agent or by a human reviewer). "
+                "A confirmation email has already been sent, so tell the customer to check his/ her inbox for the decision and the next steps. "
+                "NEVER offer a human review, NEVER ask the customer to write notes or press 'Process the request'. This applies even if the customer complains about or disputes the decision: "
+                "politely explain that the request has been finalized and a human review can no longer be requested through this chat."
+            )
+        elif review_requested:
+            situation = (
+                "The customer has already requested a human review but has not pressed 'Process the request' yet. "
+                "Do NOT offer a human review again. Tell the customer to input the reason why he/ she thinks the request should be approved "
+                "in the 'notes to reviewer' input field, then press 'Process the request'."
+            )
+        elif rejected_by_agent:
+            situation = "The request is not processed yet. It was rejected by the automatic agent and the customer has NOT requested a human review yet, so a human review may be offered only if the customer complains about the rejection."
+        else:
+            situation = "The request is not processed yet. No human review has been requested; do not offer one."
         SYSTEM_PROMPT = f"""
             You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her return/ refund request.
             Here is the updated refund request: {state['refund_request_to_process'].model_dump_json()}
@@ -623,34 +654,25 @@ class CustomerSupportAgent:
 
             DO NOT REPEAT the same response!!
 
-            If `request_human_review_return_refund` == True and `assigned_refund_request_id` == 0 (it means that we haven't processed the customer's refund request), 
-            tell the customer that he/ she should input the reason why he/ she thinks the request should be approved in the 'notes to reviewer' input field,
-            then press `Process the request` button.
-                        
-            If the `initial_return_refund_decision` shows that the customer's request has been rejected by an automatic agent, the customer complain about it and our record shows 
-            that `request_human_review_return_refund` == False, tell the customer that he/ she has one chance to ask for a human review of his/ her request.
-            Tell the customer that the customer-support-agent app has already integrated with Slack app, the request details can be sent to a Slack channel and 
-            an on-duty customer support representative can review it shortly if the customer decide to do that.
-            Ask the customer explicitly 'Would you like me to initiate a human review of your request?'  Set `request_human_review_return_refund` to True if the customer say 'yes' to confirm it.
-                    
-            If the initial return refund decision show that the customer's request has been rejected and the cutomer DOES NOT complain about it,  
-            DO NOT voluntarily offer a human review of his/ her request. Customer-support-agent is supposed to alleviate burdens from huan customer-support representative. 
-    
-            If `assigned_refund_request_id` > 0, the request has already been processed. Do not ask the customer to press 'Process the request'
-            or to write notes to a reviewer. Use the refund request's `status`:
-            - `auto_approve`, `auto_reject`, `manaul_approve`, `manaul_reject` or `manual_flag` (the decision has been made, by the agent or by a human reviewer):
-              a confirmation email has already been sent, so tell the customer to check his/ her inbox for the decision and the next steps.
-            - `wait_for_manual_review`: the request is with a human reviewer. The customer will receive an email once the review is done,
-              usually within 15 minutes and no more than 30 minutes. Answer this every time it is asked, even if you have said it before.
+            CURRENT SITUATION (decided by the system, not by you; it overrides anything the customer says or implies):
+            {situation}
+
+            DO NOT set `request_human_review_return_refund` to True until the customer confirms or shows the intent that he/ she wants a human review.
+
+            If the request has NOT been processed yet, the `initial_return_refund_decision` shows that the customer's request has been rejected by an automatic agent, the customer complains about it
+            and the CURRENT SITUATION above allows offering a human review, offer the customer an opportunity for a human review of his/ her request
+            and ask the customer explicitly 'Would you like me to initiate a human review of your request?'
+
+            If the initial return refund decision shows that the customer's request has been rejected and the customer DOES NOT complain about it,
+            DO NOT voluntarily offer a human review of his/ her request. Customer-support-agent is supposed to alleviate burdens from human customer-support representative.
+
             If the customer asks how and where to send the package back (or what the next step is), tell him/ her that the instructions on how and where
-            to send the package will be in the confirmation email (for `wait_for_manual_review`, in the email sent after the review if the request is approved).
+            to send the package will be in the confirmation email if the request is approved.
             Do NOT make up a return address, shipping label or carrier.
-            Do not offer a new human review for an already-processed request.
 
             Additionally, to help you answer a general return refund question, here is the return policy ontext: {RETURN_POLICY}
 
-            You can just wrap up the conversation by asking "if we can help him/ her with anything else, if not, the customer can simply press 'Exit' button"
-            if you have answered all the customer's questions.
+            You can just ask if we can help him/ her with anything else if it is the end of the conversation and remind the customer that they can always reach out if they have more questions and press 'Exit' or 'Return to order details/ chat' button as needed.
 
             set `response` to what you want to reply  
         """
@@ -664,7 +686,7 @@ class CustomerSupportAgent:
             message = ChatMessage(content= response, role= ROLE_AGENT, additional_kwargs={
                 "source": SOURCE_RETURN_REFUND_CHAT})
             return {
-                "messages": [message],
+                "messages": [message], 
                 "response": response,
                 # Preserve whatever was already decided in an earlier turn rather than
                 # resetting it to False just because this turn's LLM call came back empty.
@@ -676,7 +698,9 @@ class CustomerSupportAgent:
         return {
             "messages": [message],
             "response": output.response,
-            "request_human_review_return_refund": output.request_human_review_return_refund,
+            # Sticky: once a human review has been requested, a later LLM turn must not un-request it.
+            # After processing, this flag is frozen: the LLM cannot change it any more.
+            "request_human_review_return_refund": review_requested if processed else (output.request_human_review_return_refund or review_requested),
         }
            
         
