@@ -38,7 +38,7 @@ export default function CustomerSelectionsPage() {
         </h1>
         <p className="text-brand-gray text-sm mb-6">
           If you are looking for e-shopping.com&apos;s policy, have a look at the
-          FAQs below covering Shipping &amp; Delivery, Returns and Refunds, and
+          FAQs below covering Shipping &amp; Delivery, Exchange, Return and Refund, and
           Orders and Payment. If you&apos;ve already found your answer, press{" "}
           <strong>Exit</strong>. If you still have questions about a recent
           order, press <strong>Order inquiry &amp; return refund</strong>;

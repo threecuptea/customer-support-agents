@@ -295,6 +295,13 @@ describe("ExchangeReturnPage", () => {
     expect(screen.queryByRole("button", { name: /^cancel$/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /back to order details/i })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /exit/i }).length).toBeGreaterThan(0);
+
+    // Processing does not take chat away: the button is still there and still opens chat.
+    const chatButton = screen.getByRole("button", { name: /i like to chat/i });
+    expect(chatButton).toBeEnabled();
+    await userEvent.click(chatButton);
+    expect(screen.getByPlaceholderText(/can a human review/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /i like to chat/i })).toBeDisabled();
   });
 
   it("lets the customer chat, and shows the human-review notes box once offered", async () => {
@@ -335,7 +342,7 @@ describe("ExchangeReturnPage", () => {
     await screen.findByText("rejected");
 
     await userEvent.click(screen.getByRole("button", { name: /i like to chat/i }));
-    expect(screen.queryByRole("button", { name: /i like to chat/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /i like to chat/i })).toBeDisabled();
 
     fetchMock.mockResolvedValueOnce(
       jsonResponse({

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, LogIn } from "lucide-react";
 import { useAuth, AuthResponse } from "../lib/auth-context";
@@ -27,6 +27,10 @@ const FAQ_TEASERS = [
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
+  // Browser autofill/password managers can set the input's value without firing React's
+  // onChange, leaving `email` state empty; read the DOM value on submit instead of
+  // gating the button on state.
+  const inputRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(false);
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +38,8 @@ export default function LoginPage() {
   const router = useRouter();
 
   const submit = async () => {
-    if (!email.trim()) return;
+    const emailValue = (inputRef.current?.value ?? email).trim();
+    if (!emailValue) return;
     setLoading(true);
     setError(null);
     setNotFound(false);
@@ -42,7 +47,7 @@ export default function LoginPage() {
       const res = await fetch(`${API_URL}/auth`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email_addr: email.trim() }),
+        body: JSON.stringify({ email_addr: emailValue }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: AuthResponse = await res.json();
@@ -84,6 +89,7 @@ export default function LoginPage() {
             </label>
             <div className="flex gap-2">
               <input
+                ref={inputRef}
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -93,7 +99,7 @@ export default function LoginPage() {
               />
               <button
                 onClick={submit}
-                disabled={loading || !email.trim()}
+                disabled={loading}
                 className="inline-flex items-center gap-1.5 bg-brand-purple hover:bg-brand-purple/90 disabled:opacity-50 text-white rounded-lg px-4 py-2 text-sm font-medium transition-colors"
               >
                 {loading ? (

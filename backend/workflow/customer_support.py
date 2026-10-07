@@ -41,6 +41,13 @@ SUFFIX_RCVD_DAMAGED_WRONG_ITEM = "A photo of proof might be required."
 
 
 SUMMARIZE_MESSAGE_THRESHOLD = 6
+
+
+def _flow(text: str) -> str:
+    """Collapse the newlines/indentation a multi-line triple-quoted string picks up from the
+    source layout, so static customer-facing text renders as one clean paragraph (the UI uses
+    `whitespace-pre-wrap`, which would otherwise show those indents literally)."""
+    return " ".join(text.split())
 FUNCTION_FAQ_FUZZY_MATCH = "find_closest_faq"
 FUNCTION_GET_INITIAL_DECISION = "get_initial_return_refund_decision"
 SOURCE_FAQ_FUZZY_MATCH = "faq_fuzzy_match"
@@ -490,17 +497,17 @@ class CustomerSupportAgent:
                 "escalation_reason": f"{ESCALATE_REASON.HELP_DECIDE_IF_PRICE_MATCH_WITH_COMPETITOR} of order #{state['order_number_provided']}",       
             }
         elif action == ExchangeReturnRefundAction.EXCHANGE:
-            response = f"""We recommend 'exchange' since you want a different size, color or style. 
+            response = _flow(f"""We recommend 'exchange' since you want a different size, color or style. 
             Go to e-shopping.com, look for Support -> Echange on the top of the screen then follow the instruction to initiate an exchange.
             You can come back here to press “Start return for refund process” button if we are unable to find an suitable item to exchange for. 
-            """
+            """)
             message = ChatMessage(content= response, role= ROLE_AGENT, additional_kwargs={
                 "source": SOURCE_EXCHANGE_RETURN_REASON})
             return { "messages": [message], "response": response}
         else: # return
-            response = f"""We recommend 'Return' based upon the reason you provided. Press “Start return for refund process” button to initiate.
+            response = _flow(f"""We recommend 'Return' based upon the reason you provided. Press “Start return for refund process” button to initiate.
             However, if you have a purchase item in your mind and like to take advantage of a return shipping label we offer for an exchange,   
-            just go to e-shopping.com, look for Support -> Echange on the top of the screen then follow the instruction to initiate an exchange instead."""
+            just go to e-shopping.com, look for Support -> Echange on the top of the screen then follow the instruction to initiate an exchange instead.""")
             message = ChatMessage(content= response, role= ROLE_AGENT, additional_kwargs={
                 "source": SOURCE_EXCHANGE_RETURN_REASON})
             return { "messages": [message], "response": response}
@@ -523,19 +530,19 @@ class CustomerSupportAgent:
                 case OrderRefundStatus.ORDER_AUTO_REFUNDABLE:
                     response = "Congratulations!! It's in my authority to approve your request."
                 case OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT:
-                    response = f"""It's not in my authority to approve your request because the refund amount before tax has exceeded my authorized amount threshold: ${threshold_amount_auto_approve}.
+                    response = _flow(f"""It's not in my authority to approve your request because the refund amount before tax has exceeded my authorized amount threshold: ${threshold_amount_auto_approve}.
                     Your request requires a manual approval and the request details can be sent to a Slack app channel and an on-duty customer support representative
                     can approve it shortly.
-                    """
+                    """)
                 # don't automatically offer a escalate human review unless the customer insist
                 case OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS:
-                    response = f"""
+                    response = _flow(f"""
                     I am sorry that I have to reject your return refund request because your request come too late and has passed {threshold_days_auto_approve} days of the return window deadline.
-                    """
+                    """)
                 case OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS:
-                    response = f"""
+                    response = _flow(f"""
                     I am sorry that I have to reject your return refund request because you are trying to return a non-refundable item.
-                    """
+                    """)
             response += " Press 'Process the request' to proceed based on the initial decision, press 'Cancel' to cancel the request or press 'I like to chat' to chat for a futher discussion"        
             return {
                 "response": response, 
@@ -629,8 +636,17 @@ class CustomerSupportAgent:
             If the initial return refund decision show that the customer's request has been rejected and the cutomer DOES NOT complain about it,  
             DO NOT voluntarily offer a human review of his/ her request. Customer-support-agent is supposed to alleviate burdens from huan customer-support representative. 
     
-            If the customer ask how long it will take human review and you haven't explained it yet,
-            let him/ her know that an on-duty customer support representative usually will respond within 15 minutes and no more than 30 minutes.  
+            If `assigned_refund_request_id` > 0, the request has already been processed. Do not ask the customer to press 'Process the request'
+            or to write notes to a reviewer. Use the refund request's `status`:
+            - `auto_approve`, `auto_reject`, `manaul_approve`, `manaul_reject` or `manual_flag` (the decision has been made, by the agent or by a human reviewer):
+              a confirmation email has already been sent, so tell the customer to check his/ her inbox for the decision and the next steps.
+            - `wait_for_manual_review`: the request is with a human reviewer. The customer will receive an email once the review is done,
+              usually within 15 minutes and no more than 30 minutes. Answer this every time it is asked, even if you have said it before.
+            If the customer asks how and where to send the package back (or what the next step is), tell him/ her that the instructions on how and where
+            to send the package will be in the confirmation email (for `wait_for_manual_review`, in the email sent after the review if the request is approved).
+            Do NOT make up a return address, shipping label or carrier.
+            Do not offer a new human review for an already-processed request.
+
             Additionally, to help you answer a general return refund question, here is the return policy ontext: {RETURN_POLICY}
 
             You can just wrap up the conversation by asking "if we can help him/ her with anything else, if not, the customer can simply press 'Exit' button"
