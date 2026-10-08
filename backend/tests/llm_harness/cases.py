@@ -109,8 +109,7 @@ RETURN_REFUND_CASES: list[Case] = [
     _rr("RR-8", "rejected, not processed, customer complains: offer review but do NOT set the flag yet",
         request_status="pending", assigned_id=0, flag=False,
         question="This is unfair, I only pass deadline 1 day, I should get approved",
-        must_contain=["human review"], expect={"request_human_review_return_refund": False},
-        known_issue="LLM sometimes sets the flag True when it only offers the review (CSA-17 notes)"),
+        must_contain=["human review"], expect={"request_human_review_return_refund": False}),
     _rr("RR-9", "rejected, not processed, no complaint: answer policy question, no unprompted offer",
         request_status="pending", assigned_id=0, flag=False, question="What is the return window?",
         must_contain=["35"], must_not_contain=["would you like me to initiate"]),
@@ -127,8 +126,8 @@ RETURN_REFUND_CASES: list[Case] = [
     _rr("RR-13", "rejected, not processed, customer complain and also request a review in the conversation. It was instructed to set the flag True",
             request_status="pending", assigned_id=0, flag=False,
             question="This is unfair, I want someone to review it",
-            must_contain=["human review"], expect={"request_human_review_return_refund": True},
-            known_issue="LLM sometimes sets the flag True when it only offers the review (CSA-17 notes)"),    
+            must_contain=["human review"], must_not_contain=["would you like me to initiate"],
+            expect={"request_human_review_return_refund": True}),    
 ]
 
 
@@ -166,16 +165,14 @@ LOST_MEMORY = f"Customer reported that order #{ORDER_ID} shows delivered but the
 ORDER_CONTINUE_CASES: list[Case] = [
     _oc("OC-1", "pending + revisit, first turn: ask if they want to cancel, do NOT escalate yet",
         status="pending", revisit=True, question="Hi, I'm back about my order.", memory=PENDING_MEMORY,
-        must_contain=["cancel"], expect={"order_issue_escalated": False},
-        known_issue="LLM sometimes escalates a pending-cancel on revisit before the customer confirms (CSA-17 feedback)"),
+        must_contain=["cancel"], expect={"order_issue_escalated": False}),
     _oc("OC-2", "pending + revisit, customer confirms cancel: escalate",
         status="pending", revisit=True, question="Yes, please cancel it.", memory=PENDING_MEMORY,
         history=[AIMessage(content="Your order is still pending. Would you like to cancel it and need our help?")],
         expect={"order_issue_escalated": True}),
     _oc("OC-3", "pending, not a revisit: when will it ship -> answer, no escalation",
         status="pending", revisit=False, question="When will my order ship?",
-        must_not_contain=["escalate"], expect={"order_issue_escalated": False},
-        known_issue="LLM often escalates a plain shipping-date question with a cancel-order reason, even at temperature 0 (baseline 2026-10)"),
+        must_not_contain=["escalate"], expect={"order_issue_escalated": False}),
     _oc("OC-4", "delivered + revisit (lost shipment), first turn: ask if found, do NOT escalate yet",
         status="delivered", revisit=True, question="Hi, I'm back about my order.", memory=LOST_MEMORY,
         must_contain=[("found", "find", "help", "assistance", "luck")], expect={"order_issue_escalated": False}),
@@ -185,6 +182,5 @@ ORDER_CONTINUE_CASES: list[Case] = [
         expect={"order_issue_escalated": True}),
     _oc("OC-6", "unrelated general question -> point to the general inquiry button",
         status="delivered", revisit=False, question="What is your policy on gift cards?",
-        must_contain=[("general inquiry", "general question")],
-        known_issue="a delivered order makes the LLM recite the lost-shipment script instead of pointing to 'general inquiry' (same failure mode as the situation script in the return/refund chat)"),
+        must_contain=[("general inquiry", "general question")]),
 ]

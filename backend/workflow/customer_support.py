@@ -644,7 +644,15 @@ class CustomerSupportAgent:
                 "in the 'notes to reviewer' input field, then press 'Process the request'."
             )
         elif rejected_by_agent:
-            situation = "The request is not processed yet. It was rejected by the automatic agent and the customer has NOT requested a human review yet, so a human review may be offered only if the customer complains about the rejection."
+            situation = (
+                "The request is not processed yet. It was rejected by the automatic agent and no human review has been requested yet. "
+                "(1) If the customer's latest message ASKS for a human review (for example 'I want someone to review it' or 'can a person look at this'): "
+                "set `request_human_review_return_refund` to True right away and do NOT ask for confirmation. Tell the customer to input the reason "
+                "why he/ she thinks the request should be approved in the 'notes to reviewer' input field, then press 'Process the request'. "
+                "(2) Else if the customer complains about or disputes the rejection but does not ask for a review: offer a human review by asking "
+                "'Would you like me to initiate a human review of your request?' and leave the flag False. "
+                "(3) Otherwise (for example a general question): do not offer a human review."
+            )
         else:
             situation = "The request is not processed yet. No human review has been requested; do not offer one."
         latest_customer_message = next(
@@ -666,11 +674,7 @@ class CustomerSupportAgent:
             return/ refund question (for example how long a refund takes after we receive the returned item, or what the return window or conditions are),
             answer it from the return policy below and do NOT repeat the facts of the CURRENT SITUATION.
 
-            DO NOT set `request_human_review_return_refund` to True until the customer confirms or shows the intent that he/ she wants a human review.
-
-            If the request has NOT been processed yet, the `initial_return_refund_decision` shows that the customer's request has been rejected by an automatic agent, the customer complains about it
-            and the CURRENT SITUATION above allows offering a human review, offer the customer an opportunity for a human review of his/ her request
-            and ask the customer explicitly 'Would you like me to initiate a human review of your request?'
+            Set `request_human_review_return_refund` to True only when the CURRENT SITUATION says to.
 
             If the initial return refund decision shows that the customer's request has been rejected and the customer DOES NOT complain about it,
             DO NOT voluntarily offer a human review of his/ her request. Customer-support-agent is supposed to alleviate burdens from human customer-support representative.
