@@ -93,9 +93,10 @@ def test_effective_llm_settings_reads_model_and_temperature():
 
 def test_report_header_shows_model_and_temperature():
     old = dict(harness.RUN_INFO)
-    harness.RUN_INFO.update({"model": "gpt-4.1", "temperature": 0.0})
+    harness.RUN_INFO.update({"model": "gpt-4o-mini", "chat_node_model": "gpt-4.1", "temperature": 0.0})
     try:
-        assert format_report([]).splitlines()[0] == "model=gpt-4.1  temperature=0.0"
+        assert format_report([]).splitlines()[0] == (
+            "chat-node model=gpt-4.1 (order_continue/return_refund)  other-node model=gpt-4o-mini  temperature=0.0")
     finally:
         harness.RUN_INFO.clear()
         harness.RUN_INFO.update(old)

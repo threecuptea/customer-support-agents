@@ -24,6 +24,7 @@ load_dotenv(override=True)
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
+SUMMARIZE_MESSAGE_THRESHOLD = 6
 FAQ_MATCH_THRESHOLD = 75.0
 ESCALATE_MESSAGE = "I will escalate your inquiry/ request to a human agent and somebody will contact you within 3 business days."
 SYSTEM_ERROR_MESSAGE = "System error!! We cannot find your order, please try it later"
@@ -39,16 +40,6 @@ PREFIX_RCVD_WRONG_ITEM = "You received an wrong item"
 PREFIX_FOUND_BETTER_PRICE = "You found that our competitor offer a better price and we like to see if we can price match that."
 SUFFIX_RCVD_DAMAGED_WRONG_ITEM = "A photo of proof might be required."
 
-
-SUMMARIZE_MESSAGE_THRESHOLD = 6
-
-
-def _flow(text: str) -> str:
-    """Collapse the newlines/indentation a multi-line triple-quoted string picks up from the
-    source layout, so static customer-facing text renders as one clean paragraph (the UI uses
-    `whitespace-pre-wrap`, which would otherwise show those indents literally)."""
-    return " ".join(text.split())
-
 FUNCTION_FAQ_FUZZY_MATCH = "find_closest_faq"
 FUNCTION_GET_INITIAL_DECISION = "get_initial_return_refund_decision"
 SOURCE_FAQ_FUZZY_MATCH = "faq_fuzzy_match"
@@ -59,11 +50,17 @@ SOURCE_ORDER_INQUIRY = "order_inquiry"
 SOURCE_EXCHANGE_RETURN_REASON = "exchange_return_reason"
 SOURCE_RETURN_REFUND_PROCESS = "return_refund_process"
 SOURCE_RETURN_REFUND_CHAT = "return_refund_chat"
-
-
 ROLE_FUNCTION = "function"
 ROLE_AGENT = "assistant"
 
+DEFAULT_CHAT_NODE_MODEL = "gpt-4.1"
+
+
+def _flow(text: str) -> str:
+    """Collapse the newlines/indentation a multi-line triple-quoted string picks up from the
+    source layout, so static customer-facing text renders as one clean paragraph (the UI uses
+    `whitespace-pre-wrap`, which would otherwise show those indents literally)."""
+    return " ".join(text.split())
 
 class CustomerSupportAgent:
     def __init__(self, checkpointer, store):
@@ -78,10 +75,14 @@ class CustomerSupportAgent:
         self.general_llm_for_faq_match_evals = get_llm().with_structured_output(FAQMatchEvals)
         self.general_llm_for_faq_match_result = get_llm().with_structured_output(FAQMatchResult)
         self.faq_context = "\n".join([f"- 'question': {key}, 'answer': {val} " for key, val in faq_dict.items()])
-        self.order_llm_for_inquiry_chat = get_llm().with_structured_output(OrderStructuredOutput)
+        # The two free-form chat nodes (order_continue_chat_node, return_refund_chat_node) follow many
+        # competing rules in one prompt and are the most model-sensitive (CSA-18 harness), so they use a
+        # stronger model than the rest. Override with CHAT_NODE_MODEL; read here, at construction time.
+        self.chat_node_llm = get_llm(model=os.getenv("CHAT_NODE_MODEL", DEFAULT_CHAT_NODE_MODEL))
+        self.order_llm_for_inquiry_chat = self.chat_node_llm.with_structured_output(OrderStructuredOutput)
         # Classification, not conversation — low temperature for consistency across near-identical inputs.
         self.order_llm_for_revisit_eval = get_llm(temperature=0.0).with_structured_output(OrderRevisitEval)
-        self.return_refund_llm = get_llm().with_structured_output(ReturnRefundStructuredOutput)
+        self.return_refund_llm = self.chat_node_llm.with_structured_output(ReturnRefundStructuredOutput)
 
         self.return_refund_counter = ThreadSafeCounter(initial_value = 1000)
 

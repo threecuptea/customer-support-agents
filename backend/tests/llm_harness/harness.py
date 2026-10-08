@@ -76,6 +76,9 @@ async def run_case(node: Node, case: Case, trials: int = 5) -> CaseResult:
     async def one() -> dict:
         return await node(case.build_state())
 
+    if case.known_issue:
+        trials = 20
+
     outputs = await asyncio.gather(*(one() for _ in range(trials)), return_exceptions=True)
     passes, failures, samples = 0, [], []
     for out in outputs:
@@ -128,12 +131,19 @@ def build_agent(model: str | None = None, temperature: str | None = None):
     from workflow.customer_support import CustomerSupportAgent  # triggers load_dotenv(override=True)
 
     if model:
+        # The two chat nodes use CHAT_NODE_MODEL (default gpt-4.1), not LLM_MODEL; the harness exists to
+        # test exactly those nodes, so asking for a model on the command line sets both.
         os.environ["LLM_MODEL"] = model
+        os.environ["CHAT_NODE_MODEL"] = model
     os.environ["LLM_TEMPERATURE"] = str(temperature if temperature is not None else DEFAULT_TEMPERATURE)
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     info = effective_llm_settings(agent.summarize_llm)
-    if model and info["model"] and info["model"] != model:
-        raise RuntimeError(f"asked for model {model!r} but the agent uses {info['model']!r}")
+    chat = effective_llm_settings(agent.chat_node_llm)
+    info["chat_node_model"] = chat["model"]
+    if model:
+        for label, actual in (("model", info["model"]), ("chat-node model", chat["model"])):
+            if actual and actual != model:
+                raise RuntimeError(f"asked for {label} {model!r} but the agent uses {actual!r}")
     wanted_temp = float(os.environ["LLM_TEMPERATURE"])
     if info["temperature"] is not None and float(info["temperature"]) != wanted_temp:
         raise RuntimeError(f"asked for temperature {wanted_temp} but the agent uses {info['temperature']}")
@@ -144,7 +154,8 @@ def build_agent(model: str | None = None, temperature: str | None = None):
 def format_report(results: list[CaseResult]) -> str:
     lines = []
     if RUN_INFO:
-        lines.append(f"model={RUN_INFO.get('model')}  temperature={RUN_INFO.get('temperature')}")
+        lines.append(f"chat-node model={RUN_INFO.get('chat_node_model')} (order_continue/return_refund)  "
+                     f"other-node model={RUN_INFO.get('model')}  temperature={RUN_INFO.get('temperature')}")
     lines.append(f"{'case':<8} {'rate':>6}  {'need':>5}  status       description")
     for r in results:
         if r.ok:

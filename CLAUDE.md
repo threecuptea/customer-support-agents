@@ -22,7 +22,9 @@ When instructed to build a feature:
 
 ```bash
 USE_MOCK_LLM=true uv run pytest -v   # run all backend tests
-RUN_LLM_TESTS=1 uv run pytest -m llm -s   # opt-in real-LLM harness (CSA-18); needs an API key in .env, do NOT set USE_MOCK_LLM; ~35s, pennies. Pick the model per run: LLM_MODEL=gpt-4.1 [LLM_TEMPERATURE=0.7] RUN_LLM_TESTS=1 uv run pytest -m llm -s  (default temperature 0; LLM_TRIALS=20 for fewer flukes)
+RUN_LLM_TESTS=1 uv run pytest -m llm -s   # opt-in real-LLM harness (CSA-18); needs an API key in .env, do NOT set USE_MOCK_LLM; ~35s, pennies. Pick the model per run: 
+# LLM_MODEL=gpt-4.1 [LLM_TEMPERATURE=0.7] RUN_LLM_TESTS=1 uv run pytest -m llm -s  (default temperature 0; LLM_TRIALS=20 for fewer flukes)
+
 uv run uvicorn main:app --reload     # dev server on :8000
 ```
 

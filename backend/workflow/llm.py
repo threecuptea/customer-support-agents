@@ -200,12 +200,11 @@ def get_llm(**overrides: Any) -> BaseChatModel:
         )
         return MockChatModel()
 
-    model = os.getenv("LLM_MODEL", "gpt-4o-mini")
-    provider = os.getenv("LLM_PROVIDER") or None
-    if overrides.get('model'):
-        model = overrides.get('model')
-    if overrides.get('provider'):
-        provider = overrides.get('provider')    
+    # `model`/`provider` are consumed here and passed to init_chat_model explicitly; leaving them in
+    # `overrides` would pass `model` twice (positional + **params) -> TypeError -> silent mock fallback.
+    overrides = dict(overrides)
+    model = overrides.pop("model", None) or os.getenv("LLM_MODEL", "gpt-4o-mini")
+    provider = overrides.pop("provider", None) or os.getenv("LLM_PROVIDER") or None
     params: dict[str, Any] = {"temperature": float(os.getenv("LLM_TEMPERATURE", "0.7"))}
     params.update(overrides)
 
