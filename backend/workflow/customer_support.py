@@ -276,8 +276,6 @@ class CustomerSupportAgent:
         # Switch to initiate the 'Exchange or return for refund' by the customer.  Separate revisit handling and don't 
         # asssume the escalation unless the confirmation is received.
         # Also make `order_issue_resolved` criteria clearer
-        latest_customer_message = next(
-            (m.content for m in reversed(state['messages']) if isinstance(m, HumanMessage)), "")
         SYSTEM_PROMPT = f"""
             You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her order.
             Here is the target order {state['target_order'].model_dump_json()}
