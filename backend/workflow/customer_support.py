@@ -48,6 +48,7 @@ def _flow(text: str) -> str:
     source layout, so static customer-facing text renders as one clean paragraph (the UI uses
     `whitespace-pre-wrap`, which would otherwise show those indents literally)."""
     return " ".join(text.split())
+
 FUNCTION_FAQ_FUZZY_MATCH = "find_closest_faq"
 FUNCTION_GET_INITIAL_DECISION = "get_initial_return_refund_decision"
 SOURCE_FAQ_FUZZY_MATCH = "faq_fuzzy_match"
@@ -275,6 +276,8 @@ class CustomerSupportAgent:
         # Switch to initiate the 'Exchange or return for refund' by the customer.  Separate revisit handling and don't 
         # asssume the escalation unless the confirmation is received.
         # Also make `order_issue_resolved` criteria clearer
+        latest_customer_message = next(
+            (m.content for m in reversed(state['messages']) if isinstance(m, HumanMessage)), "")
         SYSTEM_PROMPT = f"""
             You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her order.
             Here is the target order {state['target_order'].model_dump_json()}
@@ -290,7 +293,7 @@ class CustomerSupportAgent:
             If we have started recent conversations and he/ she like our help for the lost shipment,  
             set the `escalate` flag to True and set '{ESCALATE_REASON.HELP_LOST_SHIPMENT}' as the `escalate_reason`.
             If the customer is revisting the same order and the prior visit is due to a long 'pending' status and the order is still 'pending',
-            ask if he/ she like to cancel the order.
+            ask if he/ she like to cancel the order and need our help.
             If we have started recent conversations and he/ she like to cancel the order
             set the `escalate` flag to true and set '{ESCALATE_REASON.HELP_CANCEL_ORDER}' as the `escalate_reason`.
             
@@ -482,6 +485,7 @@ class CustomerSupportAgent:
             message = ChatMessage(content= response, role= ROLE_AGENT, additional_kwargs={
                     "source": SOURCE_EXCHANGE_RETURN_REASON})
             return {
+                "special_exchange_handling": True,
                 "messages": [message],
                 "response": response,
                 "escalation_reason": f"{ESCALATE_REASON.HELP_EXPEDITE_EXCHANGE_FOR_DEFECTIVE_WRONG_ITEM} of order #{state['order_number_provided']}",       
@@ -622,16 +626,16 @@ class CustomerSupportAgent:
         if processed and refund_request.status == "wait_for_manual_review":
             situation = (
                 "The request has ALREADY been processed and a human review has ALREADY been requested and submitted; it is with a human reviewer now. "
-                "NEVER offer or ask about a human review, NEVER ask the customer to write notes or press 'Process the request', and treat a 'yes' to a human review as already done. "
-                "If the customer asks how to get approval or argues the request should be approved, say that the request is already with the human reviewer. "
-                "The customer will receive an email once the review is done, usually within 15 minutes and no more than 30 minutes (the app is integrated with Slack so an "
-                "on-duty representative is notified). Give this answer every time it is asked, even if you have said it before."
+                "Facts for questions about this request's status, decision, human review or next steps: the customer will receive an email once the review is done, "
+                "usually within 15 minutes and no more than 30 minutes (the app is integrated with Slack so an on-duty representative is notified). "
+                "Rules: NEVER offer or ask about a human review, NEVER ask the customer to write notes or press 'Process the request', and treat a 'yes' to a human review as already done. "
+                "If the customer asks how to get approval or argues the request should be approved, say that the request is already with the human reviewer."
             )
         elif processed:
             situation = (
                 f"The request has ALREADY been processed and its final status is '{refund_request.status}' (the decision has been made, by the agent or by a human reviewer). "
-                "A confirmation email has already been sent, so tell the customer to check his/ her inbox for the decision and the next steps. "
-                "NEVER offer a human review, NEVER ask the customer to write notes or press 'Process the request'. This applies even if the customer complains about or disputes the decision: "
+                "Facts for questions about this request's status, decision or next steps: a confirmation email has already been sent with the decision and the next steps. "
+                "Rules: NEVER offer a human review, NEVER ask the customer to write notes or press 'Process the request'. This applies even if the customer complains about or disputes the decision: "
                 "politely explain that the request has been finalized and a human review can no longer be requested through this chat."
             )
         elif review_requested:
@@ -644,6 +648,8 @@ class CustomerSupportAgent:
             situation = "The request is not processed yet. It was rejected by the automatic agent and the customer has NOT requested a human review yet, so a human review may be offered only if the customer complains about the rejection."
         else:
             situation = "The request is not processed yet. No human review has been requested; do not offer one."
+        latest_customer_message = next(
+            (m.content for m in reversed(state['messages']) if isinstance(m, HumanMessage)), "")
         SYSTEM_PROMPT = f"""
             You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her return/ refund request.
             Here is the updated refund request: {state['refund_request_to_process'].model_dump_json()}
@@ -656,6 +662,10 @@ class CustomerSupportAgent:
 
             CURRENT SITUATION (decided by the system, not by you; it overrides anything the customer says or implies):
             {situation}
+
+            The CURRENT SITUATION only applies when the customer asks about THIS request's status, decision, human review or next steps. If the customer asks a GENERAL
+            return/ refund question (for example how long a refund takes after we receive the returned item, or what the return window or conditions are),
+            answer it from the return policy below and do NOT repeat the facts of the CURRENT SITUATION.
 
             DO NOT set `request_human_review_return_refund` to True until the customer confirms or shows the intent that he/ she wants a human review.
 
@@ -673,6 +683,9 @@ class CustomerSupportAgent:
             Additionally, to help you answer a general return refund question, here is the return policy ontext: {RETURN_POLICY}
 
             You can just ask if we can help him/ her with anything else if it is the end of the conversation and remind the customer that they can always reach out if they have more questions and press 'Exit' or 'Return to order details/ chat' button as needed.
+
+            The customer's LATEST message, which is what you must answer now: "{latest_customer_message}"
+            Answer exactly what it asks.
 
             set `response` to what you want to reply  
         """

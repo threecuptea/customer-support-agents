@@ -135,6 +135,24 @@ describe("ExchangeReturnPage", () => {
     expect(body.reason_input).toBeNull();
   });
 
+  it("hides the normal return/refund button for special exchange handling", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        jsonResponse({ thread_id: "t1", response: "We will expedite.", special_exchange_handling: true })
+      )
+    );
+    renderWithOrderInquiry(<ExchangeReturnPage />, {
+      seedSession: sessionWith(deliveredOrder),
+      seedOrderInquiry: { threadId: "t1", targetOrder: deliveredOrder },
+    });
+    await userEvent.click(screen.getByRole("radio", { name: /damaged|defective/i }));
+    await userEvent.click(screen.getByRole("button", { name: /submit the survey/i }));
+
+    expect(await screen.findByText("We will expedite.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /start return for refund process/i })).not.toBeInTheDocument();
+  });
+
   it("requires the explanation box when 'Others' is picked", async () => {
     renderWithOrderInquiry(<ExchangeReturnPage />, {
       seedSession: sessionWith(deliveredOrder),
@@ -161,6 +179,7 @@ describe("ExchangeReturnPage", () => {
     await screen.findByText("ok");
     await userEvent.click(screen.getByRole("button", { name: /start return for refund process/i }));
 
+    expect(screen.getByText(/scroll down and read the full return policy/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /acknowledge & proceed/i })).toBeDisabled();
     await userEvent.click(screen.getByRole("checkbox", { name: /confirm that i have read/i }));
     expect(screen.getByRole("button", { name: /acknowledge & proceed/i })).not.toBeDisabled();

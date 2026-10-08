@@ -20,6 +20,9 @@ interface ExchangeReturnSurvey {
   reasonKey: string | null;
   otherText: string;
   recommendation: string | null;
+  // Set by /exchange_return/recommend for damaged/defective/wrong-item reasons: these go through
+  // special handling (photo proof, CSR review), never the normal return/refund channel.
+  specialExchangeHandling: boolean;
 }
 
 const EMPTY_SURVEY: ExchangeReturnSurvey = {
@@ -27,6 +30,7 @@ const EMPTY_SURVEY: ExchangeReturnSurvey = {
   reasonKey: null,
   otherText: "",
   recommendation: null,
+  specialExchangeHandling: false,
 };
 
 // A turn in the order-detail chat transcript (CSA-11). Lives here rather than
@@ -54,7 +58,12 @@ interface OrderInquiryContextValue {
   // "if you revisit ... you can press ... to bypass" wording. Scoped per-order:
   // resetForNewOrder() clears it when the customer picks a different order.
   exchangeReturnSurvey: ExchangeReturnSurvey;
-  markExchangeReturnSurveyDone: (reasonKey: string, otherText: string, recommendation: string) => void;
+  markExchangeReturnSurveyDone: (
+    reasonKey: string,
+    otherText: string,
+    recommendation: string,
+    specialExchangeHandling?: boolean
+  ) => void;
 
   // Clears target_order, the chat transcript, and the survey state above, but
   // keeps thread_id — used by "Back to order selection" since the running
@@ -92,8 +101,8 @@ export function OrderInquiryProvider({
   const [exchangeReturnSurvey, setExchangeReturnSurvey] = useState<ExchangeReturnSurvey>(EMPTY_SURVEY);
 
   const markExchangeReturnSurveyDone = useCallback(
-    (reasonKey: string, otherText: string, recommendation: string) => {
-      setExchangeReturnSurvey({ done: true, reasonKey, otherText, recommendation });
+    (reasonKey: string, otherText: string, recommendation: string, specialExchangeHandling = false) => {
+      setExchangeReturnSurvey({ done: true, reasonKey, otherText, recommendation, specialExchangeHandling });
     },
     []
   );

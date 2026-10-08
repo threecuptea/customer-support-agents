@@ -163,6 +163,7 @@ class CustomerSupportState(MessagesState):
     order_issue_escalated: bool = False
     order_issue_resolved: bool = False
     exchange_return_reason: ExchangeOrReturnInput
+    special_exchange_handling: bool = False
     order_to_return: OrderToReturn
     initial_return_refund_decision: ReturnRefundInitialDecision
     refund_request_to_process: RefundRequest = None
@@ -258,6 +259,10 @@ class ExchangeOrReturnInput(BaseModel):
     thread_id: Annotated[str, Field(min_length=1)]
     reason_option: ExchangeReturnReason
     reason_input: str | None = None
+
+class ExchangeOrReturnOutput(GenericResponse):
+    special_exchange_handling: bool = False
+
 
 class InitialReturnRefundResponse(GenericResponse):
     initial_return_refund_decision: ReturnRefundInitialDecision

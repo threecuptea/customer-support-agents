@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request
 import os
-from models.model import GeneralSupportRequest, OrderInitRequest, OrderInitResponse, \
+from models.model import ExchangeOrReturnOutput, GeneralSupportRequest, OrderInitRequest, OrderInitResponse, \
     GenericChatInput, SummarizeOnExit, OrderToReturn, ExchangeOrReturnInput, GenericResponse, InitialReturnRefundResponse, \
     ReturnRefundProcessRequest, ReturnRefundProcessResponse, ReturnRefundChatResponse
 import logging
@@ -37,7 +37,7 @@ async def order_support_continue(support: GenericChatInput, request: Request) ->
     return await invoke_order_continue_workflow(support, request)
 
 @router.post("/exchange_return/recommend")
-async def exchange_return_recommend(exchange_return_reason: ExchangeOrReturnInput, request: Request) -> GenericResponse :
+async def exchange_return_recommend(exchange_return_reason: ExchangeOrReturnInput, request: Request) -> ExchangeOrReturnOutput :
     logger.info(f"Get exchange or return recommendation based upon the given reason for thread: {exchange_return_reason.thread_id}")
     return await invoke_exchange_return_recommendation_workflow(exchange_return_reason, request)
 
