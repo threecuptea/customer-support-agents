@@ -22,6 +22,7 @@ When instructed to build a feature:
 
 ```bash
 USE_MOCK_LLM=true uv run pytest -v   # run all backend tests
+RUN_LLM_TESTS=1 uv run pytest -m llm -s   # opt-in real-LLM harness (CSA-18); needs LLM_MODEL/API key in .env, do NOT set USE_MOCK_LLM; ~35s, pennies
 uv run uvicorn main:app --reload     # dev server on :8000
 ```
 
@@ -288,6 +289,17 @@ I did some research on wheather we should summarize messages, store in the long-
     - Known quirk: the LLM occasionally sets `request_human_review_return_refund` True when it only *offers* a review (before processing); the prompt forbids it but it is not enforced in code.
     - `models/model.py::RefundRequest.status` had typos `"manaul_approve"`/`"manaul_reject"` (the valid-looking `"manual_flag"` was correct); fixed to `manual_approve`/`manual_reject`. The situation block does not list status names literally (any processed status other than `wait_for_manual_review` counts as final), so the prompt needs no change for it.
   - Tests: `frontend/app/page.test.tsx` (autofill/DOM-value sign-in, empty-email message), `return/page.test.tsx` (chat after processing, hidden button for special handling, policy instruction), `test_customer_support_return.py` (`special_exchange_handling`). The mock LLM returns `None` for `return_refund_chat_node`, so the situation block was verified with a throwaway probe against the real LLM (calling the node directly with seeded state), not a committed test.
+
+- CSA-18: [Test] Real-LLM evaluation harness for chat nodes (`backend/tests/llm_harness/`, `tests/test_llm_chat_nodes.py`, `tests/test_llm_harness.py`, `tests/conftest.py`). Motivation: the mock LLM returns `None` for `with_structured_output`, so `return_refund_chat_node`/`order_continue_chat_node` could only be tested on their escalate fallback, and prompt behaviour was judged from single manual tries even though LLM output varies run to run.
+  - **How it works**: a `Case` seeds the state dict a node reads (built in `llm_harness/cases.py`), sends one customer message, and states `must_contain` (a tuple = any-of), `must_not_contain`, exact `expect` fields (a missing key counts as False, since nodes only return e.g. `order_issue_escalated` when they set it), and a pass-rate `threshold` (default 80%). `run_case` calls the node directly (no graph/HTTP/checkpointer) N times (`LLM_TRIALS`, default 5, concurrently) and the pytest wrapper compares the pass rate to the threshold. A `known_issue` string turns a below-threshold result into `xfail` so a documented problem is reported (in the end-of-run table) without turning the suite red, and the case starts failing loudly only if a *new* case regresses.
+  - **Opt-in**: tests are `@pytest.mark.llm` and skipped unless `RUN_LLM_TESTS=1` and a real LLM is configured. The default `USE_MOCK_LLM=true uv run pytest` is unchanged (the harness runner itself is unit-tested offline with fake nodes in `test_llm_harness.py`). Gotchas found while building it: `tests/test_main.py` does `os.environ.setdefault("USE_MOCK_LLM", "true")` at import, which silently flipped the whole process to the mock model, so `conftest.py` claims `USE_MOCK_LLM=false` first when `RUN_LLM_TESTS=1`; and `.env` is only loaded by workflow modules on import, so the gate loads it itself (`find_dotenv(usecwd=True)`). Run with `-m llm` so the mock-based tests don't share a process with the real LLM.
+  - **Lesson: `temperature=0` is not deterministic.** `OC-3` sends the identical state repeatedly at `LLM_TEMPERATURE=0` and the node flips between answering the shipping question and escalating with a cancel reason, so one sample proves nothing — that is exactly what the pass rate is for.
+  - **Baseline (2026-10-07, gpt-4o-mini, temperature 0, 5 trials, identical across two runs)**: all 12 `return_refund_chat_node` cases pass 5/5 except `RR-8`; `order_continue_chat_node` passes `OC-2`, `OC-4`, `OC-5`. Known issues, all reproducible:
+    - `RR-8` 0/5: when the customer complains about an agent rejection (not yet processed), the LLM sets `request_human_review_return_refund` True while only *offering* the review (the CSA-17 quirk; the prompt forbids it).
+    - `OC-1` 0/5: pending order + revisit, first turn — the LLM escalates with `HELP_CANCEL_ORDER` instead of first asking whether the customer wants to cancel.
+    - `OC-3` 0/5: a plain "When will my order ship?" on a pending order (not a revisit) is escalated with a cancel reason.
+    - `OC-6` 0/5: an unrelated general question on a delivered order gets the lost-shipment script instead of a pointer to 'general inquiry' (same failure mode as the situation script CSA-17 fixed for the return/refund chat).
+  - **Next, deliberately not done here** (the harness exists to measure these first): apply the CSA-17 deterministic-situation-block pattern to `order_continue_chat_node` and enforce the human-review flag in code, then re-run the harness to compare against this baseline. Adding a case is one `_rr(...)`/`_oc(...)` row.
 
 ### Current API Endpoints
 - `GET /api/health` — liveness check
