@@ -26,6 +26,15 @@ describe("LoginPage", () => {
     expect(screen.getByRole("button", { name: /sign in/i })).toBeEnabled();
   });
 
+  it("tells the customer instead of failing silently when the email reads as empty", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    renderWithAuth(<LoginPage />);
+    await userEvent.click(screen.getByRole("button", { name: /sign in/i }));
+    expect(screen.getByText(/please type your email address/i)).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("signs in with a DOM-set email value that never fired onChange", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({ email_addr: "x@x.com", is_auth: false, role: "customer", customer_context: null })

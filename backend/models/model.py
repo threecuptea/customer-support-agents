@@ -117,7 +117,7 @@ class ReturnedOrder(BaseModel):
 class RefundRequest(BaseModel):
     refund_request_id: Annotated[int, Field(ge=0)] = 0
     request_date: datetime
-    status: Literal["pending", "auto_approve", "auto_reject", "wait_for_manual_review", "manaul_approve", "manaul_reject", "manual_flag"] = 'pending'
+    status: Literal["pending", "auto_approve", "auto_reject", "wait_for_manual_review", "manual_approve", "manual_reject", "manual_flag"] = 'pending'
     requires_manual_approval: bool = False
     requires_manual_approval_reason: str | None = None
     notes_for_human_review_override: str | None = None 
@@ -282,8 +282,4 @@ class ReturnRefundProcessResponse(GenericResponse):
 
 class ReturnRefundChatResponse(GenericResponse):
     request_human_review_return_refund: bool = False
-
-
-    
-        
     
