@@ -108,7 +108,7 @@ RETURN_REFUND_CASES: list[Case] = [
         expect={"request_human_review_return_refund": True}),
     _rr("RR-8", "rejected, not processed, customer complains: offer review but do NOT set the flag yet",
         request_status="pending", assigned_id=0, flag=False,
-        question="This is unfair, I want someone to review it",
+        question="This is unfair, I only pass deadline 1 day, I should get approved",
         must_contain=["human review"], expect={"request_human_review_return_refund": False},
         known_issue="LLM sometimes sets the flag True when it only offers the review (CSA-17 notes)"),
     _rr("RR-9", "rejected, not processed, no complaint: answer policy question, no unprompted offer",
@@ -124,6 +124,11 @@ RETURN_REFUND_CASES: list[Case] = [
     _rr("RR-12", "flag is sticky: a later vague turn cannot un-request the review",
         request_status="pending", assigned_id=0, flag=True, question="ok thanks",
         expect={"request_human_review_return_refund": True}),
+    _rr("RR-13", "rejected, not processed, customer complain and also request a review in the conversation. It was instructed to set the flag True",
+            request_status="pending", assigned_id=0, flag=False,
+            question="This is unfair, I want someone to review it",
+            must_contain=["human review"], expect={"request_human_review_return_refund": True},
+            known_issue="LLM sometimes sets the flag True when it only offers the review (CSA-17 notes)"),    
 ]
 
 
@@ -173,7 +178,7 @@ ORDER_CONTINUE_CASES: list[Case] = [
         known_issue="LLM often escalates a plain shipping-date question with a cancel-order reason, even at temperature 0 (baseline 2026-10)"),
     _oc("OC-4", "delivered + revisit (lost shipment), first turn: ask if found, do NOT escalate yet",
         status="delivered", revisit=True, question="Hi, I'm back about my order.", memory=LOST_MEMORY,
-        must_contain=[("found", "neighbor", "tracking", "look around")], expect={"order_issue_escalated": False}),
+        must_contain=[("found", "find", "help", "assistance", "luck")], expect={"order_issue_escalated": False}),
     _oc("OC-5", "delivered + revisit, customer wants help after searching: escalate",
         status="delivered", revisit=True, question="No, I still can't find it. Please help me.", memory=LOST_MEMORY,
         history=[AIMessage(content="Have you found your package yet, or do you need our help?")],

@@ -287,11 +287,11 @@ class CustomerSupportAgent:
 
             DO NOT REPEAT the same response!! Look for re-visit/ escalate signal!!  
             If the customer is revisting the same order and the prior visit is for a lost shipment and we haven't had recent conversations
-            regarding to the lost shipment yet, ask if he/ she has found it and if needs our help.
+            regarding to the lost shipment yet, ask if he/ she has found it and needs our help.
             If we have started recent conversations and he/ she like our help for the lost shipment,  
             set the `escalate` flag to True and set '{ESCALATE_REASON.HELP_LOST_SHIPMENT}' as the `escalate_reason`.
             If the customer is revisting the same order and the prior visit is due to a long 'pending' status and the order is still 'pending',
-            ask if he/ she like to cancel the order and need our help.
+            ask if he/ she like to cancel the order and needs our help.
             If we have started recent conversations and he/ she like to cancel the order
             set the `escalate` flag to true and set '{ESCALATE_REASON.HELP_CANCEL_ORDER}' as the `escalate_reason`.
             

@@ -95,9 +95,57 @@ async def run_case(node: Node, case: Case, trials: int = 5) -> CaseResult:
 # Filled by the pytest wrapper and printed by tests/conftest.py's terminal-summary hook.
 RESULTS: list[CaseResult] = []
 
+# What the user asked for on the command line (captured by conftest *before* anything imports
+# workflow.customer_support, whose `load_dotenv(override=True)` resets LLM_MODEL / LLM_TEMPERATURE
+# from .env at import time). None = not given.
+REQUESTED_MODEL: str | None = None
+REQUESTED_TEMPERATURE: str | None = None
+DEFAULT_TEMPERATURE = "0"
+
+# The model/temperature the agent's LLM objects ACTUALLY use, shown in the report header.
+RUN_INFO: dict[str, Any] = {}
+
+
+def effective_llm_settings(llm: Any) -> dict[str, Any]:
+    """Read the model name and temperature off a LangChain chat model object."""
+    return {
+        "model": getattr(llm, "model_name", None) or getattr(llm, "model", None),
+        "temperature": getattr(llm, "temperature", None),
+    }
+
+
+def build_agent(model: str | None = None, temperature: str | None = None):
+    """Build a CustomerSupportAgent whose LLM really uses the requested model and temperature.
+
+    Importing workflow.customer_support runs load_dotenv(override=True), which clobbers
+    LLM_MODEL/LLM_TEMPERATURE from .env, so the environment must be set AFTER that import and
+    BEFORE the agent is constructed (get_llm reads the environment at construction). The
+    effective values are read back from the model object and checked, so a silently ignored
+    override can never again produce results labelled with the wrong model.
+    """
+    import os
+
+    from workflow.customer_support import CustomerSupportAgent  # triggers load_dotenv(override=True)
+
+    if model:
+        os.environ["LLM_MODEL"] = model
+    os.environ["LLM_TEMPERATURE"] = str(temperature if temperature is not None else DEFAULT_TEMPERATURE)
+    agent = CustomerSupportAgent(checkpointer=None, store=None)
+    info = effective_llm_settings(agent.summarize_llm)
+    if model and info["model"] and info["model"] != model:
+        raise RuntimeError(f"asked for model {model!r} but the agent uses {info['model']!r}")
+    wanted_temp = float(os.environ["LLM_TEMPERATURE"])
+    if info["temperature"] is not None and float(info["temperature"]) != wanted_temp:
+        raise RuntimeError(f"asked for temperature {wanted_temp} but the agent uses {info['temperature']}")
+    RUN_INFO.update(info)
+    return agent
+
 
 def format_report(results: list[CaseResult]) -> str:
-    lines = [f"{'case':<8} {'rate':>6}  {'need':>5}  status       description"]
+    lines = []
+    if RUN_INFO:
+        lines.append(f"model={RUN_INFO.get('model')}  temperature={RUN_INFO.get('temperature')}")
+    lines.append(f"{'case':<8} {'rate':>6}  {'need':>5}  status       description")
     for r in results:
         if r.ok:
             status = "ok"

@@ -2,7 +2,8 @@
 import asyncio
 
 from tests.llm_harness.cases import ORDER_CONTINUE_CASES, RETURN_REFUND_CASES
-from tests.llm_harness.harness import Case, check_output, format_report, run_case
+from tests.llm_harness import harness
+from tests.llm_harness.harness import Case, check_output, effective_llm_settings, format_report, run_case
 
 
 def make_case(**kwargs) -> Case:
@@ -75,3 +76,26 @@ def test_case_tables_build_valid_state():
         state = case.build_state()
         assert state["messages"] and state["order_number_provided"]
         assert case.build_state() is not state
+
+
+def test_effective_llm_settings_reads_model_and_temperature():
+    class Fake:
+        model_name = "gpt-4.1"
+        temperature = 0.0
+
+    class FakeOther:  # some providers expose `model` instead of `model_name`
+        model = "claude-x"
+
+    assert effective_llm_settings(Fake()) == {"model": "gpt-4.1", "temperature": 0.0}
+    assert effective_llm_settings(FakeOther()) == {"model": "claude-x", "temperature": None}
+    assert effective_llm_settings(object()) == {"model": None, "temperature": None}
+
+
+def test_report_header_shows_model_and_temperature():
+    old = dict(harness.RUN_INFO)
+    harness.RUN_INFO.update({"model": "gpt-4.1", "temperature": 0.0})
+    try:
+        assert format_report([]).splitlines()[0] == "model=gpt-4.1  temperature=0.0"
+    finally:
+        harness.RUN_INFO.clear()
+        harness.RUN_INFO.update(old)

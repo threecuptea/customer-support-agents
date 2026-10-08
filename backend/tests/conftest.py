@@ -2,7 +2,14 @@ import os
 
 import pytest
 
+from tests.llm_harness import harness
 from tests.llm_harness.harness import RESULTS, format_report
+
+# Capture what was passed on the command line BEFORE any test module imports workflow.customer_support,
+# whose load_dotenv(override=True) resets LLM_MODEL / LLM_TEMPERATURE from .env.
+# e.g.  LLM_MODEL=gpt-4.1 RUN_LLM_TESTS=1 uv run pytest -m llm
+harness.REQUESTED_MODEL = os.getenv("LLM_MODEL")
+harness.REQUESTED_TEMPERATURE = os.getenv("LLM_TEMPERATURE")
 
 # tests/test_main.py does os.environ.setdefault("USE_MOCK_LLM", "true") at import, which would
 # silently flip the whole process to the mock model. conftest is imported first, so when real-LLM
