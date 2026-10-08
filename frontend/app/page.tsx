@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, LogIn } from "lucide-react";
 import { useAuth, AuthResponse } from "../lib/auth-context";
@@ -27,6 +27,10 @@ const FAQ_TEASERS = [
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
+  // Browser autofill/password managers can set the input's value without firing React's
+  // onChange, leaving `email` state empty; read the DOM value on submit instead of
+  // gating the button on state.
+  const inputRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(false);
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +38,12 @@ export default function LoginPage() {
   const router = useRouter();
 
   const submit = async () => {
-    if (!email.trim()) return;
+    const emailValue = (inputRef.current?.value ?? email).trim();
+    if (!emailValue) {
+      // Never fail silently: an autofilled-looking field can still read as empty to the page.
+      setError("Please type your email address, then press Sign in.");
+      return;
+    }
     setLoading(true);
     setError(null);
     setNotFound(false);
@@ -42,7 +51,7 @@ export default function LoginPage() {
       const res = await fetch(`${API_URL}/auth`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email_addr: email.trim() }),
+        body: JSON.stringify({ email_addr: emailValue }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: AuthResponse = await res.json();
@@ -82,18 +91,27 @@ export default function LoginPage() {
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Sign in with your account email
             </label>
-            <div className="flex gap-2">
+            <form
+              noValidate
+              className="flex gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                submit();
+              }}
+            >
               <input
+                ref={inputRef}
                 type="email"
+                name="email"
+                autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && submit()}
                 placeholder="you@example.com"
                 className="flex-1 rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-purple/40"
               />
               <button
-                onClick={submit}
-                disabled={loading || !email.trim()}
+                type="submit"
+                disabled={loading}
                 className="inline-flex items-center gap-1.5 bg-brand-purple hover:bg-brand-purple/90 disabled:opacity-50 text-white rounded-lg px-4 py-2 text-sm font-medium transition-colors"
               >
                 {loading ? (
@@ -103,7 +121,7 @@ export default function LoginPage() {
                 )}
                 Sign in
               </button>
-            </div>
+            </form>
 
             {notFound && (
               <div className="mt-4 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg p-3">

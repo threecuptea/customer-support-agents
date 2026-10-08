@@ -21,9 +21,30 @@ describe("LoginPage", () => {
     expect(screen.getByText("When will my order ship?")).toBeInTheDocument();
   });
 
-  it("disables sign-in until an email is entered", () => {
+  it("keeps sign-in enabled so autofilled emails (no onChange) still work", () => {
     renderWithAuth(<LoginPage />);
-    expect(screen.getByRole("button", { name: /sign in/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /sign in/i })).toBeEnabled();
+  });
+
+  it("tells the customer instead of failing silently when the email reads as empty", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    renderWithAuth(<LoginPage />);
+    await userEvent.click(screen.getByRole("button", { name: /sign in/i }));
+    expect(screen.getByText(/please type your email address/i)).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("signs in with a DOM-set email value that never fired onChange", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ email_addr: "x@x.com", is_auth: false, role: "customer", customer_context: null })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    renderWithAuth(<LoginPage />);
+    // Simulate autofill: set the DOM value directly, without dispatching an input event.
+    (screen.getByPlaceholderText("you@example.com") as HTMLInputElement).value = "x@x.com";
+    await userEvent.click(screen.getByRole("button", { name: /sign in/i }));
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ email_addr: "x@x.com" });
   });
 
   it("shows the not-found message when is_auth is false", async () => {

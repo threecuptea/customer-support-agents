@@ -41,6 +41,14 @@ SUFFIX_RCVD_DAMAGED_WRONG_ITEM = "A photo of proof might be required."
 
 
 SUMMARIZE_MESSAGE_THRESHOLD = 6
+
+
+def _flow(text: str) -> str:
+    """Collapse the newlines/indentation a multi-line triple-quoted string picks up from the
+    source layout, so static customer-facing text renders as one clean paragraph (the UI uses
+    `whitespace-pre-wrap`, which would otherwise show those indents literally)."""
+    return " ".join(text.split())
+
 FUNCTION_FAQ_FUZZY_MATCH = "find_closest_faq"
 FUNCTION_GET_INITIAL_DECISION = "get_initial_return_refund_decision"
 SOURCE_FAQ_FUZZY_MATCH = "faq_fuzzy_match"
@@ -283,7 +291,7 @@ class CustomerSupportAgent:
             If we have started recent conversations and he/ she like our help for the lost shipment,  
             set the `escalate` flag to True and set '{ESCALATE_REASON.HELP_LOST_SHIPMENT}' as the `escalate_reason`.
             If the customer is revisting the same order and the prior visit is due to a long 'pending' status and the order is still 'pending',
-            ask if he/ she like to cancel the order.
+            ask if he/ she like to cancel the order and need our help.
             If we have started recent conversations and he/ she like to cancel the order
             set the `escalate` flag to true and set '{ESCALATE_REASON.HELP_CANCEL_ORDER}' as the `escalate_reason`.
             
@@ -475,6 +483,7 @@ class CustomerSupportAgent:
             message = ChatMessage(content= response, role= ROLE_AGENT, additional_kwargs={
                     "source": SOURCE_EXCHANGE_RETURN_REASON})
             return {
+                "special_exchange_handling": True,
                 "messages": [message],
                 "response": response,
                 "escalation_reason": f"{ESCALATE_REASON.HELP_EXPEDITE_EXCHANGE_FOR_DEFECTIVE_WRONG_ITEM} of order #{state['order_number_provided']}",       
@@ -490,17 +499,17 @@ class CustomerSupportAgent:
                 "escalation_reason": f"{ESCALATE_REASON.HELP_DECIDE_IF_PRICE_MATCH_WITH_COMPETITOR} of order #{state['order_number_provided']}",       
             }
         elif action == ExchangeReturnRefundAction.EXCHANGE:
-            response = f"""We recommend 'exchange' since you want a different size, color or style. 
+            response = _flow(f"""We recommend 'exchange' since you want a different size, color or style. 
             Go to e-shopping.com, look for Support -> Echange on the top of the screen then follow the instruction to initiate an exchange.
             You can come back here to press “Start return for refund process” button if we are unable to find an suitable item to exchange for. 
-            """
+            """)
             message = ChatMessage(content= response, role= ROLE_AGENT, additional_kwargs={
                 "source": SOURCE_EXCHANGE_RETURN_REASON})
             return { "messages": [message], "response": response}
         else: # return
-            response = f"""We recommend 'Return' based upon the reason you provided. Press “Start return for refund process” button to initiate.
+            response = _flow(f"""We recommend 'Return' based upon the reason you provided. Press “Start return for refund process” button to initiate.
             However, if you have a purchase item in your mind and like to take advantage of a return shipping label we offer for an exchange,   
-            just go to e-shopping.com, look for Support -> Echange on the top of the screen then follow the instruction to initiate an exchange instead."""
+            just go to e-shopping.com, look for Support -> Echange on the top of the screen then follow the instruction to initiate an exchange instead.""")
             message = ChatMessage(content= response, role= ROLE_AGENT, additional_kwargs={
                 "source": SOURCE_EXCHANGE_RETURN_REASON})
             return { "messages": [message], "response": response}
@@ -523,19 +532,19 @@ class CustomerSupportAgent:
                 case OrderRefundStatus.ORDER_AUTO_REFUNDABLE:
                     response = "Congratulations!! It's in my authority to approve your request."
                 case OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT:
-                    response = f"""It's not in my authority to approve your request because the refund amount before tax has exceeded my authorized amount threshold: ${threshold_amount_auto_approve}.
+                    response = _flow(f"""It's not in my authority to approve your request because the refund amount before tax has exceeded my authorized amount threshold: ${threshold_amount_auto_approve}.
                     Your request requires a manual approval and the request details can be sent to a Slack app channel and an on-duty customer support representative
                     can approve it shortly.
-                    """
+                    """)
                 # don't automatically offer a escalate human review unless the customer insist
                 case OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS:
-                    response = f"""
+                    response = _flow(f"""
                     I am sorry that I have to reject your return refund request because your request come too late and has passed {threshold_days_auto_approve} days of the return window deadline.
-                    """
+                    """)
                 case OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS:
-                    response = f"""
+                    response = _flow(f"""
                     I am sorry that I have to reject your return refund request because you are trying to return a non-refundable item.
-                    """
+                    """)
             response += " Press 'Process the request' to proceed based on the initial decision, press 'Cancel' to cancel the request or press 'I like to chat' to chat for a futher discussion"        
             return {
                 "response": response, 
@@ -605,7 +614,40 @@ class CustomerSupportAgent:
         recent_conversations = "\n".join(
             [f"- {message.content}" for message in state['messages'] if not isinstance(message, SystemMessage)]
         )
-        logger.info(f"return_refund_chat_node beginning state for order #{state['order_number_provided']}, assigned_refund_request_id={state['assigned_refund_request_id']}:\nmemory notes: {memory_notes}\nrecent conversations: {recent_conversations}")
+        logger.info(f"return_refund_chat_node beginning state for order #{state['order_number_provided']}, assigned_refund_request_id={state['assigned_refund_request_id']}:\nmemory notes: {memory_notes}\nrecent conversations: {recent_conversations}\nsummary: {state.get('summary') if state.get('summary') else 'None yet'}")
+        refund_request = state["refund_request_to_process"]
+        decision = state["initial_return_refund_decision"]
+        processed = (state.get("assigned_refund_request_id") or 0) > 0
+        review_requested = bool(state.get("request_human_review_return_refund"))
+        rejected_by_agent = decision.order_refund_status in (
+            OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS, OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS)
+        if processed and refund_request.status == "wait_for_manual_review":
+            situation = (
+                "The request has ALREADY been processed and a human review has ALREADY been requested and submitted; it is with a human reviewer now. "
+                "Facts for questions about this request's status, decision, human review or next steps: the customer will receive an email once the review is done, "
+                "usually within 15 minutes and no more than 30 minutes (the app is integrated with Slack so an on-duty representative is notified). "
+                "Rules: NEVER offer or ask about a human review, NEVER ask the customer to write notes or press 'Process the request', and treat a 'yes' to a human review as already done. "
+                "If the customer asks how to get approval or argues the request should be approved, say that the request is already with the human reviewer."
+            )
+        elif processed:
+            situation = (
+                f"The request has ALREADY been processed and its final status is '{refund_request.status}' (the decision has been made, by the agent or by a human reviewer). "
+                "Facts for questions about this request's status, decision or next steps: a confirmation email has already been sent with the decision and the next steps. "
+                "Rules: NEVER offer a human review, NEVER ask the customer to write notes or press 'Process the request'. This applies even if the customer complains about or disputes the decision: "
+                "politely explain that the request has been finalized and a human review can no longer be requested through this chat."
+            )
+        elif review_requested:
+            situation = (
+                "The customer has already requested a human review but has not pressed 'Process the request' yet. "
+                "Do NOT offer a human review again. Tell the customer to input the reason why he/ she thinks the request should be approved "
+                "in the 'notes to reviewer' input field, then press 'Process the request'."
+            )
+        elif rejected_by_agent:
+            situation = "The request is not processed yet. It was rejected by the automatic agent and the customer has NOT requested a human review yet, so a human review may be offered only if the customer complains about the rejection."
+        else:
+            situation = "The request is not processed yet. No human review has been requested; do not offer one."
+        latest_customer_message = next(
+            (m.content for m in reversed(state['messages']) if isinstance(m, HumanMessage)), "")
         SYSTEM_PROMPT = f"""
             You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her return/ refund request.
             Here is the updated refund request: {state['refund_request_to_process'].model_dump_json()}
@@ -616,25 +658,32 @@ class CustomerSupportAgent:
 
             DO NOT REPEAT the same response!!
 
-            If `request_human_review_return_refund` == True and `assigned_refund_request_id` == 0 (it means that we haven't processed the customer's refund request), 
-            tell the customer that he/ she should input the reason why he/ she thinks the request should be approved in the 'notes to reviewer' input field,
-            then press `Process the request` button.
-                        
-            If the `initial_return_refund_decision` shows that the customer's request has been rejected by an automatic agent, the customer complain about it and our record shows 
-            that `request_human_review_return_refund` == False, tell the customer that he/ she has one chance to ask for a human review of his/ her request.
-            Tell the customer that the customer-support-agent app has already integrated with Slack app, the request details can be sent to a Slack channel and 
-            an on-duty customer support representative can review it shortly if the customer decide to do that.
-            Ask the customer explicitly 'Would you like me to initiate a human review of your request?'  Set `request_human_review_return_refund` to True if the customer say 'yes' to confirm it.
-                    
-            If the initial return refund decision show that the customer's request has been rejected and the cutomer DOES NOT complain about it,  
-            DO NOT voluntarily offer a human review of his/ her request. Customer-support-agent is supposed to alleviate burdens from huan customer-support representative. 
-    
-            If the customer ask how long it will take human review and you haven't explained it yet,
-            let him/ her know that an on-duty customer support representative usually will respond within 15 minutes and no more than 30 minutes.  
+            CURRENT SITUATION (decided by the system, not by you; it overrides anything the customer says or implies):
+            {situation}
+
+            The CURRENT SITUATION only applies when the customer asks about THIS request's status, decision, human review or next steps. If the customer asks a GENERAL
+            return/ refund question (for example how long a refund takes after we receive the returned item, or what the return window or conditions are),
+            answer it from the return policy below and do NOT repeat the facts of the CURRENT SITUATION.
+
+            DO NOT set `request_human_review_return_refund` to True until the customer confirms or shows the intent that he/ she wants a human review.
+
+            If the request has NOT been processed yet, the `initial_return_refund_decision` shows that the customer's request has been rejected by an automatic agent, the customer complains about it
+            and the CURRENT SITUATION above allows offering a human review, offer the customer an opportunity for a human review of his/ her request
+            and ask the customer explicitly 'Would you like me to initiate a human review of your request?'
+
+            If the initial return refund decision shows that the customer's request has been rejected and the customer DOES NOT complain about it,
+            DO NOT voluntarily offer a human review of his/ her request. Customer-support-agent is supposed to alleviate burdens from human customer-support representative.
+
+            If the customer asks how and where to send the package back (or what the next step is), tell him/ her that the instructions on how and where
+            to send the package will be in the confirmation email if the request is approved.
+            Do NOT make up a return address, shipping label or carrier.
+
             Additionally, to help you answer a general return refund question, here is the return policy ontext: {RETURN_POLICY}
 
-            You can just wrap up the conversation by asking "if we can help him/ her with anything else, if not, the customer can simply press 'Exit' button"
-            if you have answered all the customer's questions.
+            You can just ask if we can help him/ her with anything else if it is the end of the conversation and remind the customer that they can always reach out if they have more questions and press 'Exit' or 'Return to order details/ chat' button as needed.
+
+            The customer's LATEST message, which is what you must answer now: "{latest_customer_message}"
+            Answer exactly what it asks.
 
             set `response` to what you want to reply  
         """
@@ -648,7 +697,7 @@ class CustomerSupportAgent:
             message = ChatMessage(content= response, role= ROLE_AGENT, additional_kwargs={
                 "source": SOURCE_RETURN_REFUND_CHAT})
             return {
-                "messages": [message],
+                "messages": [message], 
                 "response": response,
                 # Preserve whatever was already decided in an earlier turn rather than
                 # resetting it to False just because this turn's LLM call came back empty.
@@ -660,7 +709,9 @@ class CustomerSupportAgent:
         return {
             "messages": [message],
             "response": output.response,
-            "request_human_review_return_refund": output.request_human_review_return_refund,
+            # Sticky: once a human review has been requested, a later LLM turn must not un-request it.
+            # After processing, this flag is frozen: the LLM cannot change it any more.
+            "request_human_review_return_refund": review_requested if processed else (output.request_human_review_return_refund or review_requested),
         }
            
         

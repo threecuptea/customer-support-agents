@@ -200,8 +200,8 @@ export default function ExchangeReturnPage() {
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: GenericResponse = await res.json();
-      markExchangeReturnSurveyDone(reasonKey, otherText, data.response);
+      const data: GenericResponse & { special_exchange_handling?: boolean } = await res.json();
+      markExchangeReturnSurveyDone(reasonKey, otherText, data.response, data.special_exchange_handling ?? false);
     } catch {
       setError("Could not reach support. Please try again.");
     } finally {
@@ -336,7 +336,7 @@ export default function ExchangeReturnPage() {
         {step === "survey" && (
           <>
             <h1 className="text-2xl font-bold text-brand-navy flex items-center gap-2 mb-2">
-              <ClipboardList className="w-6 h-6 text-brand-purple" /> Exchange/ Return reason(s) survey
+              <ClipboardList className="w-6 h-6 text-brand-purple" /> Exchange / Return reason survey
             </h1>
             <p className="text-brand-gray text-sm mb-6">
               Please fill out a short survey then press &ldquo;Submit the survey&rdquo; button. That
@@ -375,8 +375,8 @@ export default function ExchangeReturnPage() {
             </div>
 
             {exchangeReturnSurvey.recommendation && (
-              <div className="mb-6 text-sm text-gray-800 bg-brand-blue/10 border border-brand-blue/30 rounded-lg p-3 whitespace-pre-wrap">
-                {exchangeReturnSurvey.recommendation}
+              <div className="mb-6 text-sm text-left align-top text-gray-800 bg-brand-blue/10 border border-brand-blue/30 rounded-lg p-3 whitespace-pre-wrap">
+                {exchangeReturnSurvey.recommendation.trim()}
               </div>
             )}
 
@@ -400,13 +400,15 @@ export default function ExchangeReturnPage() {
                 {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 Submit the survey
               </button>
-              <button
-                onClick={() => setStep("policy")}
-                disabled={!exchangeReturnSurvey.done || loading}
-                className="inline-flex items-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed text-gray-800 rounded-lg px-4 py-2 text-sm font-medium transition-colors"
-              >
-                Start return for refund process
-              </button>
+              {!exchangeReturnSurvey.specialExchangeHandling && (
+                <button
+                  onClick={() => setStep("policy")}
+                  disabled={!exchangeReturnSurvey.done || loading}
+                  className="inline-flex items-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed text-gray-800 rounded-lg px-4 py-2 text-sm font-medium transition-colors"
+                >
+                  Start return for refund process
+                </button>
+              )}
               <button
                 onClick={backToOrderChat}
                 disabled={loading}
@@ -430,6 +432,11 @@ export default function ExchangeReturnPage() {
             <h1 className="text-2xl font-bold text-brand-navy flex items-center gap-2 mb-4">
               <ShieldCheck className="w-6 h-6 text-brand-purple" /> Return Policy
             </h1>
+            <p className="text-brand-gray text-sm mb-4">
+              Please scroll down and read the full return policy, check &ldquo;I confirm that I have
+              read and understand the terms of the return policy&rdquo;, then click the
+              &ldquo;Acknowledge &amp; Proceed&rdquo; button to advance.
+            </p>
 
             <div className="bg-white border border-gray-100 rounded-xl shadow-soft p-4 mb-6 text-sm text-gray-800 whitespace-pre-wrap">
               {RETURN_POLICY.trim()}
@@ -649,8 +656,8 @@ export default function ExchangeReturnPage() {
                 )}
 
                 {(processResponse ?? decisionResponse) && (
-                  <div className="text-sm text-gray-800 bg-brand-blue/10 border border-brand-blue/30 rounded-lg p-3 whitespace-pre-wrap">
-                    {processResponse ?? decisionResponse}
+                  <div className="text-sm text-left align-top text-gray-800 bg-brand-blue/10 border border-brand-blue/30 rounded-lg p-3 whitespace-pre-wrap">
+                    {(processResponse ?? decisionResponse)?.trim()}
                   </div>
                 )}
               </div>
@@ -675,8 +682,7 @@ export default function ExchangeReturnPage() {
                   </div>
                 ))}
 
-                {!processed && (
-                  <div className="bg-white border border-gray-100 rounded-xl shadow-soft p-4">
+                <div className="bg-white border border-gray-100 rounded-xl shadow-soft p-4">
                     <label className="block text-sm font-medium text-gray-700 mb-2">
                       What would you like to ask about your return/ refund?
                     </label>
@@ -698,8 +704,7 @@ export default function ExchangeReturnPage() {
                         Send
                       </button>
                     </div>
-                  </div>
-                )}
+                </div>
               </div>
             )}
 
@@ -738,15 +743,13 @@ export default function ExchangeReturnPage() {
                   >
                     <ArrowLeft className="w-4 h-4" /> Cancel
                   </button>
-                  {!chatMode && (
-                    <button
+                  <button
                       onClick={() => setChatMode(true)}
-                      disabled={loading || !refundRequest}
+                      disabled={loading || !refundRequest || chatMode}
                       className="inline-flex items-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-50 text-gray-800 rounded-lg px-4 py-2 text-sm font-medium transition-colors"
                     >
                       <MessageCircleQuestion className="w-4 h-4" /> I like to chat
                     </button>
-                  )}
                   <button
                     onClick={resetItemizeInput}
                     disabled={loading}
@@ -759,6 +762,13 @@ export default function ExchangeReturnPage() {
 
               {processed && (
                 <>
+                  <button
+                      onClick={() => setChatMode(true)}
+                      disabled={loading || !refundRequest || chatMode}
+                      className="inline-flex items-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-50 text-gray-800 rounded-lg px-4 py-2 text-sm font-medium transition-colors"
+                    >
+                      <MessageCircleQuestion className="w-4 h-4" /> I like to chat
+                    </button>
                   <button
                     onClick={backToOrderChat}
                     className="inline-flex items-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-800 rounded-lg px-4 py-2 text-sm font-medium transition-colors"

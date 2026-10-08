@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import Request, HTTPException
 import os
 from langchain_core.messages import HumanMessage, SystemMessage
-from models.model import GeneralSupportRequest, OrderInitRequest, OrderInitResponse, \
+from models.model import ExchangeOrReturnOutput, GeneralSupportRequest, OrderInitRequest, OrderInitResponse, \
     GenericChatInput, SummarizeOnExit, OrderToReturn, Order, ExchangeOrReturnInput, GenericResponse, InitialReturnRefundResponse, RefundRequest, \
     ReturnRefundProcessRequest, ReturnRefundProcessResponse, ReturnRefundChatResponse
 from memory import load_user_memory
@@ -109,7 +109,7 @@ async def invoke_order_continue_workflow(support: GenericChatInput, request: Req
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
 
-async def invoke_exchange_return_recommendation_workflow(exchange_return_reason: ExchangeOrReturnInput, request: Request) -> GenericResponse:
+async def invoke_exchange_return_recommendation_workflow(exchange_return_reason: ExchangeOrReturnInput, request: Request) -> ExchangeOrReturnOutput:
     graph = request.app.state.support_graph
     thread_id = exchange_return_reason.thread_id
     config = {"configurable": {"thread_id": thread_id}}
@@ -128,13 +128,15 @@ async def invoke_exchange_return_recommendation_workflow(exchange_return_reason:
         "messages": messages,
         "support_category": "exchange_or_return",
         "exchange_return_reason": exchange_return_reason,
+        "special_exchange_handling": False,
         "escalation_reason": None,   
     }     
     try:
         customer_support_state  = await graph.ainvoke(initial_state, config)
-        return GenericResponse(
+        return ExchangeOrReturnOutput(
             thread_id=thread_id,
             response=customer_support_state["response"],
+            special_exchange_handling=customer_support_state["special_exchange_handling"],
         )
     except Exception as exc:
         error_msg = "Error getting exchange or return recommendation based upon the given reason"

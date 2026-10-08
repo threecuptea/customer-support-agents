@@ -117,7 +117,7 @@ class ReturnedOrder(BaseModel):
 class RefundRequest(BaseModel):
     refund_request_id: Annotated[int, Field(ge=0)] = 0
     request_date: datetime
-    status: Literal["pending", "auto_approve", "auto_reject", "wait_for_manual_review", "manaul_approve", "manaul_reject", "manual_flag"] = 'pending'
+    status: Literal["pending", "auto_approve", "auto_reject", "wait_for_manual_review", "manual_approve", "manual_reject", "manual_flag"] = 'pending'
     requires_manual_approval: bool = False
     requires_manual_approval_reason: str | None = None
     notes_for_human_review_override: str | None = None 
@@ -163,6 +163,7 @@ class CustomerSupportState(MessagesState):
     order_issue_escalated: bool = False
     order_issue_resolved: bool = False
     exchange_return_reason: ExchangeOrReturnInput
+    special_exchange_handling: bool = False
     order_to_return: OrderToReturn
     initial_return_refund_decision: ReturnRefundInitialDecision
     refund_request_to_process: RefundRequest = None
@@ -259,6 +260,10 @@ class ExchangeOrReturnInput(BaseModel):
     reason_option: ExchangeReturnReason
     reason_input: str | None = None
 
+class ExchangeOrReturnOutput(GenericResponse):
+    special_exchange_handling: bool = False
+
+
 class InitialReturnRefundResponse(GenericResponse):
     initial_return_refund_decision: ReturnRefundInitialDecision
     refund_request_to_process: RefundRequest | None = None
@@ -277,8 +282,4 @@ class ReturnRefundProcessResponse(GenericResponse):
 
 class ReturnRefundChatResponse(GenericResponse):
     request_human_review_return_refund: bool = False
-
-
-    
-        
     

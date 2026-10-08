@@ -47,22 +47,22 @@ def test_get_recommended_action(reason_option, expected_action):
 
 
 @pytest.mark.parametrize(
-    "reason_option, in_response, in_escalation_message",
+    "reason_option, in_response, in_escalation_message, special_exchange_handling",
         [
             (ExchangeReturnReason.DAMAGED_DEFECTIVE_OR_MISSING_PARTS, 
              f'{PREFIX_RCVD_DAMAGED_PRODUCT} and {PREFIX_NEED_EXPEDIT_REPLACEMENT}', 
-             ESCALATE_REASON.HELP_EXPEDITE_EXCHANGE_FOR_DEFECTIVE_WRONG_ITEM),
+             ESCALATE_REASON.HELP_EXPEDITE_EXCHANGE_FOR_DEFECTIVE_WRONG_ITEM, True),
             (ExchangeReturnReason.WRONG_ITEM_SHIPPED, 
              f'{PREFIX_RCVD_WRONG_ITEM} and {PREFIX_NEED_EXPEDIT_REPLACEMENT}', 
-             ESCALATE_REASON.HELP_EXPEDITE_EXCHANGE_FOR_DEFECTIVE_WRONG_ITEM),
+             ESCALATE_REASON.HELP_EXPEDITE_EXCHANGE_FOR_DEFECTIVE_WRONG_ITEM, True),
             (ExchangeReturnReason.BETTER_PRICE_FOUND, 
              PREFIX_FOUND_BETTER_PRICE, 
-             ESCALATE_REASON.HELP_DECIDE_IF_PRICE_MATCH_WITH_COMPETITOR), 
-            (ExchangeReturnReason.WRONG_SIZE_OR_FIT, "We recommend 'exchange' since you want a different size, color or style.", None),
-            (ExchangeReturnReason.NOT_MATCH_DESCRIPTION_OR_PHOTO, "We recommend 'Return' based upon the reason you provided.", None),
+             ESCALATE_REASON.HELP_DECIDE_IF_PRICE_MATCH_WITH_COMPETITOR, False), 
+            (ExchangeReturnReason.WRONG_SIZE_OR_FIT, "We recommend 'exchange' since you want a different size, color or style.", None, False),
+            (ExchangeReturnReason.NOT_MATCH_DESCRIPTION_OR_PHOTO, "We recommend 'Return' based upon the reason you provided.", None, False),
         ]
 )    
-def test_invoke_exchange_return_recommendation(client, reason_option, in_response, in_escalation_message):
+def test_invoke_exchange_return_recommendation(client, reason_option, in_response, in_escalation_message, special_exchange_handling):
     email_addr = "anderson.cooper@cnn.com"
     resp = client.post("/api/auth", json={"email_addr": email_addr})
     assert resp.status_code == 200
@@ -81,6 +81,7 @@ def test_invoke_exchange_return_recommendation(client, reason_option, in_respons
     data = result_recommend.json()
     assert data["thread_id"] == thread_id
     assert in_response in data["response"]
+    assert data["special_exchange_handling"] == special_exchange_handling
 
     graph = client.app.state.support_graph
     config = {"configurable": {"thread_id": thread_id}}
