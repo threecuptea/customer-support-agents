@@ -20,8 +20,11 @@ TRIALS = int(os.getenv("LLM_TRIALS", "5"))
 pytestmark = pytest.mark.llm
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture()
 def agent():
+    # A fresh agent (so a fresh HTTP client/connection pool) per case. Each case runs in its own asyncio.run()
+    # event loop; a shared client would reuse pooled connections that belong to the previous, closed loop and
+    # fail with APIConnectionError right after a large burst of trials.
     # LLM_MODEL / LLM_TEMPERATURE from the command line win over .env; default temperature is 0.
     return build_agent(harness.REQUESTED_MODEL, harness.REQUESTED_TEMPERATURE)
 
@@ -29,6 +32,10 @@ def agent():
 def _evaluate(node, case):
     result = asyncio.run(run_case(node, case, TRIALS))
     RESULTS.append(result)
+    if result.inconclusive:
+        # Infrastructure problem, not a verdict on the prompt: fail loudly (even for known issues) but say why.
+        errs = "\n".join(f"  - {r}" for r in sorted(set(result.error_messages)))
+        pytest.fail(f"{case.id} ERROR: {result.errors}/{result.trials} trials hit API errors, too many to judge:\n{errs}")
     if not result.ok:
         reasons = "\n".join(f"  - {r}" for r in sorted(set(result.failures)))
         message = f"{case.id} passed {result.passes}/{result.trials} (need {case.threshold:.0%}):\n{reasons}"

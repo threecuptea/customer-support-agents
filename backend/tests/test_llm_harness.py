@@ -100,3 +100,84 @@ def test_report_header_shows_model_and_temperature():
     finally:
         harness.RUN_INFO.clear()
         harness.RUN_INFO.update(old)
+
+
+# ---- concurrency cap, retries, and API errors vs failures --------------------------------------
+class APIConnectionError(Exception):
+    """Stand-in for openai.APIConnectionError (the harness matches transient errors by class name)."""
+
+
+def _case(**kw) -> Case:
+    return Case(id="T", description="t", build_state=dict, **kw)
+
+
+def test_concurrency_is_capped():
+    state = {"now": 0, "peak": 0}
+
+    async def node(_):
+        state["now"] += 1
+        state["peak"] = max(state["peak"], state["now"])
+        await asyncio.sleep(0.01)
+        state["now"] -= 1
+        return {"response": "ok"}
+
+    asyncio.run(run_case(node, _case(), trials=12, concurrency=3))
+    assert state["peak"] == 3
+
+
+def test_transient_error_is_retried_then_succeeds():
+    calls = {"n": 0}
+
+    async def node(_):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise APIConnectionError("Connection error.")
+        return {"response": "ok"}
+
+    result = asyncio.run(run_case(node, _case(), trials=1, retries=3, backoff=0))
+    assert (result.passes, result.errors, calls["n"]) == (1, 0, 3)
+
+
+def test_exhausted_transient_errors_are_errors_not_failures_and_make_the_case_inconclusive():
+    async def node(_):
+        raise APIConnectionError("Connection error.")
+
+    result = asyncio.run(run_case(node, _case(must_contain=["x"]), trials=4, retries=1, backoff=0))
+    assert result.errors == 4 and result.failures == []
+    assert result.inconclusive and not result.ok and result.status == "ERROR"
+    report = format_report([result])
+    assert "ERROR" in report and "(+4 err)" in report and "API error: APIConnectionError" in report
+
+
+def test_a_few_errors_do_not_hide_the_verdict():
+    calls = {"n": 0}
+
+    async def node(_):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise APIConnectionError("blip")
+        return {"response": "good"}
+
+    result = asyncio.run(run_case(node, _case(must_contain=["good"]), trials=5, retries=0, backoff=0, concurrency=1))
+    assert (result.errors, result.valid, result.passes) == (1, 4, 4)
+    assert result.rate == 1.0 and result.status == "ok"
+
+
+def test_non_transient_exception_is_a_failure_not_an_error_and_is_not_retried():
+    calls = {"n": 0}
+
+    async def node(_):
+        calls["n"] += 1
+        raise KeyError("target_order")
+
+    result = asyncio.run(run_case(node, _case(), trials=2, retries=3, backoff=0))
+    assert calls["n"] == 2                   # no retries for a real node bug
+    assert result.errors == 0 and len(result.failures) == 2 and result.status == "FAIL"
+
+
+def test_known_issue_cases_run_twenty_trials():
+    async def node(_):
+        return {"response": "ok"}
+
+    result = asyncio.run(run_case(node, _case(known_issue="x"), trials=5))
+    assert result.trials == 20

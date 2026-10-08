@@ -44,14 +44,34 @@ class CaseResult:
     known_issue: str | None
     failures: list[str]                       # one line per failed trial: why
     samples: list[str]                        # a few raw responses, for eyeballing
+    errors: int = 0                           # trials that hit an API/network error even after retries
+    error_messages: list[str] = field(default_factory=list)
+
+    @property
+    def valid(self) -> int:
+        """Trials that actually got an answer from the model (API errors say nothing about the prompt)."""
+        return self.trials - self.errors
+
+    @property
+    def inconclusive(self) -> bool:
+        """Too many API errors to judge the case: more than half the trials never reached the model."""
+        return self.valid <= 0 or self.errors * 2 > self.trials
 
     @property
     def rate(self) -> float:
-        return self.passes / self.trials if self.trials else 0.0
+        return self.passes / self.valid if self.valid > 0 else 0.0
 
     @property
     def ok(self) -> bool:
-        return self.rate >= self.threshold
+        return not self.inconclusive and self.rate >= self.threshold
+
+    @property
+    def status(self) -> str:
+        if self.inconclusive:
+            return "ERROR"
+        if self.ok:
+            return "ok"
+        return "KNOWN ISSUE" if self.known_issue else "FAIL"
 
 
 def check_output(case: Case, out: dict) -> list[str]:
@@ -72,18 +92,54 @@ def check_output(case: Case, out: dict) -> list[str]:
     return problems
 
 
-async def run_case(node: Node, case: Case, trials: int = 5) -> CaseResult:
-    async def one() -> dict:
-        return await node(case.build_state())
+# Exception class names (anywhere in the MRO) that mean "the API/network misbehaved", not "the prompt failed".
+# Matched by name so the harness does not need to import openai/httpx/anthropic.
+TRANSIENT_ERROR_NAMES = {
+    "APIConnectionError", "APITimeoutError", "RateLimitError", "InternalServerError",
+    "ServiceUnavailableError", "ConnectError", "ConnectTimeout", "ReadTimeout", "RemoteProtocolError",
+}
 
+
+def is_transient(exc: BaseException) -> bool:
+    return any(cls.__name__ in TRANSIENT_ERROR_NAMES for cls in type(exc).__mro__)
+
+
+async def run_case(node: Node, case: Case, trials: int = 5, concurrency: int | None = None,
+                   retries: int = 3, backoff: float = 1.0) -> CaseResult:
+    """Call `node` `trials` times and score each answer.
+
+    - At most `concurrency` calls are in flight (LLM_CONCURRENCY, default 4): firing 20 at once opens a burst of
+      connections and can trip rate limits; a cap costs the same number of calls.
+    - Transient API/network errors are retried `retries` times with exponential backoff; one that still fails
+      counts as an *error*, not a prompt failure. If more than half the trials error, the case is inconclusive.
+    - Any other exception raised by the node is a real failure of the node and counts as a failed trial.
+    """
+    if concurrency is None:
+        import os
+        concurrency = int(os.getenv("LLM_CONCURRENCY", "4"))
     if case.known_issue:
         trials = 20
+    gate = asyncio.Semaphore(max(1, concurrency))
+
+    async def one() -> dict:
+        async with gate:
+            for attempt in range(retries + 1):
+                try:
+                    return await node(case.build_state())
+                except Exception as exc:  # noqa: BLE001 - classified below
+                    if is_transient(exc) and attempt < retries:
+                        await asyncio.sleep(backoff * (2 ** attempt))
+                        continue
+                    raise
 
     outputs = await asyncio.gather(*(one() for _ in range(trials)), return_exceptions=True)
-    passes, failures, samples = 0, [], []
+    passes, failures, samples, error_messages = 0, [], [], []
     for out in outputs:
         if isinstance(out, BaseException):
-            failures.append(f"node raised {type(out).__name__}: {out}")
+            if is_transient(out):
+                error_messages.append(f"{type(out).__name__}: {out}")
+            else:
+                failures.append(f"node raised {type(out).__name__}: {out}")
             continue
         samples.append(str(out.get("response", ""))[:300])
         problems = check_output(case, out)
@@ -92,7 +148,7 @@ async def run_case(node: Node, case: Case, trials: int = 5) -> CaseResult:
         else:
             passes += 1
     return CaseResult(case.id, case.description, trials, passes, case.threshold,
-                      case.known_issue, failures, samples[:2])
+                      case.known_issue, failures, samples[:2], len(error_messages), error_messages)
 
 
 # Filled by the pytest wrapper and printed by tests/conftest.py's terminal-summary hook.
@@ -156,18 +212,17 @@ def format_report(results: list[CaseResult]) -> str:
     if RUN_INFO:
         lines.append(f"chat-node model={RUN_INFO.get('chat_node_model')} (order_continue/return_refund)  "
                      f"other-node model={RUN_INFO.get('model')}  temperature={RUN_INFO.get('temperature')}")
-    lines.append(f"{'case':<8} {'rate':>6}  {'need':>5}  status       description")
+    lines.append(f"{'case':<8} {'rate':<10} {'need':>5}  status       description")
     for r in results:
-        if r.ok:
-            status = "ok"
-        elif r.known_issue:
-            status = "KNOWN ISSUE"
-        else:
-            status = "FAIL"
-        lines.append(f"{r.case_id:<8} {r.passes}/{r.trials:<4} {r.threshold:>5.0%}  {status:<12} {r.description}")
-        if not r.ok:
+        shown = f"{r.passes}/{r.valid}"
+        if r.errors:
+            shown += f" (+{r.errors} err)"
+        lines.append(f"{r.case_id:<8} {shown:<10} {r.threshold:>5.0%}  {r.status:<12} {r.description}")
+        if r.status in ("FAIL", "KNOWN ISSUE", "ERROR"):
             for reason in sorted(set(r.failures)):
                 lines.append(f"{'':<8}   - {reason}")
-            if r.known_issue:
+            for reason in sorted(set(r.error_messages)):
+                lines.append(f"{'':<8}   - API error: {reason}")
+            if r.status == "KNOWN ISSUE":
                 lines.append(f"{'':<8}   known issue: {r.known_issue}")
     return "\n".join(lines)
