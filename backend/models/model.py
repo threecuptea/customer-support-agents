@@ -135,8 +135,14 @@ class FAQMatchResult(BaseModel):
     answer: str
     confidence_score: Annotated[float, Field(ge=0.0, le=100.0)]
 
+# What the customer's previous visit about THIS order was about. The values must equal
+# workflow.order_situation.PRIOR_TOPICS (checked by a test), which drives the situation choice.
+OrderPriorTopic = Literal["lost_shipment", "pending_cancel", "other"]
+
 class OrderRevisitEval(BaseModel):
     is_revisit: bool = False
+    # Only meaningful when is_revisit is True; detect_order_revisit_node drops it otherwise.
+    prior_topic: OrderPriorTopic | None = None
 
 
 # It's TypedDict not BaseModel.  Which is correct decision for accumulated state. I don't need to guard

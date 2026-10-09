@@ -12,6 +12,7 @@ import os
 from workflow.llm import get_llm
 from langchain_core.runnables import RunnableConfig
 from datetime import timedelta
+from workflow.order_situation import select_order_situation, render_situation_text, escalation_allowed, ALWAYS_ON_TEXT
 import copy
 from memory import save_user_memory
 from workflow.customer_support_utils import find_closest_faq, retrieve_target_order, faq_dict, RETURN_POLICY, \
@@ -273,74 +274,51 @@ class CustomerSupportAgent:
             [f"- {message.content}" for message in state['messages'] if not isinstance(message, SystemMessage)]
         )
         logger.info(f"order_continue_chat_node beginning state for order #{state['order_number_provided']}:\nmemory notes: {memory_notes}\nrecent conversations: {recent_conversations}")
-        # Make best use of state['order_is_revisit'] flag
-        # Switch to initiate the 'Exchange or return for refund' by the customer.  Separate revisit handling and don't 
-        # asssume the escalation unless the confirmation is received.
-        # Also make `order_issue_resolved` criteria clearer
+        # Code decides the ONE situation that applies (CSA-19); only that situation's text reaches the LLM,
+        # so a rule written for one situation cannot contradict or shift the behaviour of another.
+        target_order = state['target_order']
+        turns = state.get("order_turns", 0)
+        situation = select_order_situation(
+            status=target_order.status, is_revisit=bool(state.get('order_is_revisit')),
+            prior_topic=state.get("order_prior_topic"), turns=turns)
+        situation_text = render_situation_text(
+            situation,
+            deadline=(target_order.order_date + timedelta(days=7)).isoformat(),
+            tracking=str(target_order.tracking_number or ""),
+            delivered_on=target_order.delivery_date.isoformat() if target_order.delivery_date else "an unknown date",
+        )
+        # The situation texts name the escalation reasons by member name; give the LLM the exact values.
+        always_on_text = ALWAYS_ON_TEXT
+        for reason in ESCALATE_REASON:
+            situation_text = situation_text.replace(reason.name, f"'{reason.value}'")
+            always_on_text = always_on_text.replace(reason.name, f"'{reason.value}'")
+        latest_message = next((m.content for m in reversed(state['messages']) if isinstance(m, HumanMessage)), "")
+        logger.info("order_continue_chat_node situation for order #%s: %s (turns=%s)", state['order_number_provided'], situation, turns)
         SYSTEM_PROMPT = f"""
             You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her order.
-            Here is the target order {state['target_order'].model_dump_json()}
-            {'The customer is revisting the same order' if state['order_is_revisit'] else ''}
+            Here is the target order {target_order.model_dump_json()}
             Here is what we remember about this customer from past visits, if any: {memory_notes if memory_notes else "None yet"}.
             Here is the most recent conversations in sequential order: {recent_conversations if recent_conversations else "None yet"}.
             Here is the summary of the previous conversation: {state.get("summary") if state.get("summary") else "None yet"}.
             The above is the context of this order.
 
-            DO NOT REPEAT the same response!! Look for re-visit/ escalate signal!!  
-            If the customer is revisting the same order and the prior visit is for a lost shipment and we haven't had recent conversations
-            regarding to the lost shipment yet, ask if he/ she has found it and needs our help.
-            If we have started recent conversations and he/ she like our help for the lost shipment,  
-            set the `escalate` flag to True and set '{ESCALATE_REASON.HELP_LOST_SHIPMENT}' as the `escalate_reason`.
-            If the customer is revisting the same order and the prior visit is due to a long 'pending' status and the order is still 'pending',
-            ask if he/ she like to cancel the order and needs our help.
-            If we have started recent conversations and he/ she like to cancel the order
-            set the `escalate` flag to true and set '{ESCALATE_REASON.HELP_CANCEL_ORDER}' as the `escalate_reason`.
-            
-            You can wrap up by saying something like 'Can I help you with anything else?' if you find it is at the end of the conversation.
-            Set `order_issue_resolved` when the customer reply with an ending signal.
-            Return your response for the above.
-                                   
-            The rest of scenarios that we are trying to cover:
-            Find out what the customer is complaining about.
-            if the order status is 'delivered' but the customer did not receive the shipment, ask the customer to click the tracking number link to see if there is a delivery photo taken.  
-            If yes, is the photo taken in the customer's porch?  If yes, ask the customer to check with his/ her camera footage if the customer has Ring or SimpliSafe security system or 
-            check with his/ her family members before the customer confirm that the shipment is stolen . UPS would not be responsible for a stolen shipment.  
-            If the photo is not taken in the customer's porch or no photo taken, ask the customer to look around the house and/ or check with neighbors.
-            Let the customer know that he/ she can always re-visit us after he/ she exhaust searches knowing the shipment is not stolen. 
-             
-            if the customer is revisiting the same order and complained about item(s) delivered before for any of the following reasons or
-            the customer is complaining about item(s) delivered for any of the following reasons or more
-            * Wrong Size or Fit
-            * Doesn't Match Description or Photos
-            * Damaged or Defective
-            * Changed Mind or Impulse Buy
-            * Late Delivery
-            * Wrong Item   
-            Tell the customer he/ she can press 'Like to Exchange or Return for Refund' button if he/ she want to do that and we will help the process.
+            CURRENT SITUATION (the only situation-specific instructions that apply): {situation_text}
 
-            if the order status is 'transit', ask the customer to track the whereabouts of the shipping using the UPS's tracking number.
-            if the order status is 'pending', let him/ her know that the order should be fulfilled no later than {(state['target_order'].order_date + timedelta(days= 7)).isoformat()} (within 7 days).  
-            The customer can always call back by then to cancel the order.
-            If the customer like to cancel the order now, you should set the `escalate` flag to true and set '{ESCALATE_REASON.HELP_CANCEL_ORDER}' as the `escalate_reason`
+            Rules that always apply: {always_on_text}
 
-            The customer-support agent app currently is not supporting checking the return refund status of a specific order.  Delegate it to human customer-support representative
-            by setting the `escalate` flag to true and set '{ESCALATE_REASON.HELP_CHECK_RETURN_REFUND_STATUS}' as the `escalate_reason`
-
-            If the customer ask a general inquiry not related to his/ her recent order, ask him/ her to click 'general inquiry' button. The agent there 
-            will be happy to help.
-
-            if the customer's conversation lead to an uncovered scenario or that you do not have an answer, please set `escalate` flag to True and set
-            '{ESCALATE_REASON.HELP_ANSWER_ORDER_INQUIRY}' as the `escalate_reason`
-
-            set `response` to what you want to reply 
+            The customer's latest message is: {latest_message}
+            Set `response` to what you want to reply.
             """
-            # It's possible that the customer also ask some 'general inquiry', will direct the customer to click 'general inquiry' button for now. 
-            # Try not to use too many tokens
-        
+
         system_msg = SystemMessage(content=SYSTEM_PROMPT)
         order_output: OrderStructuredOutput = await self.order_llm_for_inquiry_chat.ainvoke([system_msg])
         logger.info("order_continue_chat_node structured output for order #%s: %s", state['order_number_provided'], order_output)
         # mock llm will return order_output None
+        if order_output and order_output.escalate and not escalation_allowed(
+                order_output.escalation_reason, situation, target_order.status):
+            # Code veto: an escalation that cannot apply to this order/ situation is a model slip, answer normally.
+            logger.warning("order_continue_chat_node vetoed escalation %s in situation %s", order_output.escalation_reason, situation)
+            order_output.escalate = False
         if not order_output or order_output.escalate:
             escalation_reason = order_output.escalation_reason if order_output else ESCALATE_REASON.HELP_ANSWER_ORDER_INQUIRY
             prefix = ""
@@ -420,11 +398,19 @@ class CustomerSupportAgent:
         return/ refund request, a cancellation, or any other support issue tied to this order.
         Set `is_revisit` to False if this looks like the first time the customer is raising this order, or if
         you are not sure.
+        If (and only if) `is_revisit` is True, also set `prior_topic` to what the earlier discussion of THIS order was about:
+        - 'lost_shipment': the order showed as delivered but the package never arrived, or the shipment was reported lost, stolen or missing.
+        - 'pending_cancel': the order was pending a long time and had not shipped, or the customer asked about cancelling it.
+        - 'other': anything else (for example a return or refund, a damaged or wrong item, a question about shipping or delivery dates).
+        If `is_revisit` is False, leave `prior_topic` empty.
         """
         system_msg = SystemMessage(content=SYSTEM_PROMPT)
         eval: OrderRevisitEval = await self.order_llm_for_revisit_eval.ainvoke([system_msg])
         logger.info("detect_order_revisit_node structured output for order #%s: %s", target_order.order_id, eval)
-        return {"order_is_revisit": bool(eval and eval.is_revisit)}
+        is_revisit = bool(eval and eval.is_revisit)
+        # A prior topic only makes sense for a revisit; ignore one the LLM gave without it.
+        prior_topic = eval.prior_topic if is_revisit else None
+        return {"order_is_revisit": is_revisit, "order_prior_topic": prior_topic}
 
     # Fresh-inquiry path only: deterministic, no LLM call, assumes retrieve_target_order_node
     # already populated `target_order` and detect_order_revisit_node found no prior conversation

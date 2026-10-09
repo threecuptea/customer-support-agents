@@ -88,3 +88,108 @@ def test_counter_increments_on_the_escalate_path_too():
     agent.order_llm_for_inquiry_chat = FakeLLM()
     state = build_order_continue_state(status="pending", revisit=True, question="cancel it")
     assert asyncio.run(agent.order_continue_chat_node(state))["order_turns"] == 1
+
+
+# ---- step 2: the revisit node also classifies the prior topic -----------------------------------
+from typing import get_args
+
+from models.model import OrderPriorTopic, OrderRevisitEval
+
+
+def test_prior_topic_literal_matches_the_situation_module():
+    assert set(get_args(OrderPriorTopic)) == set(PRIOR_TOPICS)
+
+
+def _revisit_node_result(eval_result):
+    agent = CustomerSupportAgent(checkpointer=None, store=None)
+
+    class FakeLLM:
+        async def ainvoke(self, *_a, **_k):
+            return eval_result
+
+    agent.order_llm_for_revisit_eval = FakeLLM()
+    state = build_order_continue_state(status="delivered", revisit=False, question="Order inquiry: 12462")
+    return asyncio.run(agent.detect_order_revisit_node(state))
+
+
+def test_revisit_node_returns_the_prior_topic_for_a_revisit():
+    result = _revisit_node_result(OrderRevisitEval(is_revisit=True, prior_topic=PRIOR_LOST_SHIPMENT))
+    assert result == {"order_is_revisit": True, "order_prior_topic": PRIOR_LOST_SHIPMENT}
+
+
+def test_revisit_node_drops_a_prior_topic_given_without_a_revisit():
+    result = _revisit_node_result(OrderRevisitEval(is_revisit=False, prior_topic=PRIOR_PENDING_CANCEL))
+    assert result == {"order_is_revisit": False, "order_prior_topic": None}
+
+
+def test_revisit_node_defaults_when_the_llm_returns_nothing():
+    # the mock LLM returns None for structured output
+    assert _revisit_node_result(None) == {"order_is_revisit": False, "order_prior_topic": None}
+
+
+def test_revisit_with_no_topic_stays_a_revisit_with_none():
+    result = _revisit_node_result(OrderRevisitEval(is_revisit=True))
+    assert result == {"order_is_revisit": True, "order_prior_topic": None}
+
+
+# ---- step 3 (texts only; not wired into the node yet) ------------------------------------------
+from workflow.order_situation import ALWAYS_ON_TEXT, SITUATION_TEXT, render_situation_text
+
+
+def test_every_situation_has_a_text():
+    assert set(SITUATION_TEXT) == set(OrderSituation)
+    assert all(text.strip() for text in SITUATION_TEXT.values())
+
+
+def test_texts_render_without_leftover_placeholders():
+    for situation in OrderSituation:
+        text = render_situation_text(situation, deadline="2026-10-16", tracking="1Z999", delivered_on="2026-10-01")
+        assert "{" not in text and "}" not in text
+
+
+def test_texts_only_name_escalation_reasons_that_fit_their_situation():
+    # The escalation reasons a situation may ask for; a text must not drag in an unrelated one.
+    allowed = {
+        OrderSituation.LOST_SHIPMENT_FIRST_REVISIT: set(),
+        OrderSituation.LOST_SHIPMENT_FOLLOWUP: {"HELP_LOST_SHIPMENT"},
+        OrderSituation.PENDING_CANCEL_FIRST_REVISIT: set(),
+        OrderSituation.PENDING_CANCEL_FOLLOWUP: {"HELP_CANCEL_ORDER"},
+        OrderSituation.PENDING: {"HELP_CANCEL_ORDER"},
+        OrderSituation.IN_TRANSIT: set(),
+        OrderSituation.DELIVERED: set(),
+        OrderSituation.DEFAULT: {"HELP_ANSWER_ORDER_INQUIRY"},
+    }
+    reasons = {"HELP_LOST_SHIPMENT", "HELP_CANCEL_ORDER", "HELP_ANSWER_ORDER_INQUIRY", "HELP_CHECK_RETURN_REFUND_STATUS"}
+    for situation, text in SITUATION_TEXT.items():
+        assert {r for r in reasons if r in text} == allowed[situation], situation
+
+
+def test_first_revisit_situations_forbid_escalating():
+    for situation in (OrderSituation.LOST_SHIPMENT_FIRST_REVISIT, OrderSituation.PENDING_CANCEL_FIRST_REVISIT):
+        assert "Do NOT escalate" in SITUATION_TEXT[situation]
+
+
+def test_always_on_text_has_no_situation_specific_rules():
+    for word in ("pending", "in transit", "tracking number", "porch", "deadline"):
+        assert word not in ALWAYS_ON_TEXT.lower()
+
+
+# ---- code veto of impossible escalations (CSA-19 step 3)
+from models.model import ESCALATE_REASON
+from workflow.order_situation import escalation_allowed
+
+
+def test_escalation_vetoed_on_first_revisit_situations():
+    for situation in (OrderSituation.LOST_SHIPMENT_FIRST_REVISIT, OrderSituation.PENDING_CANCEL_FIRST_REVISIT):
+        assert not escalation_allowed(ESCALATE_REASON.HELP_ANSWER_ORDER_INQUIRY, situation, "delivered")
+
+
+def test_cancel_only_for_pending_and_lost_only_for_delivered():
+    assert escalation_allowed(ESCALATE_REASON.HELP_CANCEL_ORDER, OrderSituation.PENDING, "pending")
+    assert not escalation_allowed(ESCALATE_REASON.HELP_CANCEL_ORDER, OrderSituation.DELIVERED, "delivered")
+    assert escalation_allowed(ESCALATE_REASON.HELP_LOST_SHIPMENT, OrderSituation.LOST_SHIPMENT_FOLLOWUP, "delivered")
+    assert not escalation_allowed(ESCALATE_REASON.HELP_LOST_SHIPMENT, OrderSituation.PENDING, "pending")
+
+
+def test_other_escalations_allowed_outside_first_revisit():
+    assert escalation_allowed(ESCALATE_REASON.HELP_CHECK_RETURN_REFUND_STATUS, OrderSituation.DELIVERED, "delivered")
