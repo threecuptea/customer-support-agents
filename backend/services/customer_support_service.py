@@ -68,6 +68,8 @@ async def invoke_order_init_workflow(support: OrderInitRequest, request: Request
             "order_is_revisit": False,
             "order_issue_escalated": False,
             "order_issue_resolved": False,
+            "order_turns": 0,
+            "order_prior_topic": None,
             "escalation_reason": None,
             "summarize_on_exit": False,
     }    
