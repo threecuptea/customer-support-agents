@@ -36,3 +36,6 @@ package = false
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = [
+    "llm: calls a real LLM; opt-in via RUN_LLM_TESTS=1 (see tests/llm_harness)",
+]

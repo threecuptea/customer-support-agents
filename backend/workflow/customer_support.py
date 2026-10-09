@@ -24,6 +24,7 @@ load_dotenv(override=True)
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
+SUMMARIZE_MESSAGE_THRESHOLD = 6
 FAQ_MATCH_THRESHOLD = 75.0
 ESCALATE_MESSAGE = "I will escalate your inquiry/ request to a human agent and somebody will contact you within 3 business days."
 SYSTEM_ERROR_MESSAGE = "System error!! We cannot find your order, please try it later"
@@ -39,16 +40,6 @@ PREFIX_RCVD_WRONG_ITEM = "You received an wrong item"
 PREFIX_FOUND_BETTER_PRICE = "You found that our competitor offer a better price and we like to see if we can price match that."
 SUFFIX_RCVD_DAMAGED_WRONG_ITEM = "A photo of proof might be required."
 
-
-SUMMARIZE_MESSAGE_THRESHOLD = 6
-
-
-def _flow(text: str) -> str:
-    """Collapse the newlines/indentation a multi-line triple-quoted string picks up from the
-    source layout, so static customer-facing text renders as one clean paragraph (the UI uses
-    `whitespace-pre-wrap`, which would otherwise show those indents literally)."""
-    return " ".join(text.split())
-
 FUNCTION_FAQ_FUZZY_MATCH = "find_closest_faq"
 FUNCTION_GET_INITIAL_DECISION = "get_initial_return_refund_decision"
 SOURCE_FAQ_FUZZY_MATCH = "faq_fuzzy_match"
@@ -59,11 +50,17 @@ SOURCE_ORDER_INQUIRY = "order_inquiry"
 SOURCE_EXCHANGE_RETURN_REASON = "exchange_return_reason"
 SOURCE_RETURN_REFUND_PROCESS = "return_refund_process"
 SOURCE_RETURN_REFUND_CHAT = "return_refund_chat"
-
-
 ROLE_FUNCTION = "function"
 ROLE_AGENT = "assistant"
 
+DEFAULT_CHAT_NODE_MODEL = "gpt-4.1"
+
+
+def _flow(text: str) -> str:
+    """Collapse the newlines/indentation a multi-line triple-quoted string picks up from the
+    source layout, so static customer-facing text renders as one clean paragraph (the UI uses
+    `whitespace-pre-wrap`, which would otherwise show those indents literally)."""
+    return " ".join(text.split())
 
 class CustomerSupportAgent:
     def __init__(self, checkpointer, store):
@@ -78,10 +75,14 @@ class CustomerSupportAgent:
         self.general_llm_for_faq_match_evals = get_llm().with_structured_output(FAQMatchEvals)
         self.general_llm_for_faq_match_result = get_llm().with_structured_output(FAQMatchResult)
         self.faq_context = "\n".join([f"- 'question': {key}, 'answer': {val} " for key, val in faq_dict.items()])
-        self.order_llm_for_inquiry_chat = get_llm().with_structured_output(OrderStructuredOutput)
+        # The two free-form chat nodes (order_continue_chat_node, return_refund_chat_node) follow many
+        # competing rules in one prompt and are the most model-sensitive (CSA-18 harness), so they use a
+        # stronger model than the rest. Override with CHAT_NODE_MODEL; read here, at construction time.
+        self.chat_node_llm = get_llm(model=os.getenv("CHAT_NODE_MODEL", DEFAULT_CHAT_NODE_MODEL))
+        self.order_llm_for_inquiry_chat = self.chat_node_llm.with_structured_output(OrderStructuredOutput)
         # Classification, not conversation — low temperature for consistency across near-identical inputs.
         self.order_llm_for_revisit_eval = get_llm(temperature=0.0).with_structured_output(OrderRevisitEval)
-        self.return_refund_llm = get_llm().with_structured_output(ReturnRefundStructuredOutput)
+        self.return_refund_llm = self.chat_node_llm.with_structured_output(ReturnRefundStructuredOutput)
 
         self.return_refund_counter = ThreadSafeCounter(initial_value = 1000)
 
@@ -287,11 +288,11 @@ class CustomerSupportAgent:
 
             DO NOT REPEAT the same response!! Look for re-visit/ escalate signal!!  
             If the customer is revisting the same order and the prior visit is for a lost shipment and we haven't had recent conversations
-            regarding to the lost shipment yet, ask if he/ she has found it and if needs our help.
+            regarding to the lost shipment yet, ask if he/ she has found it and needs our help.
             If we have started recent conversations and he/ she like our help for the lost shipment,  
             set the `escalate` flag to True and set '{ESCALATE_REASON.HELP_LOST_SHIPMENT}' as the `escalate_reason`.
             If the customer is revisting the same order and the prior visit is due to a long 'pending' status and the order is still 'pending',
-            ask if he/ she like to cancel the order and need our help.
+            ask if he/ she like to cancel the order and needs our help.
             If we have started recent conversations and he/ she like to cancel the order
             set the `escalate` flag to true and set '{ESCALATE_REASON.HELP_CANCEL_ORDER}' as the `escalate_reason`.
             
@@ -643,7 +644,15 @@ class CustomerSupportAgent:
                 "in the 'notes to reviewer' input field, then press 'Process the request'."
             )
         elif rejected_by_agent:
-            situation = "The request is not processed yet. It was rejected by the automatic agent and the customer has NOT requested a human review yet, so a human review may be offered only if the customer complains about the rejection."
+            situation = (
+                "The request is not processed yet. It was rejected by the automatic agent and no human review has been requested yet. "
+                "(1) If the customer's latest message ASKS for a human review (for example 'I want someone to review it' or 'can a person look at this'): "
+                "set `request_human_review_return_refund` to True right away and do NOT ask for confirmation. Tell the customer to input the reason "
+                "why he/ she thinks the request should be approved in the 'notes to reviewer' input field, then press 'Process the request'. "
+                "(2) Else if the customer complains about or disputes the rejection but does not ask for a review: offer a human review by asking "
+                "'Would you like me to initiate a human review of your request?' and leave the flag False. "
+                "(3) Otherwise (for example a general question): do not offer a human review."
+            )
         else:
             situation = "The request is not processed yet. No human review has been requested; do not offer one."
         latest_customer_message = next(
@@ -665,11 +674,7 @@ class CustomerSupportAgent:
             return/ refund question (for example how long a refund takes after we receive the returned item, or what the return window or conditions are),
             answer it from the return policy below and do NOT repeat the facts of the CURRENT SITUATION.
 
-            DO NOT set `request_human_review_return_refund` to True until the customer confirms or shows the intent that he/ she wants a human review.
-
-            If the request has NOT been processed yet, the `initial_return_refund_decision` shows that the customer's request has been rejected by an automatic agent, the customer complains about it
-            and the CURRENT SITUATION above allows offering a human review, offer the customer an opportunity for a human review of his/ her request
-            and ask the customer explicitly 'Would you like me to initiate a human review of your request?'
+            Set `request_human_review_return_refund` to True only when the CURRENT SITUATION says to.
 
             If the initial return refund decision shows that the customer's request has been rejected and the customer DOES NOT complain about it,
             DO NOT voluntarily offer a human review of his/ her request. Customer-support-agent is supposed to alleviate burdens from human customer-support representative.
