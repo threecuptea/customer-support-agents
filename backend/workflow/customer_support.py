@@ -361,6 +361,7 @@ class CustomerSupportAgent:
                 "response": response,
                 "escalation_reason": f"{escalation_reason} of order #{state['order_number_provided']}",
                 "order_issue_escalated": True,               
+                "order_turns": state.get("order_turns", 0) + 1,
             }
                         
         message = AIMessage(content= order_output.response, additional_kwargs={
@@ -369,6 +370,7 @@ class CustomerSupportAgent:
             "messages": [message],
             "response": order_output.response,
             "order_issue_resolved": order_output.order_issue_resolved, # signal writing the summary
+            "order_turns": state.get("order_turns", 0) + 1,
         }
 
     # Preparation only: retrieve the order and set it on state. Deliberately separate from
