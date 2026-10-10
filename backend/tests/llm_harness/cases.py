@@ -213,6 +213,12 @@ ORDER_CONTINUE_CASES: list[Case] = [
     _oc("OC-12", "delivered, not a revisit, unrelated general question -> general inquiry button, no escalation",
         status="delivered", revisit=False, question="Do you ship to Canada?",
         must_contain=[("general inquiry", "general question")], expect={"order_issue_escalated": False}),
+    _oc("OC-13", "delivered + revisit, customer found the shipment. He found the bike is too complicated to assembly, ask if he can return or exchange.",
+            status="delivered", revisit=True, question="I found it! Thanks. I have a different problem. The instructions are unclear and I cannot assembly my bike. I ask if I can return or exchange", memory=LOST_MEMORY,
+            turns=1, prior_topic="lost_shipment",
+            history=[AIMessage(content="Have you found your package yet, or do you need our help?")],
+            must_contain=[("return", "exchange", "button")]),
+            
 ]
 
 

@@ -67,10 +67,9 @@ class CustomerSupportAgent:
     def __init__(self, checkpointer, store):
         self.checkpointer = checkpointer
         self.store = store
+        require_stronge_chat_model = os.getenv("REQUIRE_STRONG_CHAT_NODE_MODEL", "false").lower() == "true"
         # I can override model and provider to use overrides if needed
         self.summarize_llm = get_llm()
-        
-       
         # FAQ matching
         # Selected models should be customized by their speciality and strength in the production
         self.general_llm_for_faq_match_evals = get_llm().with_structured_output(FAQMatchEvals)
@@ -79,7 +78,9 @@ class CustomerSupportAgent:
         # The two free-form chat nodes (order_continue_chat_node, return_refund_chat_node) follow many
         # competing rules in one prompt and are the most model-sensitive (CSA-18 harness), so they use a
         # stronger model than the rest. Override with CHAT_NODE_MODEL; read here, at construction time.
-        self.chat_node_llm = get_llm(model=os.getenv("CHAT_NODE_MODEL", DEFAULT_CHAT_NODE_MODEL))
+        # gpt-4o-mini looks solid after Claude applied deterministic-situation-block pattern to order_continue-chat_node will
+        # run test_llm_chat_node periodically and switch if seeing model drift  
+        self.chat_node_llm = get_llm(model=os.getenv("CHAT_NODE_MODEL", DEFAULT_CHAT_NODE_MODEL), temperature=0.0) if require_stronge_chat_model else get_llm(temperature=0.0)
         self.order_llm_for_inquiry_chat = self.chat_node_llm.with_structured_output(OrderStructuredOutput)
         # Classification, not conversation — low temperature for consistency across near-identical inputs.
         self.order_llm_for_revisit_eval = get_llm(temperature=0.0).with_structured_output(OrderRevisitEval)
@@ -281,6 +282,7 @@ class CustomerSupportAgent:
         situation = select_order_situation(
             status=target_order.status, is_revisit=bool(state.get('order_is_revisit')),
             prior_topic=state.get("order_prior_topic"), turns=turns)
+        logger.info(f"order_continue_chat_node 'situation' for order #{state['order_number_provided']}: {situation}")
         situation_text = render_situation_text(
             situation,
             deadline=(target_order.order_date + timedelta(days=7)).isoformat(),
