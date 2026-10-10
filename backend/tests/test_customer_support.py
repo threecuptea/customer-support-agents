@@ -405,3 +405,21 @@ def test_invoke_order_continue_workflow_error(client):
             json={"thread_id": thread_id, "user_conversation": "I did not receive the shipment."},
     )
     assert resp.status_code == 400
+
+
+def test_order_init_resets_order_turns_and_prior_topic(client):
+    resp = client.post("/api/auth", json={"email_addr": "anderson.cooper@cnn.com"})
+    context: CustomerContext = CustomerContext(**resp.json()['customer_context'])
+    order_id = context.latest_orders[0].order_id
+    payload = {"customer_context": context.model_dump(mode="json"), "order_number_provided": order_id}
+    thread_id = client.post("/api/support/order/init", json=payload).json()["thread_id"]
+    client.post("/api/support/order/continue", json={"thread_id": thread_id, "user_conversation": "hello"})
+    graph = client.app.state.support_graph
+    config = {"configurable": {"thread_id": thread_id}}
+    assert asyncio.run(graph.aget_state(config)).values["order_turns"] == 1
+
+    # Re-initializing the SAME thread (the "back to order selection" path) must start the count over.
+    client.post("/api/support/order/init", json={**payload, "thread_id": thread_id})
+    values = asyncio.run(graph.aget_state(config)).values
+    assert values["order_turns"] == 0
+    assert values["order_prior_topic"] is None

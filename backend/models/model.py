@@ -135,8 +135,14 @@ class FAQMatchResult(BaseModel):
     answer: str
     confidence_score: Annotated[float, Field(ge=0.0, le=100.0)]
 
+# What the customer's previous visit about THIS order was about. The values must equal
+# workflow.order_situation.PRIOR_TOPICS (checked by a test), which drives the situation choice.
+OrderPriorTopic = Literal["lost_shipment", "pending_cancel", "other"]
+
 class OrderRevisitEval(BaseModel):
     is_revisit: bool = False
+    # Only meaningful when is_revisit is True; detect_order_revisit_node drops it otherwise.
+    prior_topic: OrderPriorTopic | None = None
 
 
 # It's TypedDict not BaseModel.  Which is correct decision for accumulated state. I don't need to guard
@@ -162,6 +168,13 @@ class CustomerSupportState(MessagesState):
     order_is_revisit: bool = False # set by detect_order_revisit_node; routes order_init straight into order_continue_chat_node
     order_issue_escalated: bool = False
     order_issue_resolved: bool = False
+    # Number of replies order_continue_chat_node has given in this order thread; reset by /order/init.
+    # Deterministic "has the conversation started?" signal (message counting is unreliable: summarize_node prunes
+    # old messages, and a revisit skips the static first reply). See workflow/order_situation.py.
+    order_turns: int = 0
+    # Topic of the customer's previous visit about this order, classified when a revisit is detected.
+    # One of workflow.order_situation.PRIOR_TOPICS, or None.
+    order_prior_topic: str | None = None
     exchange_return_reason: ExchangeOrReturnInput
     special_exchange_handling: bool = False
     order_to_return: OrderToReturn

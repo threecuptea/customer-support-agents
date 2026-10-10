@@ -133,7 +133,8 @@ RETURN_REFUND_CASES: list[Case] = [
 
 # ---------------------------------------------------------------- order_continue_chat_node
 def build_order_continue_state(*, status: str, revisit: bool, question: str, history: list | None = None,
-                               memory: str | None = None, summary: str | None = None) -> dict:
+                               memory: str | None = None, summary: str | None = None,
+                               turns: int = 0, prior_topic: str | None = None) -> dict:
     messages = []
     if memory:
         messages.append(SystemMessage(content=memory))
@@ -143,6 +144,9 @@ def build_order_continue_state(*, status: str, revisit: bool, question: str, his
         "order_number_provided": ORDER_ID,
         "target_order": make_order(status, order_date=NOW - timedelta(days=9)) if status == "pending" else make_order(status),
         "order_is_revisit": revisit,
+        # Read by select_order_situation (CSA-19). Ignored by the node until step 3 wires it in.
+        "order_turns": turns,
+        "order_prior_topic": prior_topic,
     }
     if summary:
         state["summary"] = summary
@@ -150,24 +154,28 @@ def build_order_continue_state(*, status: str, revisit: bool, question: str, his
 
 
 def _oc(case_id, description, *, status, revisit, question, history=None, memory=None, summary=None,
-        **case_kwargs) -> Case:
+        turns=0, prior_topic=None, **case_kwargs) -> Case:
     return Case(
         id=case_id, description=description,
         build_state=lambda: build_order_continue_state(
-            status=status, revisit=revisit, question=question, history=history, memory=memory, summary=summary),
+            status=status, revisit=revisit, question=question, history=history, memory=memory, summary=summary,
+            turns=turns, prior_topic=prior_topic),
         **case_kwargs,
     )
 
 
 PENDING_MEMORY = f"Customer asked about order #{ORDER_ID}, which has been pending for a long time and has not shipped."
 LOST_MEMORY = f"Customer reported that order #{ORDER_ID} shows delivered but the package never arrived."
+OTHER_MEMORY_ORDER = f"Customer asked a general question about order #{ORDER_ID} and its payment."
 
 ORDER_CONTINUE_CASES: list[Case] = [
     _oc("OC-1", "pending + revisit, first turn: ask if they want to cancel, do NOT escalate yet",
         status="pending", revisit=True, question="Hi, I'm back about my order.", memory=PENDING_MEMORY,
+        turns=0, prior_topic="pending_cancel",
         must_contain=["cancel"], expect={"order_issue_escalated": False}),
     _oc("OC-2", "pending + revisit, customer confirms cancel: escalate",
         status="pending", revisit=True, question="Yes, please cancel it.", memory=PENDING_MEMORY,
+        turns=1, prior_topic="pending_cancel",
         history=[AIMessage(content="Your order is still pending. Would you like to cancel it and need our help?")],
         expect={"order_issue_escalated": True}),
     _oc("OC-3", "pending, not a revisit: when will it ship -> answer, no escalation",
@@ -175,12 +183,79 @@ ORDER_CONTINUE_CASES: list[Case] = [
         must_not_contain=["escalate"], expect={"order_issue_escalated": False}),
     _oc("OC-4", "delivered + revisit (lost shipment), first turn: ask if found, do NOT escalate yet",
         status="delivered", revisit=True, question="Hi, I'm back about my order.", memory=LOST_MEMORY,
+        turns=0, prior_topic="lost_shipment",
         must_contain=[("found", "find", "help", "assistance", "luck")], expect={"order_issue_escalated": False}),
     _oc("OC-5", "delivered + revisit, customer wants help after searching: escalate",
         status="delivered", revisit=True, question="No, I still can't find it. Please help me.", memory=LOST_MEMORY,
+        turns=1, prior_topic="lost_shipment",
         history=[AIMessage(content="Have you found your package yet, or do you need our help?")],
         expect={"order_issue_escalated": True}),
     _oc("OC-6", "unrelated general question -> point to the general inquiry button",
         status="delivered", revisit=False, question="What is your policy on gift cards?",
         must_contain=[("general inquiry", "general question")]),
+    _oc("OC-7", "in transit, not a revisit: where is my package -> point to tracking, no escalation",
+        status="transit", revisit=False, question="Where is my package right now?",
+        must_contain=[("tracking", "ups")], expect={"order_issue_escalated": False}),
+    _oc("OC-8", "delivered, not a revisit: customer says it never arrived -> search steps, no escalation yet",
+        status="delivered", revisit=False, question="It says delivered but I never received my package.",
+        must_contain=[("tracking", "porch", "neighbor", "photo")], expect={"order_issue_escalated": False}),
+    _oc("OC-9", "pending, revisit about something else: plain pending answer, no cancel escalation",
+        status="pending", revisit=True, question="Any update on this order?", memory=OTHER_MEMORY_ORDER,
+        turns=0, prior_topic="other",
+        expect={"order_issue_escalated": False}),
+    _oc("OC-10", "pending, not a revisit, customer asks to cancel now: escalate",
+        status="pending", revisit=False, question="Please cancel this order now, I don't want to wait.",
+        expect={"order_issue_escalated": True}),
+    _oc("OC-11", "pending + cancel revisit, first turn, but the customer asks an unrelated general question -> general inquiry button",
+        status="pending", revisit=True, question="Do you ship to Canada?", memory=PENDING_MEMORY,
+        turns=0, prior_topic="pending_cancel",
+        must_contain=[("general inquiry", "general question")], expect={"order_issue_escalated": False}),
+    _oc("OC-12", "delivered, not a revisit, unrelated general question -> general inquiry button, no escalation",
+        status="delivered", revisit=False, question="Do you ship to Canada?",
+        must_contain=[("general inquiry", "general question")], expect={"order_issue_escalated": False}),
+    _oc("OC-13", "delivered + revisit, customer found the shipment. He found the bike is too complicated to assembly, ask if he can return or exchange.",
+            status="delivered", revisit=True, question="I found it! Thanks. I have a different problem. The instructions are unclear and I cannot assembly my bike. I ask if I can return or exchange", memory=LOST_MEMORY,
+            turns=1, prior_topic="lost_shipment",
+            history=[AIMessage(content="Have you found your package yet, or do you need our help?")],
+            must_contain=[("return", "exchange", "button")]),
+            
+]
+
+
+# ---------------------------------------------------------------- detect_order_revisit_node
+# The revisit classifier (is_revisit + prior_topic) feeds select_order_situation, so a wrong label here
+# picks the wrong situation. It runs on LLM_MODEL (the "other-node" model in the report header).
+OTHER_MEMORY = f"Customer asked to return a damaged item from order #{ORDER_ID} and was told the refund decision."
+DIFFERENT_ORDER_MEMORY = "Customer reported that order #99999 shows delivered but the package never arrived."
+
+
+def build_revisit_state(*, status: str, memory: str | None) -> dict:
+    messages = [SystemMessage(content=f"Previous conversations:\n{memory}")] if memory else []
+    messages.append(HumanMessage(content=f"Order inquiry: {ORDER_ID}"))
+    return {
+        "messages": messages,
+        "order_number_provided": ORDER_ID,
+        "target_order": make_order(status, order_date=NOW - timedelta(days=9)) if status == "pending" else make_order(status),
+    }
+
+
+def _rev(case_id, description, *, status, memory, revisit, topic) -> Case:
+    return Case(
+        id=case_id, description=description,
+        build_state=lambda: build_revisit_state(status=status, memory=memory),
+        expect={"order_is_revisit": revisit, "order_prior_topic": topic},
+    )
+
+
+REVISIT_CASES: list[Case] = [
+    _rev("REV-1", "memory: lost shipment on THIS order -> revisit, lost_shipment",
+         status="delivered", memory=LOST_MEMORY, revisit=True, topic="lost_shipment"),
+    _rev("REV-2", "memory: long pending, not shipped, on THIS order -> revisit, pending_cancel",
+         status="pending", memory=PENDING_MEMORY, revisit=True, topic="pending_cancel"),
+    _rev("REV-3", "memory: damaged-item return on THIS order -> revisit, other",
+         status="delivered", memory=OTHER_MEMORY, revisit=True, topic="other"),
+    _rev("REV-4", "no memory at all -> not a revisit, no topic",
+         status="delivered", memory=None, revisit=False, topic=None),
+    _rev("REV-5", "memory is about a DIFFERENT order -> not a revisit, no topic",
+         status="delivered", memory=DIFFERENT_ORDER_MEMORY, revisit=False, topic=None),
 ]

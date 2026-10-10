@@ -11,7 +11,7 @@ import os
 
 import pytest
 
-from tests.llm_harness.cases import ORDER_CONTINUE_CASES, RETURN_REFUND_CASES
+from tests.llm_harness.cases import ORDER_CONTINUE_CASES, RETURN_REFUND_CASES, REVISIT_CASES
 from tests.llm_harness import harness
 from tests.llm_harness.harness import RESULTS, build_agent, run_case
 
@@ -38,7 +38,8 @@ def _evaluate(node, case):
         pytest.fail(f"{case.id} ERROR: {result.errors}/{result.trials} trials hit API errors, too many to judge:\n{errs}")
     if not result.ok:
         reasons = "\n".join(f"  - {r}" for r in sorted(set(result.failures)))
-        message = f"{case.id} passed {result.passes}/{result.trials} (need {case.threshold:.0%}):\n{reasons}"
+        sample_text = "\n".join(f"  > {s}" for s in result.samples)
+        message = f"{case.id} passed {result.passes}/{result.trials} (need {case.threshold:.0%}):\n{reasons}\n  sample replies:\n{sample_text}"
         if case.known_issue:
             pytest.xfail(f"{message}\n  known issue: {case.known_issue}")
         pytest.fail(message)
@@ -52,3 +53,8 @@ def test_return_refund_chat_node(agent, case):
 @pytest.mark.parametrize("case", ORDER_CONTINUE_CASES, ids=lambda c: c.id)
 def test_order_continue_chat_node(agent, case):
     _evaluate(agent.order_continue_chat_node, case)
+
+
+@pytest.mark.parametrize("case", REVISIT_CASES, ids=lambda c: c.id)
+def test_detect_order_revisit_node(agent, case):
+    _evaluate(agent.detect_order_revisit_node, case)

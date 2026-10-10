@@ -1,7 +1,7 @@
 """Offline tests of the harness itself (fake nodes, no LLM): the default suite runs these."""
 import asyncio
 
-from tests.llm_harness.cases import ORDER_CONTINUE_CASES, RETURN_REFUND_CASES
+from tests.llm_harness.cases import ORDER_CONTINUE_CASES, RETURN_REFUND_CASES, REVISIT_CASES
 from tests.llm_harness import harness
 from tests.llm_harness.harness import Case, check_output, effective_llm_settings, format_report, run_case
 
@@ -70,9 +70,9 @@ def test_report_marks_known_issue_and_failure():
 
 
 def test_case_tables_build_valid_state():
-    ids = [c.id for c in RETURN_REFUND_CASES + ORDER_CONTINUE_CASES]
+    ids = [c.id for c in RETURN_REFUND_CASES + ORDER_CONTINUE_CASES + REVISIT_CASES]
     assert len(ids) == len(set(ids))
-    for case in RETURN_REFUND_CASES + ORDER_CONTINUE_CASES:
+    for case in RETURN_REFUND_CASES + ORDER_CONTINUE_CASES + REVISIT_CASES:
         state = case.build_state()
         assert state["messages"] and state["order_number_provided"]
         assert case.build_state() is not state
