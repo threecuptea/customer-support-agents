@@ -52,21 +52,21 @@ There is an OPENAI_API_KEY in the .env file in the project root.
 
 ## Technical design
 
-The entire project should be packaged into a Docker container.
+The entire project is packaged into a Docker container.
 
-The backend is in `backend/` — a `uv` project (Python 3.12) using FastAPI.  Currently, all API endpoints are in in `backend/main.py`. I have already separated into `route` and `services` and `models`. `models/model.py` have all model schemas shared by `auth` and `customer-support` services.  
+The backend is in `backend/` — a `uv` project (Python 3.12) using FastAPI.  I follow a consistent architect design across all my projects.  I separates API files into `routes` and `services` and `models`. I also added a `workflow` folder that all LangGraph workflows and supporting Python modules reside in. Currently, all API endpoints are either in `backend/main.py` or in python modules of `routes` subfolder.  `models/model.py` have all model schemas shared by `auth` and `customer_support` service and `customer_support` workflow.  
 
-The frontend is in `frontend/` — Next.js 16, React 19, Tailwind 4. It will be statically exported (`next.config.ts` → `output: "export"`) to `frontend/out/`, which FastAPI serves at runtime. 
+The frontend is in `frontend/` — Next.js 16, React 19, Tailwind 4. It will be statically exported (`next.config.ts` → `output: "export"`) to `frontend/out/`.
 
-I decide to use DEMO_MODE for prototype because return refund involves the product return window. The data in database will be stale and not testable.  I can adjust data in memory in DEMO mode to always be testable and I have done that.
+Officially, we are using one Docker container deployment with one entry point. In Dockerfile,  API build will copy static output `frontend/out/` from `frontend-build` to its build and mount it so that FastAPI can serve them at runtime at port `:8000`. docker container can start from `scripts/start-xxxx.sh` (`xxxx` is a placehold).  In dev, it's easier to deploy `backend` and `frontend` separately. Start backend `uv run uvicorn --timeout-keep-alive 75 main:app --reload` at the backend folder and start `npm run dev` at the frontend folder. Use `localhost:3000` Next.js port to proxy to`localhost:8000` FastAPI port.  
 
-Backend is available at http://localhost:8000
+I decide to build `customer-support-agents` in DEMO_MODE because return refund involves the product return window. The data in database will be stale and not testable.  I dynamically adjust data in memory in DEMO mode so that they always be testable.
 
 ## Architecture
 
 ### Request flow summary
 
-The main workflow will create customer-support AI agents that help general FAQs, order inquiry and more importantly, automate refund request process.  However, human-in-the-loop approve/ reject/ flag workflow will get involved when requests exceeds certain thresholds: ex. refund amount > 500 (configurable) or disputable non-refundable return/ refund request (escalated to human approval). 
+The main workflow will create customer-support AI agents that help general FAQs, order inquiry and more importantly, automate refund request process.  However, human-in-the-loop approve/ reject/ flag workflow will get involved when requests exceeds certain thresholds: ex. refund amount > 500 (configurable) or disputable or non-refundable return/ refund request (escalated to human approval). 
 
 I plan to use Slack Bot interactivity to implement the approve/ reject/ flag workflow for return/ refund requests. I have already got n8n app (AI workflow automation) to integrate successfully with Slack Bot interactivity for the same workflow.  See [Slack Bot Interactivity Screenshot for the the approve/ reject/ flag workflow of a refund request request ](n8n-slack-interactivity/slack-screenshot-screenshot-refund-request-approval.png) and have configured `customer-support-dev` app mimicing `n8n-integration`'s and will code the main workflow soon.  
 
@@ -109,9 +109,9 @@ When human-in-the-loop step is needed, issue `interrupt` with key-value dictiona
 The customer will receive a confirmation email instead.  It's asynchronous and non-blocking in terms of system design.  It's blocking from the business perspective.  A return/ refund request won't move forward until a CSR review it.
 
 **Why do I decide not to use Langgraph interrupt - Command resume in return/ refund processing?**
-Once a thread is in `interrupted` state, we need to invoke with Command/ resume in order for the graph to operate normally.  If the app accidentally invoke the graph without Command/ resume, Langraph will issue a fresh `interrupt`. Yes, it will `re-interrupt`.  That might lead to a unknown consequence. Customer-support-agent is an interactive app with multiple endpoints.  We shouldn't block the customer from using the app after the interrupt. Then, we have to check if the thread is in `interrupted` state and invoke with Command/ resume for all endoints if it is.  Doing so will unblock the graph and defeat the purpose which is blocking!!
+Once a thread is in `interrupted` state, we need to invoke with Command/ resume in order for the graph to operate normally.  If the app accidentally invoke the graph without Command/ resume, Langraph will issue a fresh `interrupt`. Yes, it will `re-interrupt`.  That might lead to a unknown consequence. Customer-support-agent is an interactive app with multiple endpoints.  We shouldn't block the customer from using the app after the interrupt. Then, we have to check if the thread is in `interrupted` state and invoke with Command/ resume for all endoints if it is.  Doing so will unblock the graph and defeat the purpose of `interrupted` which is blocking!!
 
-Langgraph interrupt - Command resume framework work well if the person to request LLM's action is also the person to review it like CSR asking LLM tp draft an email.  That works just like chatting. However, Langgraph interrupt - Command will affect the customer/user interaction in this case and does not reach its goal.  That's my concern.
+Langgraph interrupt - Command resume framework work well if the person to request LLM's action is also the person to review it like CSR asking LLM tp draft an email.  That works just like chatting. However, Langgraph interrupt - Command will affect the customer/user interaction in the manual approve/ reject/ flag return/ refund business worflow and does not reach its goal.  That's my concern.
 
 
 ### Key files
@@ -147,11 +147,11 @@ I did some research on wheather we should summarize messages, store in the long-
 I think that the key point is: can all fine-grain factors concrete enough to be captured by code or will part of them still rely upon human/ LLM reasoning? Luckily we have `detect_order_revisit_node` that we can tag along to also get `order_prior_topic` easily in `order_continue_chat_node`.
   
 ### My learning notes:
-  - I learned and practice `asyncio.Semaphore` and `async with as context-manager` but did not think about applying it limit `concurrency` in `run_case`.
+  - I learned and practice `asyncio.Semaphore` and `async with as context-manager` but did not think about applying it to limit `concurrency` in `run_case`.
   - We don't need to rely upon commercial LLM test harness. The LLM test harness Claude did is a customized graceful solution.  That can be applied to any LangGraph nodes which are all `Callable[[dict], Awaitable[dict]]`,  async await function call taking a `dict` input and output a `dict`.  Then we inject the input state `dict` via the `build_state` parameter of `Case` class. And also learn how to add a customized pytest marker `@pytest.mark.llm` via `pyproject.toml` file. 
   - I tried get_llm(model='gpt-4.1') and failed. Claude got it working simply by popping `kwargs` to prevent both positional parameters and keyword parameters from passing `model` parameter. Damned it!
   - I don't like that tests are using `MockChatModel` and return None in `ainvoke`.  Therefore, we always get `escalation` result. That has workaround too. Create a `FakeLLM` class and customized `ainvoke` function. Then inject it into `agent`'s node LLM.  That can simulate a non-empty structured output from `ainvoke` and obtain a meaningful final output from node (Learned that from `test_order_situation.py`). And also we can `monkeypatch` `fake_init_chat_model` into the `init_chat_model` function of `llm` module. That helps dump `args` and `kwargs` to ensure that no positional argument `model` as well as keyword argument `model` passing to `init_chat_model`(Lerned from `test_llm_factory.py`)
-
+Keep learning and keep practicing is a way to go.
 ## Color Scheme
 
 - Accent Yellow: `#ecad0a`
