@@ -58,7 +58,7 @@ The backend is in `backend/` — a `uv` project (Python 3.12) using FastAPI.  I 
 
 The frontend is in `frontend/` — Next.js 16, React 19, Tailwind 4. It will be statically exported (`next.config.ts` → `output: "export"`) to `frontend/out/`.
 
-Officially, we are using one Docker container deployment with one entry point. In Dockerfile,  API build will copy static output `frontend/out/` from `frontend-build` to its build and mount it so that FastAPI can serve them at runtime at port `:8000`. docker container can start from `scripts/start-xxxx.sh` (`xxxx` is a placehold).  In dev, it's easier to deploy `backend` and `frontend` separately. Start backend `uv run uvicorn --timeout-keep-alive 75 main:app --reload` at the backend folder and start `npm run dev` at the frontend folder. Use `localhost:3000` Next.js port to proxy to`localhost:8000` FastAPI port.  
+Officially, we are using one Docker container deployment with one entry point. In Dockerfile,  API build will copy static output `frontend/out/` from `frontend-build` to its build and mount it so that FastAPI can serve them at runtime at port `:8000`. A docker container can be started with `scripts/start-xxxx.sh` (`xxxx` is a placehold).  In dev, it's easier to deploy `backend` and `frontend` separately. Start backend `uv run uvicorn --timeout-keep-alive 75 main:app --reload` at the backend folder and start `npm run dev` at the frontend folder. Use `localhost:3000` Next.js port to proxy to`localhost:8000` FastAPI port.  
 
 I decide to build `customer-support-agents` in DEMO_MODE because return refund involves the product return window. The data in database will be stale and not testable.  I dynamically adjust data in memory in DEMO mode so that they always be testable.
 
