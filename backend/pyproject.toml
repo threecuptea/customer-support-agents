@@ -28,6 +28,9 @@ dependencies = [
 dev = [
     "httpx2>=0.28",
     "pytest>=8.3",
+    "ipython>=9.17.1",
+    "ipykernel>=7.4.0",
+    "ipywidgets>=8.1.9",
 ]
 
 [tool.uv]
