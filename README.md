@@ -6,10 +6,15 @@ Customer-support agents that combine LangGraph workflow automation with human-in
 
 The diagram below is the compiled LangGraph for the customer-support flow. Each API call (`/api/support/...`) enters at `__start__` and a router sends it to one branch. Dotted arrows are conditional edges, and their labels are the router's decisions.
 
-- **General FAQ**: `general_faq_eval_node` -> fuzzy match -> LLM match, escalating when no match is confident enough.
-- **Order inquiry**: `retrieve_target_order_node` -> `detect_order_revisit_node` -> a static first reply for a new inquiry, or `order_continue_chat_node` for a revisit and for every later turn.
-- **Exchange/ return and refund**: `exchange_return_reason_recommendation_node` -> `initial_return_refund_decision_node` -> `return_refund_process_node`, with `return_refund_chat_node` for questions along the way.
-- `summarize_node` condenses finished conversations into long-term memory before the run ends.
+- **General FAQ**:
+   - `general_faq_eval_node` (LLM Eval node): will decide if a fuzzy match or/ and a llm match is/ are helpful to answer the customer's general inquiry. 
+   - `general_faq_fuzz_match_node` (Function response node): will execute if `general_faq_eval_node` decide a fuzzy match is helpful. It's using FAQs as the context.
+   - `general_faq_llm_match_node`(LLM response node): will execute if `general_faq_eval_node` decide a llm match is helpful. It's using FAQs plus the return policy as the context.
+   The output of either one will be accepted as the answer if its confidence_score has passed the match threshold. Escalate it to CSR if none is helpul or none has passed the match threshold.
+    
+- **Order inquiry**: `retrieve_target_order_node`(Function node) -> `detect_order_revisit_node` (LLM Eval node) -> `order_init_static_response_node` (Static response node), a static first reply for a new inquiry, or `order_continue_chat_node` (LLM chat node) for a revisit and for every later turn. 
+- **Exchange/ return and refund**: `exchange_return_reason_recommendation_node`(Function response node) -> `initial_return_refund_decision_node`(Function response node) -> `return_refund_process_node`(Function response node), with `return_refund_chat_node`(LLM chat node) for questions along the way.
+- `summarize_node` (LLM Summarize node) condenses finished conversations into long-term memory before the run ends.
 
 The diagram is generated: run `backend/workflow/draw_workflow_images.ipynb` and paste the output of `draw_mermaid()` here.
 
@@ -71,10 +76,10 @@ graph TD;
 
 A customer-support representative (CSR) asks the AI to draft a customized customer letter, and a human approves it before it is "sent". This is the LangGraph `interrupt` / `Command(resume=...)` pattern: `human_review` pauses the thread execution until the CSR responds.
 
-- `drafter` writes the draft with the LLM (using the CSR's feedback on a redraft).
-- `human_review` interrupts with the draft and three actions: **approve** (send as is), **edit** (send the CSR's own revised text), or **reject** with feedback.
+- `drafter`(LLM response node) writes the draft with the LLM (using the CSR's feedback on a redraft).
+- `human_review` (Function response node) interrupts with the draft and three actions: **approve** (send as is), **edit** (send the CSR's own revised text), or **reject** with feedback.
 - On reject, the graph loops back to `drafter` for a redraft, up to 3 revisions; after that it finalizes with the feedback unresolved.
-- `finalize` records the final letter and the status (`sent` or `sent_with_unresolved_feedback`).
+- `finalize` (Function response node) records the final letter and the status (`sent` or `sent_with_unresolved_feedback`).
 
 ```mermaid
 ---
@@ -126,7 +131,7 @@ I built [Agentic RAG](https://github.com/threecuptea/agentic_ai/tree/master/sony
 
 I built [Prelegal](https://github.com/threecuptea/prelegal) on May. 2026. I did not use LangGraph.  **I use FastAPI combined with OpenAI Agent SDK in an Agent Loop architect**. The agent is given required fields defined for each legal template and instructed to guide a user to provide one or two fields in each conversation. UI invokes OpenAI Agent SDK multiple times via FastAPI in a session.  However, the agent is in a close-purposed loop - collecting inputs of all required fields.
 
-`Customer-support-agents` is much more complicate as shown in the worflow diagram.  It covers general FAQs, order inquiries, exchange or return recommendations, returns for refunds. Order inquiry topics can be from an 'pending' order, tracking an order in 'transit', find the whereabouts of a shipment to listen to the customer's complaint about items received and more. The customer can chat multiple-runs with LLM or even on multiple orders.  For returns for refunds, more conditional principles mean more branches/ routes to cover.  Returns for refunds requirs multiple steps: validate return product(s) and quantities, calcualate amount to be refund and convey the initial decision and ask if proceeding to process and chat along the way. `Customer-support-agents` is a multi-step, multi-run (invocation) AI system in overall.
+`Customer-support-agents` is much more complicated as shown in the worflow diagram.  It covers general FAQs, order inquiries, exchange or return recommendations, returns for refunds. Order inquiry topics can be from an 'pending' order, tracking an order in 'transit', find the whereabouts of a shipment to listen to the customer's complaint about items received and more. The customer can chat multiple-runs with LLM or even on multiple orders.  For returns for refunds, more conditional principles mean more branches/ routes to cover.  Returns for refunds requirs multiple steps: validate return product(s) and quantities, calcualate amount to be refund and convey the initial decision and ask if proceeding to process and chat along the way. `Customer-support-agents` is a multi-step, multi-run (invocation) AI system in overall.
 
 Agent loop to the whole app is out of question because of the complexity of `customer-support-agents` app. What about applying Agent Loop to components like order inquiry or automate return/ refund?  Should I use LLM as a controller and assist it with tools calling or should I use function calls and only use LLM when we need reasoning/judgement based upon the context or engage smooth conversations with the customer?   
 
@@ -243,7 +248,7 @@ Claude also get LLM_MODEL and LLM_TEMPERATURE commmand line override working. Th
 LLM_MODEL=gpt-4o-mini RUN_LLM_TESTS=1 LLM_TRIALS=20 uv run pytest -m llm -s
 ```
 to run 20 trials on each cases. (default temperature 0; LLM_TRIALS=20 for fewer flukes)
-The result after Claude fine tuned prompts of `return_refund_chat_node`/`order_continue_chat_node`/`detect_order_revisit_node` is very amazing. In a full harness on `gpt-4o-mini`, all 31 cases pass 20/20 in multiple runs. Harness on `gpt-4.1` passed 20/20 in multiple runsearlier.
+The result after Claude fine tuned prompts of `return_refund_chat_node`/`order_continue_chat_node`/`detect_order_revisit_node` is very amazing. In a full harness on `gpt-4o-mini`, all 31 cases pass 20/20 in multiple runs. Harness on `gpt-4.1` passed 20/20 in multiple runs earlier.
 
 The following is a table view demonstrating `deterministic-situation-priority-flow` of `return_refund_chat_node` and cases it covers:
 
@@ -307,7 +312,7 @@ Once a thread is in an `interrupted` state, we need to invoke with Command/ resu
 
 `Customer-support-agents` is an interactive app with multiple endpoints.  We shouldn't block the customer from using the app after requesting human review. Then, we have to check if the thread is in `interrupted` state for all endpoints and invoke with Command/ resume with an artificial action if the current thread is in `interrupted` state. Doing so will unblock the thread execution.  That will defeat the purpose of `interrupt` which is blocking!!
 
-Langgraph interrupt - Command resume framework work well if the person to request a LLM's action is also the person to review it like CSR asking LLM to draft an email.  That works just like chatting natually. However, Langgraph interrupt - Command will affect customer's interaction with the support agent and does not serve the purpose.  That's my concern.
+Langgraph interrupt - Command resume framework work well if the person to request a LLM's action is also the person to review it like the case that CSR asking LLM to draft an email.  That works just like chatting natually. However, Langgraph interrupt - Command will affect customer's interaction with the support agent and does not serve the purpose.  That's my concern.
 
 ### Technical design
 
