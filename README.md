@@ -10,12 +10,11 @@ The diagram below is the compiled LangGraph for the customer-support flow. Each 
    - `general_faq_eval_node` (LLM Eval node): will decide if a fuzzy match or/ and a llm match is/ are helpful to answer the customer's general inquiry. 
    - `general_faq_fuzz_match_node` (Function response node): will execute if `general_faq_eval_node` decide a fuzzy match is helpful. It's using FAQs as the context.
    - `general_faq_llm_match_node`(LLM response node): will execute if `general_faq_eval_node` decide a llm match is helpful. It's using FAQs plus the return policy as the context.
+  
    The output of either one will be accepted as the answer if its confidence_score has passed the match threshold. Escalate it to CSR if none is helpul or none has passed the match threshold.
-    
 - **Order inquiry**: `retrieve_target_order_node`(Function node) -> `detect_order_revisit_node` (LLM Eval node) -> `order_init_static_response_node` (Static response node), a static first reply for a new inquiry, or `order_continue_chat_node` (LLM chat node) for a revisit and for every later turn.
--  
 - **Exchange/ return and refund**: `exchange_return_reason_recommendation_node`(Function response node) -> `initial_return_refund_decision_node`(Function response node) -> `return_refund_process_node`(Function response node), with `return_refund_chat_node`(LLM chat node) for questions along the way.
-- `summarize_node` (LLM Summarize node) condenses finished conversations into long-term memory before the run ends.
+- **summarize_node:** (LLM Summarize node) condenses finished conversations into long-term memory before the run ends.
 
 The diagram is generated: run `backend/workflow/draw_workflow_images.ipynb` and paste the output of `draw_mermaid()` here.
 
