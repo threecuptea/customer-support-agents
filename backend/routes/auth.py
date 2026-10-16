@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 import logging
@@ -28,6 +28,9 @@ async def auth_lifespan(router: APIRouter) -> AsyncGenerator[None, None]:
 router = APIRouter(prefix="/api/auth", tags=['auth'], lifespan= auth_lifespan)
 
 @router.post("", response_model=AuthResponse)
-async def auth(request: AuthRequest) -> AuthResponse:
-    logger.info(f"Authenticate/ authorize {request.email_addr.strip()}")
-    return await validate_populate_context(request.email_addr.strip())
+async def auth(auth_request: AuthRequest, request: Request) -> AuthResponse:
+    logger.info(f"Authenticate/ authorize {auth_request.email_addr.strip()}")
+    response = await validate_populate_context(auth_request.email_addr.strip())
+    request.app.state.role = response.role
+     
+    return response

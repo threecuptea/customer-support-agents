@@ -20,6 +20,7 @@ shared_order_id = 12462
 def client():
     # `with` triggers the FastAPI lifespan so app.state.support_graph is built.
     with TestClient(app) as test_client:
+        test_client.app.state.role = "customer" # so that the RoleChecker will allow access to the customer support endpoints
         yield test_client
 
 

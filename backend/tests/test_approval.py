@@ -11,6 +11,7 @@ from main import app
 def client():
     # `with` triggers the FastAPI lifespan so app.state.approval_graph is built. app instead of router should be the entry point.
     with TestClient(app) as test_client:
+        test_client.app.state.role = "csr" # so that the RoleChecker will allow access to the approval endpoints
         yield test_client
 
 
@@ -51,7 +52,7 @@ def test_approval_edit_uses_user_content(client):
     assert data["final_output"] == edited
 
 
-def test_approval_reject_redrafts_and_pauses_again(client):
+def test_approval_reject_redrafts_3times_sent_unresolved_feedback(client):
     thread_id = client.post("/api/approval/start", json={"task": "Write a note"}).json()["thread_id"]
     decide = client.post(
         "/api/approval/decide",
@@ -64,4 +65,29 @@ def test_approval_reject_redrafts_and_pauses_again(client):
     # "revision_count": state.get("revision_count", 0) + 1, was incremented by 1 in the 'human_review' of approval_workflow.py
     assert data["requires_input"] is True
     assert data["revision_count"] == 1
+    assert data['status'] == 'awaiting_review'
+
+    decide = client.post(
+        "/api/approval/decide",
+        json={"thread_id": thread_id, "action": "reject", "feedback": "Make it shorter..."},
+    )
+    data = decide.json()
+    assert data["requires_input"] is True
+    assert data["revision_count"] == 2
+    assert data['status'] == 'awaiting_review'
+
+    decide = client.post(
+        "/api/approval/decide",
+        json={"thread_id": thread_id, "action": "reject", "feedback": "Make it shorter..."},
+    )
+    data = decide.json()
+    assert data["final_output"]
+    assert data['status'] == "sent_with_unresolved_feedback"
+
+
+def test_approval_start_with_customer_role(client):
+    client.app.state.role = "customer"
+    start = client.post("/api/approval/start", json={"task": "Write a note"})
+    assert start.status_code == 403
+    # By default, a fixture re-runs for every single test function and no need to reset here.
        

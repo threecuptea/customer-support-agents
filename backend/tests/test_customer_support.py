@@ -19,6 +19,8 @@ shared_order_id = 12462
 def client():
     # `with` triggers the FastAPI lifespan so app.state.support_graph is built.
     with TestClient(app) as test_client:
+        # auth will set the role to "customer" 
+        test_client.app.state.role = "customer" # so that the RoleChecker will allow access to the customer support endpoints
         yield test_client
 
 
@@ -99,7 +101,6 @@ def test_general_faq_llm_evals_node_directly_escalates():
     assert result["messages"][0].additional_kwargs['source'] == SOURCE_FAQ_LLM_EVALS
 
 
-
 # --- End-to-end coverage for POST /api/support/general (also a regression test:
 # the route used to call `GeneralSupportResponse(...)` with positional args, which
 # pydantic BaseModel rejects). K. K, so the flow always escalates. ---
@@ -126,6 +127,7 @@ def test_general_support_thread_accumulates_and_summarizes(client):
         "/api/support/general",
         json={"customer_context": CUSTOMER_CONTEXT, "general_inquiry": "What is your return policy?"},
     )
+    assert r1.status_code == 200
     thread_id = r1.json()["thread_id"]
 
     graph = client.app.state.support_graph
@@ -151,7 +153,7 @@ def test_general_support_thread_accumulates_and_summarizes(client):
     assert r2.json()["thread_id"] == thread_id
     state_after_r2 = asyncio.run(graph.aget_state(config))
 
-    # Round 2 appended the loaded-memory summary message, the new question, and the
+    # Round 2appended the loaded-memory summary message, the new question, and the
     # new escalate reply on top of round 1's 2 messages (5 total) before summarize_node
     # pruned it back down to just the 2 most recent -- proving RemoveMessage actually
     # dropped the stale round-1 messages rather than letting the list grow unbounded.
@@ -423,3 +425,31 @@ def test_order_init_resets_order_turns_and_prior_topic(client):
     values = asyncio.run(graph.aget_state(config)).values
     assert values["order_turns"] == 0
     assert values["order_prior_topic"] is None
+
+def test_order_init_with_csr_role(client):
+    client.app.state.role = "csr"
+
+    resp = client.post("/api/support/general", json={})
+    assert resp.status_code == 403
+
+    resp = client.post("/api/support/order/init", json={})
+    assert resp.status_code == 403
+    resp = client.post("/api/support/order/continue", json={})
+    assert resp.status_code == 403
+
+    resp = client.post("/api/support/exchange_return/recommend", json={})
+
+    assert resp.status_code == 403  
+    resp = client.post("/api/support/return_refund/init", json={})
+    assert resp.status_code == 403
+    resp = client.post("/api/support/return_refund/process", json={})
+    assert resp.status_code == 403
+    resp = client.post("/api/support/return_refund/chat", json={})
+    assert resp.status_code == 403
+    
+    resp = client.post("/api/support/exit", json={})
+    assert resp.status_code == 403
+    
+
+
+

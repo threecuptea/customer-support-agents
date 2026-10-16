@@ -11,6 +11,8 @@ MAX_MESSAGES = 100
 
 MAX_REASON_CHARS = 500
 
+ALLOWED_ROLES = Literal["csr", "customer"]
+
 
 # Eventually, we should have an escalation slack chanel. This message is for CSR (human customer-support representative) to 
 # inform why we escalate this ticket.  However, escalation reason alone is not good enough, need customer, order, return refund
@@ -222,7 +224,7 @@ class AuthRequest(BaseModel):
 class AuthResponse(BaseModel):
     email_addr: str
     is_auth: bool = False
-    role: Literal["csr", "customer"] # customer-support-representative, or customer
+    role: ALLOWED_ROLES
     customer_context: CustomerContext | None = None # CustomerContext exists if the role is customer
 
     
