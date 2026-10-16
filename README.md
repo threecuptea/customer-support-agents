@@ -6,9 +6,7 @@ Customer-support agents that combine LangGraph workflow automation with human-in
 
 The diagram below is the compiled LangGraph for the customer-support flow. Each API call (`/api/support/...`) enters at `__start__` and a router sends it to one branch. Dotted arrows are conditional edges, and their labels are the router's decisions.
 
-- **General FAQ**: `general_faq_eval_node` (LLM eval node) will decide if a fuzzy match is helpful (to answer) and execute `general_faq_fuzz_match_node` (Function response node) accordingly if yes, and fallback to execute `general_faq_llm_match_node` (LLM response node) if a llm match is is helpful and the former is no-go or fails.
-
-The output of either one will be accepted as the answer if its confidence_score has passed the match threshold. Escalate it to CSR if none is helpul or none has passed.
+- **General FAQ**: `general_faq_eval_node` (LLM eval node) will decide if a fuzzy match is helpful (to answer) and execute `general_faq_fuzz_match_node` (Function response node) accordingly if yes, and fallback to execute `general_faq_llm_match_node` (LLM response node) if a llm match is is helpful and the former is no-go or fails. The output of either one will be accepted as the answer if its confidence_score has passed the match threshold. Escalate it to CSR if none is helpul or none has passed.
 - **Order inquiry**: `retrieve_target_order_node`(Function node) -> `detect_order_revisit_node` (LLM eval node) -> `order_init_static_response_node` (Static response node), a static first reply for a new inquiry, or `order_continue_chat_node` (LLM chat node) for a revisit and for every later turn.
 - **Exchange/ return and refund**: `exchange_return_reason_recommendation_node`(Function response node) -> `initial_return_refund_decision_node`(Function response node) -> `return_refund_process_node`(Function response node), with `return_refund_chat_node`(LLM chat node) for questions along the way.
 - **Summarize_node:** (LLM summarize node) condenses finished conversations into long-term memory before the run ends.
