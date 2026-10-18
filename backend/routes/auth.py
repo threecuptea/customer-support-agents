@@ -27,10 +27,11 @@ async def auth_lifespan(router: APIRouter) -> AsyncGenerator[None, None]:
 
 router = APIRouter(prefix="/api/auth", tags=['auth'], lifespan= auth_lifespan)
 
+
 @router.post("", response_model=AuthResponse)
 async def auth(auth_request: AuthRequest, request: Request) -> AuthResponse:
-    logger.info(f"Authenticate/ authorize {auth_request.email_addr.strip()}")
-    response = await validate_populate_context(auth_request.email_addr.strip())
-    request.app.state.role = response.role
-     
+    auth_request.email_addr = auth_request.email_addr.strip()
+    logger.info(f"Authenticate/ authorize {auth_request.email_addr}")
+    response = await validate_populate_context(auth_request.email_addr)
+    request.session["role"] = response.role
     return response

@@ -1,9 +1,8 @@
 import asyncio
-from unittest import result
-
+from fastapi import Request
 from fastapi.testclient import TestClient
 from services.demo_data import get_demo_customer
-
+    
 import pytest
 
 from main import app
@@ -17,24 +16,19 @@ import uuid
 shared_thread_id = str(uuid.uuid4())
 shared_order_id = 12462
 
+
 @pytest.fixture()
-def client():
+def auth_client():
     # `with` triggers the FastAPI lifespan so app.state.support_graph is built.
     with TestClient(app) as test_client:
-        # auth will set the role to "customer" 
-        test_client.app.state.role = "customer" # so that the RoleChecker will allow access to the customer support endpoints
-        yield test_client
-
+        resp = test_client.post("/api/auth", json={"email_addr": "anderson.cooper@cnn.com"})
+        customer_context = CustomerContext(**resp.json()["customer_context"])
+        yield test_client, customer_context
 
 @pytest.fixture()
-def customer_context():
-    """
-    I have to remove `/api/auth` call because that will override the role set in the test client. 
-    All API tests are not effective for testing the role setting and access control.
-    Therefore, I directly instantiate the CustomerContext with the demo customer data in the fixture.
-    I also add tests to auth to test the role setting/ access control and API end to end.
-    """
+def test_customer_context():
     return CustomerContext(**get_demo_customer("anderson.cooper@cnn.com"))
+
 
 PSEUDO_CUSTOMER_CONTEXT = {
     "customer_id": 1,
@@ -118,10 +112,10 @@ def test_general_faq_llm_evals_node_directly_escalates():
 # --- End-to-end coverage for POST /api/support/general (also a regression test:
 # the route used to call `GeneralSupportResponse(...)` with positional args, which
 # pydantic BaseModel rejects). K. K, so the flow always escalates. ---
-def test_api_general_support_endpoint_escalates_under_mock_llm(client):
+def test_api_general_support_endpoint_escalates_under_mock_llm(auth_client):
+    client, _ = auth_client
     # PSEUDO_CUSTOMER_CONTEXT is simple dict without datetime fields can be serialized directly to JSON
     resp = client.post(
-
         "/api/support/general",
         json={"customer_context": PSEUDO_CUSTOMER_CONTEXT, "general_inquiry": "What is your return policy?"},
     )
@@ -138,7 +132,8 @@ def test_api_general_support_endpoint_escalates_under_mock_llm(client):
 # `RemoveMessage`, and it persists a running `summary` each time it fires. Under the
 # mock LLM, `general_faq_eval_node` always escalates, which trips `_should_summarize`
 # after every single round. ---
-def test_api_general_support_thread_accumulates_and_summarizes(client):
+def test_api_general_support_thread_accumulates_and_summarizes(auth_client):
+    client, _ = auth_client
     r1 = client.post(
         "/api/support/general",
         json={"customer_context": PSEUDO_CUSTOMER_CONTEXT, "general_inquiry": "What is your return policy?"},
@@ -191,11 +186,11 @@ def _run_order_init_fresh_inquiry(agent: CustomerSupportAgent, state: dict) -> d
     render_result = asyncio.run(agent.order_init_static_response_node(state))
     return {**retrieve_result, **render_result}
 
-def test_order_init_succeed(customer_context):
-    target_order_id = customer_context.latest_orders[0].order_id
+def test_order_init_succeed(test_customer_context):
+    target_order_id = test_customer_context.latest_orders[0].order_id
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     state = {
-        "customer_context": customer_context,
+        "customer_context": test_customer_context,
         "order_number_provided": target_order_id
     }
     result = _run_order_init_fresh_inquiry(agent, state)
@@ -211,7 +206,7 @@ def test_order_init_succeed(customer_context):
     assert phrase in result["response"]
     assert phrase in result["messages"][0].content
 
-    update_order = customer_context.latest_orders[0]
+    update_order = test_customer_context.latest_orders[0]
     update_order.status = 'transit'
     result = _run_order_init_fresh_inquiry(agent, state)
     order: Order = result["target_order"]
@@ -220,7 +215,7 @@ def test_order_init_succeed(customer_context):
     assert phrase in result["response"]
     assert phrase in result["messages"][0].content
 
-    update_order = customer_context.latest_orders[0]
+    update_order = test_customer_context.latest_orders[0]
     update_order.status = 'pending'
     result = _run_order_init_fresh_inquiry(agent, state)
     order: Order = result["target_order"]
@@ -229,11 +224,11 @@ def test_order_init_succeed(customer_context):
     assert phrase in result["response"]
     assert phrase in result["messages"][0].content
 
-def test_order_init_fail(customer_context):
-    target_order_id = customer_context.latest_orders[0].order_id
+def test_order_init_fail(test_customer_context):
+    target_order_id = test_customer_context.latest_orders[0].order_id
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     state = {
-        "customer_context": customer_context,
+        "customer_context": test_customer_context,
         "order_number_provided": target_order_id + 1,
     }
     result = asyncio.run(agent.retrieve_target_order_node(state))
@@ -243,20 +238,20 @@ def test_order_init_fail(customer_context):
     assert result["messages"][0].role == ROLE_AGENT
     assert result["messages"][0].additional_kwargs['source'] == SOURCE_ORDER_RETRIEVAL
 
-def test_detect_order_revisit_node_defaults_false_under_mock(customer_context):
+def test_detect_order_revisit_node_defaults_false_under_mock(test_customer_context):
     # Mock LLM can't fake with_structured_output, so this call always returns None,
     # matching order_continue_chat_node's same documented limitation.
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     state = {
-        "target_order": customer_context.latest_orders[0],
-        "order_number_provided": customer_context.latest_orders[0].order_id,
+        "target_order": test_customer_context.latest_orders[0],
+        "order_number_provided": test_customer_context.latest_orders[0].order_id,
         "summary": "",
         "messages": [],
     }
     result = asyncio.run(agent.detect_order_revisit_node(state))
     assert result["order_is_revisit"] is False
 
-def test_detect_order_revisit_node_true_when_llm_confirms(customer_context):
+def test_detect_order_revisit_node_true_when_llm_confirms(test_customer_context):
     class _FakeRevisitLLM:
         async def ainvoke(self, messages):
             return OrderRevisitEval(is_revisit=True)
@@ -264,18 +259,18 @@ def test_detect_order_revisit_node_true_when_llm_confirms(customer_context):
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     agent.order_llm_for_revisit_eval = _FakeRevisitLLM()
     state = {
-        "target_order": customer_context.latest_orders[0],
-        "order_number_provided": customer_context.latest_orders[0].order_id,
+        "target_order": test_customer_context.latest_orders[0],
+        "order_number_provided": test_customer_context.latest_orders[0].order_id,
         "summary": "Customer previously reported this order's shipment as lost.",
         "messages": [],
     }
     result = asyncio.run(agent.detect_order_revisit_node(state))
     assert result["order_is_revisit"] is True
 
-def test_route_after_retrieve_target_order(customer_context):
+def test_route_after_retrieve_target_order(test_customer_context):
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     assert agent.route_after_retrieve_target_order({"target_order": None}) == "summarize_node"
-    assert agent.route_after_retrieve_target_order({"target_order": customer_context.latest_orders[0]}) == "detect_order_revisit_node"
+    assert agent.route_after_retrieve_target_order({"target_order": test_customer_context.latest_orders[0]}) == "detect_order_revisit_node"
 
 def test_route_after_detect_order_revisit():
     agent = CustomerSupportAgent(checkpointer=None, store=None)
@@ -284,7 +279,7 @@ def test_route_after_detect_order_revisit():
     assert agent.route_after_detect_order_revisit({}) == "order_init_static_response_node"
 
 
-def test_routes_up_to_order(customer_context):
+def test_routes_up_to_order(test_customer_context):
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     state = {
        "support_category": "general/ others",
@@ -305,12 +300,13 @@ def test_routes_up_to_order(customer_context):
     state = {
         "support_category": "order_inquery",
         "order_number_provided": 123464,
-        "target_order": customer_context.latest_orders[0],
+        "target_order": test_customer_context.latest_orders[0],
         }
     assert agent.route_branch(state) == "order_init_done"
     
 
-def test_api_invoke_order_init_workflow(client, customer_context):
+def test_api_invoke_order_init_workflow(auth_client):
+    client, customer_context = auth_client
     target_order_id = customer_context.latest_orders[0].order_id
     # I got into Object of type CustomerContext is not JSON serializable error. 
     # I must use Pydantic's built-in serialization methods rather than Python's standard json.dumps()
@@ -335,7 +331,8 @@ def test_api_invoke_order_init_workflow(client, customer_context):
     assert snapshot_init.values["target_order"]
     assert snapshot_init.values["summary"]
 
-def test_invoke_order_continue_workflow(client, customer_context):
+def test_api_invoke_order_continue_workflow(auth_client):   
+    client, customer_context = auth_client
     target_order_id = customer_context.latest_orders[0].order_id
     # I got into Object of type CustomerContext is not JSON serializable error. 
     # I must use Pydantic's built-in serialization methods rather than Python's standard json.dumps()
@@ -364,7 +361,8 @@ def test_invoke_order_continue_workflow(client, customer_context):
     assert chat_message.additional_kwargs["source"] ==SOURCE_ORDER_INQUIRY
     assert PREFIX_ANSWER_QUESTION in chat_message.content
     
-def test_api_invoke_order_continue_workflow_error(client, customer_context):
+def test_api_invoke_order_continue_workflow_error(auth_client):
+    client, customer_context = auth_client
     target_order_id = customer_context.latest_orders[0].order_id
     # I got into Object of type CustomerContext is not JSON serializable error. 
     # I must use Pydantic's built-in serialization methods rather than Python's standard json.dumps()
@@ -382,7 +380,8 @@ def test_api_invoke_order_continue_workflow_error(client, customer_context):
     assert resp.status_code == 400
 
 
-def test_api_order_init_resets_order_turns_and_prior_topic(client, customer_context):
+def test_api_order_init_resets_order_turns_and_prior_topic(auth_client):
+    client, customer_context = auth_client
     order_id = customer_context.latest_orders[0].order_id
     payload = {"customer_context": customer_context.model_dump(mode="json"), "order_number_provided": order_id}
     thread_id = client.post("/api/support/order/init", json=payload).json()["thread_id"]
@@ -396,30 +395,6 @@ def test_api_order_init_resets_order_turns_and_prior_topic(client, customer_cont
     values = asyncio.run(graph.aget_state(config)).values
     assert values["order_turns"] == 0
     assert values["order_prior_topic"] is None
-
-def test_api_order_init_with_csr_role(client):
-    client.app.state.role = "csr"
-
-    resp = client.post("/api/support/general", json={})
-    assert resp.status_code == 403
-
-    resp = client.post("/api/support/order/init", json={})
-    assert resp.status_code == 403
-    resp = client.post("/api/support/order/continue", json={})
-    assert resp.status_code == 403
-
-    resp = client.post("/api/support/exchange_return/recommend", json={})
-
-    assert resp.status_code == 403  
-    resp = client.post("/api/support/return_refund/init", json={})
-    assert resp.status_code == 403
-    resp = client.post("/api/support/return_refund/process", json={})
-    assert resp.status_code == 403
-    resp = client.post("/api/support/return_refund/chat", json={})
-    assert resp.status_code == 403
-    
-    resp = client.post("/api/support/exit", json={})
-    assert resp.status_code == 403
     
 
 def test_faq_llm_match_with_fake_llm():
@@ -471,7 +446,7 @@ def test_faq_question_for_faq_llm_evals_with_fake_llm():
     assert result["faq_match_evals"] == both_are_helpful
     assert not result.get("response") or ESCALATE_MESSAGE not in result["response"]
 
-def test_simple_question_for_order_continue_chat_with_fake_llm(customer_context):
+def test_simple_question_for_order_continue_chat_with_fake_llm(test_customer_context):
     question = "My order is transit.  How can I track it?"
     response = "You can track your order using the tracking number provided in your order confirmation email."
     output = OrderStructuredOutput(
@@ -485,8 +460,8 @@ def test_simple_question_for_order_continue_chat_with_fake_llm(customer_context)
 
     state = {
         "messages": [HumanMessage(content=question)],
-        "target_order": customer_context.latest_orders[0],
-        "order_number_provided": customer_context.latest_orders[0].order_id,
+        "target_order": test_customer_context.latest_orders[0],
+        "order_number_provided": test_customer_context.latest_orders[0].order_id,
     }
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     agent.order_llm_for_inquiry_chat = _FakeOrderChatLLM()
@@ -499,7 +474,7 @@ def test_simple_question_for_order_continue_chat_with_fake_llm(customer_context)
     assert message.content == response
     assert result["order_turns"] == 1
 
-def test_escalate_situation_for_order_continue_chat_with_fake_llm(customer_context):
+def test_escalate_situation_for_order_continue_chat_with_fake_llm(test_customer_context):
     question = "I need help for my lost shipment."
     response = f"{PREFIX_LOST_SHIPMENT} {ESCALATE_MESSAGE}"
     output = OrderStructuredOutput(
@@ -513,8 +488,8 @@ def test_escalate_situation_for_order_continue_chat_with_fake_llm(customer_conte
 
     state = {
         "messages": [HumanMessage(content=question)],
-        "target_order": customer_context.latest_orders[0],
-        "order_number_provided": customer_context.latest_orders[0].order_id,
+        "target_order": test_customer_context.latest_orders[0],
+        "order_number_provided": test_customer_context.latest_orders[0].order_id,
         "order_turns": 1,
         "order_is_revisit": True,
         "order_prior_topic": "lost_shipment",

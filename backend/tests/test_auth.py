@@ -211,7 +211,6 @@ def test_app_state_role_customer_end_to_end(client):
     assert data['role'] == 'customer'
     customer_context = CustomerContext.model_validate(data['customer_context'])
     assert customer_context is not None
-    assert client.app.state.role == 'customer' # ensure the app state role is set correctly
 
     # Ensure RoleCheck is functioning correctly and we start general inquiry with a customer role
     resp = client.post(
@@ -240,7 +239,6 @@ def test_app_state_role_csr_end_to_end(client):
     resp = client.post("/api/auth", json={"email_addr": email_addr})
     data = resp.json()
     assert data['role'] == 'csr'
-    assert client.app.state.role == 'csr' # ensure the app state role is set correctly
 
     # Ensure RoleCheck is functioning correctly and we can start approval tasks with a csr role
     resp = client.post("/api/approval/start", json={"task": "Write a welcome email"})

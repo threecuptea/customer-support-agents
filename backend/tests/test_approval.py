@@ -1,23 +1,26 @@
+
 from fastapi.testclient import TestClient
+from fastapi import Request
+
 import pytest
 from main import app
 
-# client = TestClient(app)
+
 # IMPORTANT:I cannot use TestClient(app) as a global variable because it won't trigger the FastAPI lifespan context manager 
 # without `with` clause as a context manager.  Tests would fail with AttributeError: 'FastAPI' object has no attribute 'state.approval_graph' 
 # because the app.state.approval_graph was not never built. It's a very delicate error. 
-
 @pytest.fixture()
-def client():
+def auth_client():
     # `with` triggers the FastAPI lifespan so app.state.approval_graph is built. app instead of router should be the entry point.
+    # captured_request: Request = None
     with TestClient(app) as test_client:
-        test_client.app.state.role = "csr" # so that the RoleChecker will allow access to the approval endpoints
+        test_client.post("/api/auth", json={"email_addr": "threecuptea@gmail.com"})
         yield test_client
 
 
 # --- Approval workflow (draft → approve / edit / reject → send) ------------- 
-def test_approval_start_drafts_and_pauses(client):
-    start = client.post("/api/approval/start", json={"task": "Write a welcome email"})
+def test_approval_start_drafts_and_pauses(auth_client):
+    start = auth_client.post("/api/approval/start", json={"task": "Write a welcome email"})
     assert start.status_code == 200
     data = start.json()
     assert data['requires_input'] is True
@@ -26,9 +29,9 @@ def test_approval_start_drafts_and_pauses(client):
     assert data['revision_count'] == 0    
 
 
-def test_approval_approve_sends(client):
-    thread_id = client.post("/api/approval/start", json={"task": "Write a note"}).json()["thread_id"]
-    decide = client.post(
+def test_approval_approve_sends(auth_client):
+    thread_id = auth_client.post("/api/approval/start", json={"task": "Write a note"}).json()["thread_id"]
+    decide = auth_client.post(
         "/api/approval/decide",
         json={"thread_id": thread_id, "action": "approve"},
     )
@@ -39,10 +42,10 @@ def test_approval_approve_sends(client):
     assert data["final_output"]
 
 
-def test_approval_edit_uses_user_content(client):
-    thread_id = client.post("/api/approval/start", json={"task": "Write a note"}).json()["thread_id"]
+def test_approval_edit_uses_user_content(auth_client):
+    thread_id = auth_client.post("/api/approval/start", json={"task": "Write a note"}).json()["thread_id"]
     edited = "This is my hand-edited final version."
-    decide = client.post(
+    decide = auth_client.post(
         "/api/approval/decide",
         json={"thread_id": thread_id, "action": "edit", "content": edited},
     )
@@ -52,9 +55,9 @@ def test_approval_edit_uses_user_content(client):
     assert data["final_output"] == edited
 
 
-def test_approval_reject_redrafts_3times_sent_unresolved_feedback(client):
-    thread_id = client.post("/api/approval/start", json={"task": "Write a note"}).json()["thread_id"]
-    decide = client.post(
+def test_approval_reject_redrafts_3times_sent_unresolved_feedback(auth_client):
+    thread_id = auth_client.post("/api/approval/start", json={"task": "Write a note"}).json()["thread_id"]
+    decide = auth_client.post(
         "/api/approval/decide",
         json={"thread_id": thread_id, "action": "reject", "feedback": "Make it shorter"},
     )
@@ -67,7 +70,7 @@ def test_approval_reject_redrafts_3times_sent_unresolved_feedback(client):
     assert data["revision_count"] == 1
     assert data['status'] == 'awaiting_review'
 
-    decide = client.post(
+    decide = auth_client.post(
         "/api/approval/decide",
         json={"thread_id": thread_id, "action": "reject", "feedback": "Make it shorter..."},
     )
@@ -76,18 +79,10 @@ def test_approval_reject_redrafts_3times_sent_unresolved_feedback(client):
     assert data["revision_count"] == 2
     assert data['status'] == 'awaiting_review'
 
-    decide = client.post(
-        "/api/approval/decide",
+    decide = auth_client.post(
+           "/api/approval/decide",
         json={"thread_id": thread_id, "action": "reject", "feedback": "Make it shorter..."},
     )
     data = decide.json()
     assert data["final_output"]
-    assert data['status'] == "sent_with_unresolved_feedback"
-
-
-def test_approval_start_with_customer_role(client):
-    client.app.state.role = "customer"
-    start = client.post("/api/approval/start", json={"task": "Write a note"})
-    assert start.status_code == 403
-    # By default, a fixture re-runs for every single test function and no need to reset here.
-       
+    assert data['status'] == "sent_with_unresolved_feedback"      
