@@ -1,5 +1,4 @@
 import asyncio
-from fastapi import Request
 from fastapi.testclient import TestClient
 from services.demo_data import get_demo_customer
     
@@ -22,7 +21,7 @@ def auth_client():
     # `with` triggers the FastAPI lifespan so app.state.support_graph is built.
     with TestClient(app) as test_client:
         resp = test_client.post("/api/auth", json={"email_addr": "anderson.cooper@cnn.com"})
-        customer_context = CustomerContext(**resp.json()["customer_context"])
+        customer_context = CustomerContext(**resp.json()[1])
         yield test_client, customer_context
 
 @pytest.fixture()

@@ -27,10 +27,12 @@ def test_csr_role_whitelist(client):
     resp = client.post("/api/auth", json={"email_addr": email_addr})
     assert resp.status_code == 200
     data = resp.json()
-    assert data['email_addr'] == email_addr
-    assert data['is_auth'] == True
-    assert data['role'] == 'csr'
-    assert data['customer_context'] is None
+    auth_resp = data[0]
+    customer_context = data[1]
+    assert auth_resp['email_addr'] == email_addr
+    assert auth_resp['is_auth'] == True
+    assert auth_resp['role'] == 'csr'
+    assert customer_context is None
 
 
 def test_csr_role_domain(client, monkeypatch: pytest.MonkeyPatch):
@@ -41,10 +43,12 @@ def test_csr_role_domain(client, monkeypatch: pytest.MonkeyPatch):
     resp = client.post("/api/auth", json={"email_addr": email_addr})
     assert resp.status_code == 200
     data = resp.json()
-    assert data['email_addr'] == email_addr
-    assert data['is_auth'] == True
-    assert data['role'] == 'csr'
-    assert data['customer_context'] is None
+    auth_resp = data[0]
+    customer_context = data[1]
+    assert auth_resp['email_addr'] == email_addr
+    assert auth_resp['is_auth'] == True
+    assert auth_resp['role'] == 'csr'
+    assert customer_context is None
 
 def test_csr_role_no_whitelist_no_domain(client, monkeypatch: pytest.MonkeyPatch):
     # It is only effective in this test
@@ -60,7 +64,8 @@ def test_email_not_found(client):
     resp = client.post("/api/auth", json={"email_addr": email_addr})
     assert resp.status_code == 200
     data = resp.json()
-    assert data['is_auth'] == False
+    auth_resp = data[0]
+    assert auth_resp['is_auth'] == False
          
 
 # Type hinting alone does not change a field's requirement status and a default value is still required.
@@ -72,11 +77,13 @@ def test_auto_refundable_order(client):
     resp = client.post("/api/auth", json={"email_addr": email_addr})
     assert resp.status_code == 200
     data = resp.json()
-    assert data['email_addr'] == email_addr
-    assert data['is_auth'] == True
-    assert data['role'] == 'customer'
-    assert data['customer_context'] is not None
-    order = data['customer_context']['latest_orders'][0]
+    auth_resp = data[0]
+    customer_context = data[1]
+    assert auth_resp['email_addr'] == email_addr
+    assert auth_resp['is_auth'] == True
+    assert auth_resp['role'] == 'customer'
+    assert customer_context is not None
+    order = customer_context['latest_orders'][0]
     assert order['status'] == 'delivered'
     # This is an auto approve return/ refund order
     assert datetime.now(tz= _zoneinfo) - datetime.fromisoformat(order['delivery_date']) < timedelta(days= threshold_days_auto_approve)
@@ -88,11 +95,13 @@ def test_auto_refundable_order_test(client):
     resp = client.post("/api/auth", json={"email_addr": email_addr})
     assert resp.status_code == 200
     data = resp.json()
-    assert data['email_addr'] == email_addr
-    assert data['is_auth'] == True
-    assert data['role'] == 'customer'
-    assert data['customer_context'] is not None
-    order = data['customer_context']['latest_orders'][1]
+    auth_resp = data[0]
+    customer_context = data[1]
+    assert auth_resp['email_addr'] == email_addr
+    assert auth_resp['is_auth'] == True
+    assert auth_resp['role'] == 'customer'
+    assert customer_context is not None
+    order = customer_context['latest_orders'][1]
     assert order['status'] == 'delivered'
     # This is an auto approve return/ refund order
     assert datetime.now(tz= _zoneinfo) - datetime.fromisoformat(order['delivery_date']) < timedelta(days= threshold_days_auto_approve)
@@ -105,11 +114,13 @@ def test_human_refundable_order_amount(client):
     resp = client.post("/api/auth", json={"email_addr": email_addr})
     assert resp.status_code == 200
     data = resp.json()
-    assert data['email_addr'] == email_addr
-    assert data['is_auth'] == True
-    assert data['role'] == 'customer'
-    assert data['customer_context'] is not None
-    order = data['customer_context']['latest_orders'][0]
+    auth_resp = data[0]
+    customer_context = data[1]
+    assert auth_resp['email_addr'] == email_addr
+    assert auth_resp['is_auth'] == True
+    assert auth_resp['role'] == 'customer'
+    assert customer_context is not None
+    order = customer_context['latest_orders'][0]
     assert order['status'] == 'delivered'
     # This is an auto approve return/ refund order
     assert datetime.now(tz= _zoneinfo) - datetime.fromisoformat(order['delivery_date']) < timedelta(days= threshold_days_auto_approve)
@@ -121,11 +132,13 @@ def test_human_refundable_order_due_to_item(client):
     resp = client.post("/api/auth", json={"email_addr": email_addr})
     assert resp.status_code == 200
     data = resp.json()
-    assert data['email_addr'] == email_addr
-    assert data['is_auth'] == True
-    assert data['role'] == 'customer'
-    assert data['customer_context'] is not None
-    order = data['customer_context']['latest_orders'][0]
+    auth_resp = data[0]
+    customer_context = data[1]
+    assert auth_resp['email_addr'] == email_addr
+    assert auth_resp['is_auth'] == True
+    assert auth_resp['role'] == 'customer'
+    assert customer_context is not None
+    order = customer_context['latest_orders'][0]
     item = order['items'][0]
     assert order['status'] == 'delivered'
     # This is an auto approve return/ refund order
@@ -137,11 +150,13 @@ def test_order_delivered_date_borderline(client):
     resp = client.post("/api/auth", json={"email_addr": email_addr})
     assert resp.status_code == 200
     data = resp.json()
-    assert data['email_addr'] == email_addr
-    assert data['is_auth'] == True
-    assert data['role'] == 'customer'
-    assert data['customer_context'] is not None
-    order = data['customer_context']['latest_orders'][0]
+    auth_resp = data[0]
+    customer_context = data[1]
+    assert auth_resp['email_addr'] == email_addr
+    assert auth_resp['is_auth'] == True
+    assert auth_resp['role'] == 'customer'
+    assert customer_context is not None
+    order = customer_context['latest_orders'][0]
     assert order['status'] == 'delivered'
     assert order['delivery_date'] is not None
     # This is an auto approve return/ refund order
@@ -153,11 +168,13 @@ def test_non_refundable_order_exceeding_return_window(client):
     resp = client.post("/api/auth", json={"email_addr": email_addr})
     assert resp.status_code == 200
     data = resp.json()
-    assert data['email_addr'] == email_addr
-    assert data['is_auth'] == True
-    assert data['role'] == 'customer'
-    assert data['customer_context'] is not None
-    order = data['customer_context']['latest_orders'][0]
+    auth_resp = data[0]
+    customer_context = data[1]
+    assert auth_resp['email_addr'] == email_addr
+    assert auth_resp['is_auth'] == True
+    assert auth_resp['role'] == 'customer'
+    assert customer_context is not None
+    order = customer_context['latest_orders'][0]
     assert order['status'] == 'delivered'
     # This is an auto approve return/ refund order
     assert datetime.now(tz= _zoneinfo) - datetime.fromisoformat(order['delivery_date']) > timedelta(days= threshold_days_auto_approve)
@@ -168,11 +185,13 @@ def test_transit_order(client):
     resp = client.post("/api/auth", json={"email_addr": email_addr})
     assert resp.status_code == 200
     data = resp.json()
-    assert data['email_addr'] == email_addr
-    assert data['is_auth'] == True
-    assert data['role'] == 'customer'
-    assert data['customer_context'] is not None
-    order = data['customer_context']['latest_orders'][0]
+    auth_resp = data[0]
+    customer_context = data[1]
+    assert auth_resp['email_addr'] == email_addr
+    assert auth_resp['is_auth'] == True
+    assert auth_resp['role'] == 'customer'
+    assert customer_context is not None
+    order = customer_context['latest_orders'][0]
     assert order['status'] == 'transit'
     assert datetime.fromisoformat(order['ship_date']) < datetime.now(tz= _zoneinfo) 
     assert datetime.fromisoformat(order['estimated_delivery_date']) > datetime.now(tz = _zoneinfo)
@@ -183,11 +202,13 @@ def test_pending_order(client):
     resp = client.post("/api/auth", json={"email_addr": email_addr})
     assert resp.status_code == 200
     data = resp.json()
-    assert data['email_addr'] == email_addr
-    assert data['is_auth'] == True
-    assert data['role'] == 'customer'
-    assert data['customer_context'] is not None
-    order = data['customer_context']['latest_orders'][0]
+    auth_resp = data[0]
+    customer_context = data[1]
+    assert auth_resp['email_addr'] == email_addr
+    assert auth_resp['is_auth'] == True
+    assert auth_resp['role'] == 'customer'
+    assert customer_context is not None
+    order = customer_context['latest_orders'][0]
     assert order['status'] == 'pending'
     assert order['order_date'] # a required field
     assert order['notes'] # with backorder info
@@ -202,14 +223,17 @@ def test_order_missing_required(client):
     # missing order date
     assert resp.status_code == 200
     data = resp.json()
-    assert data['is_auth'] == False
+    auth_resp = data[0]
+    assert auth_resp['is_auth'] == False
 
 def test_app_state_role_customer_end_to_end(client): 
     email_addr = "anderson.cooper@cnn.com"
     resp = client.post("/api/auth", json={"email_addr": email_addr})
     data = resp.json()
-    assert data['role'] == 'customer'
-    customer_context = CustomerContext.model_validate(data['customer_context'])
+    auth_resp = data[0]
+    customer_context = data[1]
+    assert auth_resp['role'] == 'customer'
+    customer_context = CustomerContext.model_validate(customer_context)
     assert customer_context is not None
 
     # Ensure RoleCheck is functioning correctly and we start general inquiry with a customer role
@@ -238,7 +262,8 @@ def test_app_state_role_csr_end_to_end(client):
     email_addr = "threecuptea@gmail.com"
     resp = client.post("/api/auth", json={"email_addr": email_addr})
     data = resp.json()
-    assert data['role'] == 'csr'
+    auth_resp = data[0]
+    assert auth_resp['role'] == 'csr'
 
     # Ensure RoleCheck is functioning correctly and we can start approval tasks with a csr role
     resp = client.post("/api/approval/start", json={"task": "Write a welcome email"})

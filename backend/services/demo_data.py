@@ -3,12 +3,12 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from models.customer_support_model import OrderRefundStatus
 import os
-
+from dotenv import load_dotenv
 # I need to start thinking about some way to dynamically adjust dates to match the status
 
 _zoneinfo = ZoneInfo("America/New_York")
-
-threshold_days_auto_approve = int(os.getenv("DAYS_THRESHOLD_AUTO"))
+load_dotenv(override=True)
+threshold_days_auto_approve = int(os.getenv("DAYS_THRESHOLD_AUTO", 35))
 
 
 customer_order_status_map = {

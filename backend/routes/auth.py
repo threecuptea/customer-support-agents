@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 import logging
 import os
 from models.auth_model import AuthRequest, AuthResponse
+from models.customer_support_model import CustomerContext
 from collections.abc import AsyncGenerator
 from services.auth_service import validate_populate_context
 from services.demo_data import adjust_days_demo_data_testable
@@ -28,10 +29,10 @@ async def auth_lifespan(router: APIRouter) -> AsyncGenerator[None, None]:
 router = APIRouter(prefix="/api/auth", tags=['auth'], lifespan= auth_lifespan)
 
 
-@router.post("", response_model=AuthResponse)
-async def auth(auth_request: AuthRequest, request: Request) -> AuthResponse:
+@router.post("")
+async def auth(auth_request: AuthRequest, request: Request) -> tuple[AuthResponse, CustomerContext | None]:
     auth_request.email_addr = auth_request.email_addr.strip()
     logger.info(f"Authenticate/ authorize {auth_request.email_addr}")
-    response = await validate_populate_context(auth_request.email_addr)
+    response, customer_context = await validate_populate_context(auth_request.email_addr)
     request.session["role"] = response.role
-    return response
+    return response, customer_context

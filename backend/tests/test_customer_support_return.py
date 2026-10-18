@@ -1,7 +1,6 @@
 import asyncio
 
 from fastapi.testclient import TestClient
-from fastapi import Request
 from langchain_core.messages import AIMessage, ChatMessage, HumanMessage
 
 import pytest
@@ -69,7 +68,7 @@ def test_get_recommended_action(reason_option, expected_action):
 def test_api_invoke_exchange_return_recommendation(client, reason_option, in_response, in_escalation_message, special_exchange_handling):
     email_addr = "anderson.cooper@cnn.com"
     resp = client.post("/api/auth", json={"email_addr": email_addr})
-    context = CustomerContext(**resp.json()["customer_context"])
+    context = CustomerContext(**resp.json()[1])
     target_order_id = context.latest_orders[0].order_id
     result_init = client.post(
         "/api/support/order/init",
@@ -119,7 +118,7 @@ def test_api_invoke_exchange_return_recommendation(client, reason_option, in_res
 )    
 def test_api_invoke_return_refund_init_workflow(client, email_addr, expected_order_refund_status, in_response):
     resp = client.post("/api/auth", json={"email_addr": email_addr})
-    context = CustomerContext(**resp.json()["customer_context"])
+    context = CustomerContext(**resp.json()[1])
     target_order_id = context.latest_orders[0].order_id
     result_init = client.post(
         "/api/support/order/init",
@@ -171,7 +170,7 @@ def test_api_invoke_return_refund_init_workflow(client, email_addr, expected_ord
 def test_api_invoke_return_refund_init_workflow_error(client):
     email_addr = "jake.tapper@cnn.com"
     resp = client.post("/api/auth", json={"email_addr": email_addr})
-    context = CustomerContext(**resp.json()["customer_context"])
+    context = CustomerContext(**resp.json()[1])
     target_order_id = context.latest_orders[0].order_id
     result_init = client.post(
         "/api/support/order/init",
@@ -251,7 +250,7 @@ def test_routes_return():
 def test_api_invoke_return_refund_process_workflow_(client, email_addr, expected_order_refund_status, in_response, request_status,
                                                decided_by, decision_reason, requires_manual_approval, requires_manual_approval_reason):
     resp = client.post("/api/auth", json={"email_addr": email_addr})
-    context = CustomerContext(**resp.json()["customer_context"])
+    context = CustomerContext(**resp.json()[1])
     target_order_id = context.latest_orders[0].order_id
     result_init = client.post(
         "/api/support/order/init",
@@ -332,7 +331,7 @@ def test_api_invoke_return_refund_process_workflow_(client, email_addr, expected
 def test_api_invoke_return_refund_process_workflow_human_override(client, email_addr, expected_order_refund_status, in_response, request_status,
                                                               requires_manual_approval_reason, notes_to_human_reviwer):
     resp = client.post("/api/auth", json={"email_addr": email_addr})
-    context = CustomerContext(**resp.json()["customer_context"])
+    context = CustomerContext(**resp.json()[1])
     target_order_id = context.latest_orders[0].order_id
     result_init = client.post(
         "/api/support/order/init",
@@ -376,7 +375,7 @@ def test_api_invoke_return_refund_process_workflow_human_override(client, email_
 def test_api_invoke_return_refund_process_or_chat_workflow_error(client):
     email_addr = "jake.tapper@cnn.com"
     resp = client.post("/api/auth", json={"email_addr": email_addr})
-    context = CustomerContext(**resp.json()["customer_context"])
+    context = CustomerContext(**resp.json()[1])
     target_order_id = context.latest_orders[0].order_id
     result_init = client.post(
         "/api/support/order/init",
@@ -409,7 +408,7 @@ def test_api_invoke_return_refund_process_or_chat_workflow_error(client):
 def test_api_invoke_return_refund_chat_workflow(client):
     email_addr = "sonya_ling1947@yahoo.com"
     resp = client.post("/api/auth", json={"email_addr": email_addr})
-    context = CustomerContext(**resp.json()["customer_context"])
+    context = CustomerContext(**resp.json()[1])
     target_order_id = context.latest_orders[1].order_id
     result_init = client.post(
         "/api/support/order/init",

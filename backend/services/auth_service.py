@@ -19,18 +19,18 @@ __csr_whitelist = os.getenv("CSR_WHITELIST")
 __csr_domains = os.getenv("CSR_DOMAINS")
 
 
-async def validate_populate_context(email_addr: str) -> AuthResponse:
+async def validate_populate_context(email_addr: str) -> tuple[AuthResponse, CustomerContext | None]:
     demo_mode = os.getenv("DEMO_MODE", "false").lower() == "true" # we are using demo mode in dev environment
     # if CSR_WHITELIST exists, use its content because they are more restricted; otherwise use domain
     # In the production, we should use domain
     if __csr_whitelist:
         csr_members = re.split(r',\s*', __csr_whitelist)
         if email_addr in csr_members:
-            return AuthResponse(email_addr = email_addr, is_auth = True, role = "csr")
+            return AuthResponse(email_addr = email_addr, is_auth = True, role = "csr"), None
     if __csr_domains:
         csr_member_domains = re.split(r',\s*', __csr_domains)
         if any(email_addr.endswith(f'@{domain}') for domain in csr_member_domains):
-            return AuthResponse(email_addr = email_addr, is_auth = True, role = "csr")
+            return AuthResponse(email_addr = email_addr, is_auth = True, role = "csr"), None
     if not __csr_whitelist and not __csr_domains:
         raise HTTPException(status_code=500, detail="Missing CSR (Customer Support Representatives) configuration")
     if demo_mode:
@@ -41,7 +41,7 @@ async def validate_populate_context(email_addr: str) -> AuthResponse:
     else:
         raise HTTPException(status_code=500, detail="Non-demo mode is not yet implemented.  Please use demo mode for now.")
     
-def load_from_demo_data(email_addr: str) -> AuthResponse:
+def load_from_demo_data(email_addr: str) -> tuple[AuthResponse, CustomerContext | None]:
     d = demo_customers.get(email_addr)
     if d:
         try: 
@@ -49,12 +49,11 @@ def load_from_demo_data(email_addr: str) -> AuthResponse:
             
             # or model_validate or model_validate_json. The model_validate method takes a dictionary as input, 
             # while model_validate_json takes a JSON string as input.
-            return AuthResponse(email_addr = email_addr, is_auth = True, role = "customer", 
-                customer_context = customer_context)
+            return AuthResponse(email_addr = email_addr, is_auth = True, role = "customer"), customer_context
         except ValidationError as ve:
             logger.error(ve) # Human-readable error 
             logger.error(ve.errors) # The debugging details 
-            return AuthResponse(email_addr = email_addr, is_auth = False, role = "customer")
+            return AuthResponse(email_addr = email_addr, is_auth = False, role = "customer"), None
     else:
-        return AuthResponse(email_addr = email_addr, is_auth = False, role = "customer")    
+        return AuthResponse(email_addr = email_addr, is_auth = False, role = "customer"), None    
     

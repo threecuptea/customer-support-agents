@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/approval", tags=["approval"])
 
-
 restrict_to_csr = RoleChecker("csr")
 
 

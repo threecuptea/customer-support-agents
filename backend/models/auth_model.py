@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 from typing import Annotated, Literal
-from models.customer_support_model import CustomerContext
 
 
 ALLOWED_ROLES = Literal["csr", "customer"]
@@ -23,4 +22,3 @@ class AuthResponse(BaseModel):
     email_addr: str
     is_auth: bool = False
     role: ALLOWED_ROLES
-    customer_context: CustomerContext | None = None # CustomerContext exists if the role is customer
