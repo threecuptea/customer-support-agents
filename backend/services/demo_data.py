@@ -1,7 +1,7 @@
 from __future__ import annotations
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from models.model import OrderRefundStatus
+from models.customer_support_model import OrderRefundStatus
 import os
 
 # I need to start thinking about some way to dynamically adjust dates to match the status

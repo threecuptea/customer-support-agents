@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 import pytest
-from models.model import CustomerContext
+from models.customer_support_model import CustomerContext
 from main import app
 import services.auth_service as auth_service
 from datetime import datetime, timedelta

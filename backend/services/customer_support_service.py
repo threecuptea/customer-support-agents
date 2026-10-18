@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import Request, HTTPException
 import os
 from langchain_core.messages import HumanMessage, SystemMessage
-from models.model import ExchangeOrReturnOutput, GeneralSupportRequest, OrderInitRequest, OrderInitResponse, \
+from models.customer_support_model import ExchangeOrReturnOutput, GeneralSupportRequest, OrderInitRequest, OrderInitResponse, \
     GenericChatInput, SummarizeOnExit, OrderToReturn, Order, ExchangeOrReturnInput, GenericResponse, InitialReturnRefundResponse, RefundRequest, \
     ReturnRefundProcessRequest, ReturnRefundProcessResponse, ReturnRefundChatResponse
 from memory import load_user_memory

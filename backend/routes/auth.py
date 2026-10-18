@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 import logging
 import os
-from models.model import AuthRequest, AuthResponse
+from models.auth_model import AuthRequest, AuthResponse
 from collections.abc import AsyncGenerator
 from services.auth_service import validate_populate_context
 from services.demo_data import adjust_days_demo_data_testable

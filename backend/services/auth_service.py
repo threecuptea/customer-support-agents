@@ -1,14 +1,14 @@
 
 from __future__ import annotations
 
-from models.model import AuthResponse
+from models.auth_model import AuthResponse
 from dotenv import load_dotenv
 import logging
 import os
 import re
 from fastapi import HTTPException
 from services.demo_data import demo_customers
-from models.model import CustomerContext
+from models.customer_support_model import CustomerContext
 from pydantic import ValidationError
 
 load_dotenv(override=True)

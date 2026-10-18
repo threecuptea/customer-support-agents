@@ -1,5 +1,5 @@
 from fastapi import HTTPException, status
-from models.model import ALLOWED_ROLES
+from models.auth_model import ALLOWED_ROLES
 from fastapi import Request
 
 class RoleChecker:

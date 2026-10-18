@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from models.model import (
+from models.customer_support_model import (
     Order, OrderItem, OrderRefundStatus, RefundRequest, ReturnedOrder, ReturnedOrderItem,
     ReturnRefundInitialDecision,
 )

@@ -1,5 +1,5 @@
 from __future__ import annotations
-from models.model import CustomerSupportState, FAQMatchEvals, FAQMatchResult, Order, OrderStructuredOutput,\
+from models.customer_support_model import CustomerSupportState, FAQMatchEvals, FAQMatchResult, Order, OrderStructuredOutput,\
     ESCALATE_REASON, OrderRevisitEval, ExchangeReturnRefundAction, ExchangeReturnReason, ExchangeOrReturnInput, OrderToReturn, OrderRefundStatus, \
     ReturnRefundStructuredOutput
 

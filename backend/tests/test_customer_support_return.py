@@ -7,7 +7,7 @@ import pytest
 
 from main import app
 from services.demo_data import get_demo_customer
-from models.model import Order, CustomerContext, ExchangeOrReturnInput, ExchangeReturnReason, ExchangeReturnRefundAction, ESCALATE_REASON, \
+from models.customer_support_model import Order, CustomerContext, ExchangeOrReturnInput, ExchangeReturnReason, ExchangeReturnRefundAction, ESCALATE_REASON, \
     ReturnRefundInitialDecision, RefundRequest, OrderRefundStatus, OrderToReturn, ItemToReturn, ReturnRefundStructuredOutput
 from workflow.customer_support import SOURCE_RETURN_REFUND_CHAT, CustomerSupportAgent, ROLE_FUNCTION, ROLE_AGENT, SOURCE_EXCHANGE_RETURN_REASON, SOURCE_RETURN_REFUND_PROCESS, \
     PREFIX_NEED_EXPEDIT_REPLACEMENT, PREFIX_RCVD_DAMAGED_PRODUCT, PREFIX_RCVD_WRONG_ITEM, PREFIX_FOUND_BETTER_PRICE, ESCALATE_MESSAGE

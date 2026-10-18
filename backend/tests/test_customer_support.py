@@ -3,12 +3,11 @@ from unittest import result
 
 from fastapi.testclient import TestClient
 from services.demo_data import get_demo_customer
-from models.model import CustomerContext, Order
 
 import pytest
 
 from main import app
-from models.model import FAQMatchEvals, OrderRevisitEval, FAQMatchResult, OrderStructuredOutput, ESCALATE_REASON
+from models.customer_support_model import CustomerContext, Order, FAQMatchEvals, OrderRevisitEval, FAQMatchResult, OrderStructuredOutput, ESCALATE_REASON
 from workflow.customer_support import PREFIX_LOST_SHIPMENT, CustomerSupportAgent, ESCALATE_MESSAGE, FUNCTION_FAQ_FUZZY_MATCH, SOURCE_FAQ_FUZZY_MATCH, SOURCE_FAQ_LLM_MATCH, \
     SOURCE_FAQ_LLM_EVALS, ROLE_FUNCTION, ROLE_AGENT, FAQ_MATCH_THRESHOLD, SYSTEM_ERROR_MESSAGE, SOURCE_ORDER_RETRIEVAL, SOURCE_ORDER_INQUIRY, PREFIX_ANSWER_QUESTION
     

@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 import pytest
 
-from models.model import OrderToReturn, ItemToReturn, CustomerContext, OrderRefundStatus
+from models.customer_support_model import OrderToReturn, ItemToReturn, CustomerContext, OrderRefundStatus
 from workflow.customer_support_utils import check_if_order_to_return_in_valid_state, get_initial_return_refund_decision, \
     ORIGINAL_ORDER_FOR_RETURN_IS_NOT_DELIVERED, NOT_A_VALID_PRODUCT_ID, NOT_A_VALID_RETURN_QUANTITY
 import uuid

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request, Depends
 import os
-from models.model import ExchangeOrReturnOutput, GeneralSupportRequest, OrderInitRequest, OrderInitResponse, \
+from models.customer_support_model import ExchangeOrReturnOutput, GeneralSupportRequest, OrderInitRequest, OrderInitResponse, \
     GenericChatInput, SummarizeOnExit, OrderToReturn, ExchangeOrReturnInput, GenericResponse, InitialReturnRefundResponse, \
     ReturnRefundProcessRequest, ReturnRefundProcessResponse, ReturnRefundChatResponse
 import logging

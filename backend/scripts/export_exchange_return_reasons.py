@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from models.model import ExchangeReturnReason
+from models.customer_support_model import ExchangeReturnReason
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_PATH = BACKEND_DIR.parent / "frontend" / "lib" / "exchange-return-reasons.ts"
