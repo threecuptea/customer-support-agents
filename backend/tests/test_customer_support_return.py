@@ -1,16 +1,18 @@
 import asyncio
 
 from fastapi.testclient import TestClient
-from langchain_core.messages import ChatMessage
+from langchain_core.messages import AIMessage, ChatMessage, HumanMessage
 
 import pytest
 
 from main import app
+from services.demo_data import get_demo_customer
 from models.model import Order, CustomerContext, ExchangeOrReturnInput, ExchangeReturnReason, ExchangeReturnRefundAction, ESCALATE_REASON, \
-    ReturnRefundInitialDecision, RefundRequest, OrderRefundStatus, OrderToReturn, ItemToReturn
-from workflow.customer_support import CustomerSupportAgent, ROLE_FUNCTION, ROLE_AGENT, SOURCE_EXCHANGE_RETURN_REASON, SOURCE_RETURN_REFUND_PROCESS, \
+    ReturnRefundInitialDecision, RefundRequest, OrderRefundStatus, OrderToReturn, ItemToReturn, ReturnRefundStructuredOutput
+from workflow.customer_support import SOURCE_RETURN_REFUND_CHAT, CustomerSupportAgent, ROLE_FUNCTION, ROLE_AGENT, SOURCE_EXCHANGE_RETURN_REASON, SOURCE_RETURN_REFUND_PROCESS, \
     PREFIX_NEED_EXPEDIT_REPLACEMENT, PREFIX_RCVD_DAMAGED_PRODUCT, PREFIX_RCVD_WRONG_ITEM, PREFIX_FOUND_BETTER_PRICE, ESCALATE_MESSAGE
 from workflow.return_refund_utils import refund_requests_processing_dict
+from workflow.customer_support_utils import get_initial_return_refund_decision
 import uuid
 
 shared_thread_id = str(uuid.uuid4())
@@ -63,12 +65,9 @@ def test_get_recommended_action(reason_option, expected_action):
             (ExchangeReturnReason.NOT_MATCH_DESCRIPTION_OR_PHOTO, "We recommend 'Return' based upon the reason you provided.", None, False),
         ]
 )    
-def test_invoke_exchange_return_recommendation(client, reason_option, in_response, in_escalation_message, special_exchange_handling):
+def test_api_invoke_exchange_return_recommendation(client, reason_option, in_response, in_escalation_message, special_exchange_handling):
     email_addr = "anderson.cooper@cnn.com"
-    resp = client.post("/api/auth", json={"email_addr": email_addr})
-    assert resp.status_code == 200
-    data = resp.json()
-    context: CustomerContext = CustomerContext(**data['customer_context'])
+    context = CustomerContext(**get_demo_customer(email_addr))
     target_order_id = context.latest_orders[0].order_id
     result_init = client.post(
         "/api/support/order/init",
@@ -116,11 +115,8 @@ def test_invoke_exchange_return_recommendation(client, reason_option, in_respons
         "I am sorry that I have to reject your return refund request because you are trying to return a non-refundable item."),
     ]
 )    
-def test_invoke_return_refund_init_workflow(client, email_addr, expected_order_refund_status, in_response):
-    resp = client.post("/api/auth", json={"email_addr": email_addr})
-    assert resp.status_code == 200
-    data = resp.json()
-    context: CustomerContext = CustomerContext(**data['customer_context'])
+def test_api_invoke_return_refund_init_workflow(client, email_addr, expected_order_refund_status, in_response):
+    context = CustomerContext(**get_demo_customer(email_addr))
     target_order_id = context.latest_orders[0].order_id
     result_init = client.post(
         "/api/support/order/init",
@@ -169,12 +165,9 @@ def test_invoke_return_refund_init_workflow(client, email_addr, expected_order_r
     assert chat_message.content == expected_order_refund_status.value
 
     
-def test_invoke_return_refund_init_workflow_error(client):
+def test_api_invoke_return_refund_init_workflow_error(client):
     email_addr = "jake.tapper@cnn.com"
-    resp = client.post("/api/auth", json={"email_addr": email_addr})
-    assert resp.status_code == 200
-    data = resp.json()
-    context: CustomerContext = CustomerContext(**data['customer_context'])
+    context = CustomerContext(**get_demo_customer(email_addr))
     target_order_id = context.latest_orders[0].order_id
     result_init = client.post(
         "/api/support/order/init",
@@ -251,12 +244,9 @@ def test_routes_return():
         ),
     ]
 )
-def test_invoke_return_refund_process_workflow_(client, email_addr, expected_order_refund_status, in_response, request_status, 
+def test_api_invoke_return_refund_process_workflow_(client, email_addr, expected_order_refund_status, in_response, request_status,
                                                decided_by, decision_reason, requires_manual_approval, requires_manual_approval_reason):
-    resp = client.post("/api/auth", json={"email_addr": email_addr})
-    assert resp.status_code == 200
-    data = resp.json()
-    context: CustomerContext = CustomerContext(**data['customer_context'])
+    context = CustomerContext(**get_demo_customer(email_addr))
     target_order_id = context.latest_orders[0].order_id
     result_init = client.post(
         "/api/support/order/init",
@@ -334,12 +324,9 @@ def test_invoke_return_refund_process_workflow_(client, email_addr, expected_ord
         ),
     ]
 )
-def test_invoke_return_refund_process_workflow_human_override(client, email_addr, expected_order_refund_status, in_response, request_status, 
+def test_api_invoke_return_refund_process_workflow_human_override(client, email_addr, expected_order_refund_status, in_response, request_status,
                                                               requires_manual_approval_reason, notes_to_human_reviwer):
-    resp = client.post("/api/auth", json={"email_addr": email_addr})
-    assert resp.status_code == 200
-    data = resp.json()
-    context: CustomerContext = CustomerContext(**data['customer_context'])
+    context = CustomerContext(**get_demo_customer(email_addr))
     target_order_id = context.latest_orders[0].order_id
     result_init = client.post(
         "/api/support/order/init",
@@ -380,12 +367,9 @@ def test_invoke_return_refund_process_workflow_human_override(client, email_addr
     assert refund_request_to_process.notes_for_human_review_override == notes_to_human_reviwer
 
 
-def test_invoke_return_refund_process_or_chat_workflow_error(client):
+def test_api_invoke_return_refund_process_or_chat_workflow_error(client):
     email_addr = "jake.tapper@cnn.com"
-    resp = client.post("/api/auth", json={"email_addr": email_addr})
-    assert resp.status_code == 200
-    data = resp.json()
-    context: CustomerContext = CustomerContext(**data['customer_context'])
+    context = CustomerContext(**get_demo_customer(email_addr))
     target_order_id = context.latest_orders[0].order_id
     result_init = client.post(
         "/api/support/order/init",
@@ -415,12 +399,9 @@ def test_invoke_return_refund_process_or_chat_workflow_error(client):
     assert resp.status_code == 400
 
 
-def test_invoke_return_refund_chat_workflow(client):
+def test_api_invoke_return_refund_chat_workflow(client):
     email_addr = "sonya_ling1947@yahoo.com"
-    resp = client.post("/api/auth", json={"email_addr": email_addr})
-    assert resp.status_code == 200
-    data = resp.json()
-    context: CustomerContext = CustomerContext(**data['customer_context'])
+    context = CustomerContext(**get_demo_customer(email_addr))
     target_order_id = context.latest_orders[1].order_id
     result_init = client.post(
         "/api/support/order/init",
@@ -457,4 +438,46 @@ def test_invoke_return_refund_chat_workflow(client):
     assert resp.status_code == 200
     data = resp.json()
     assert data["request_human_review_return_refund"]
+
+"""
+class ReturnRefundStructuredOutput(BaseModel):
+    response: str
+    request_human_review_return_refund: bool = False
+
+"""
+def test_request_human_review_for_return_refund_chat_with_fake_llm():
+    question = "Yes, please initialize a human review for my return refund request"
+    response = "Please input why you think that the request should be approved in the 'notes to reviewer' input field, then press 'Process the request'"
+    output = ReturnRefundStructuredOutput(
+        response=response,
+        request_human_review_return_refund=True,
+    )
+    class _FakeReturnRefundChatLLM:
+        async def ainvoke(self, messages):
+            return output
+        
+    email_addr = "wolf.blitzer@cnn.com"
+    context = CustomerContext(**get_demo_customer(email_addr))
+    target_order = context.latest_orders[0]
+    items = [ItemToReturn(product_id=item.product_id, qty=item.number_units) for item in target_order.items]
+    order_to_return = OrderToReturn(thread_id=shared_thread_id, items=items)
+    refund_request, initial_decision = get_initial_return_refund_decision(order_to_return, target_order)
+
+    state = {
+        "messages": [HumanMessage(content=question)],
+        "order_number_provided": target_order.order_id,
+        "target_order": target_order,
+        "refund_request_to_process": refund_request,
+        "initial_return_refund_decision": initial_decision,
+    }
+    agent = CustomerSupportAgent(checkpointer=None, store=None)
+    agent.return_refund_llm = _FakeReturnRefundChatLLM()
+    result = asyncio.run(agent.return_refund_chat_node(state))
+    assert result["response"] == response
+    assert ESCALATE_MESSAGE not in result["response"]
+    assert isinstance(result["messages"][0], AIMessage)
+    message: AIMessage = result["messages"][0]
+    assert message.additional_kwargs["source"] == SOURCE_RETURN_REFUND_CHAT
+    assert message.content == response
+    assert result["request_human_review_return_refund"]
     

@@ -1,15 +1,18 @@
 import asyncio
+from unittest import result
 
 from fastapi.testclient import TestClient
-from langchain_core.messages import ChatMessage
+from services.demo_data import get_demo_customer
+from models.model import CustomerContext, Order
 
 import pytest
 
 from main import app
-from models.model import FAQMatchEvals, Order, CustomerContext, OrderRevisitEval
-from workflow.customer_support import CustomerSupportAgent, ESCALATE_MESSAGE, FUNCTION_FAQ_FUZZY_MATCH, SOURCE_FAQ_FUZZY_MATCH, SOURCE_FAQ_LLM_MATCH, \
+from models.model import FAQMatchEvals, OrderRevisitEval, FAQMatchResult, OrderStructuredOutput, ESCALATE_REASON
+from workflow.customer_support import PREFIX_LOST_SHIPMENT, CustomerSupportAgent, ESCALATE_MESSAGE, FUNCTION_FAQ_FUZZY_MATCH, SOURCE_FAQ_FUZZY_MATCH, SOURCE_FAQ_LLM_MATCH, \
     SOURCE_FAQ_LLM_EVALS, ROLE_FUNCTION, ROLE_AGENT, FAQ_MATCH_THRESHOLD, SYSTEM_ERROR_MESSAGE, SOURCE_ORDER_RETRIEVAL, SOURCE_ORDER_INQUIRY, PREFIX_ANSWER_QUESTION
-from langchain_core.messages import HumanMessage
+    
+from langchain_core.messages import HumanMessage, ChatMessage, AIMessage
 import uuid
 
 shared_thread_id = str(uuid.uuid4())
@@ -24,7 +27,17 @@ def client():
         yield test_client
 
 
-CUSTOMER_CONTEXT = {
+@pytest.fixture()
+def customer_context():
+    """
+    I have to remove `/api/auth` call because that will override the role set in the test client. 
+    All API tests are not effective for testing the role setting and access control.
+    Therefore, I directly instantiate the CustomerContext with the demo customer data in the fixture.
+    I also add tests to auth to test the role setting/ access control and API end to end.
+    """
+    return CustomerContext(**get_demo_customer("anderson.cooper@cnn.com"))
+
+PSEUDO_CUSTOMER_CONTEXT = {
     "customer_id": 1,
     "title": "Mr.",
     "first_name": "John",
@@ -32,6 +45,8 @@ CUSTOMER_CONTEXT = {
     "email": "john@example.com",
     "latest_orders": [],
 }
+
+
 
 # --- Regression test for the CSA-8 bug: `general_faq_fuzz_match_node` used to
 # instantiate `BaseMessage` directly, which raises a pydantic ValidationError
@@ -104,10 +119,12 @@ def test_general_faq_llm_evals_node_directly_escalates():
 # --- End-to-end coverage for POST /api/support/general (also a regression test:
 # the route used to call `GeneralSupportResponse(...)` with positional args, which
 # pydantic BaseModel rejects). K. K, so the flow always escalates. ---
-def test_general_support_endpoint_escalates_under_mock_llm(client):
+def test_api_general_support_endpoint_escalates_under_mock_llm(client):
+    # PSEUDO_CUSTOMER_CONTEXT is simple dict without datetime fields can be serialized directly to JSON
     resp = client.post(
+
         "/api/support/general",
-        json={"customer_context": CUSTOMER_CONTEXT, "general_inquiry": "What is your return policy?"},
+        json={"customer_context": PSEUDO_CUSTOMER_CONTEXT, "general_inquiry": "What is your return policy?"},
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -122,10 +139,10 @@ def test_general_support_endpoint_escalates_under_mock_llm(client):
 # `RemoveMessage`, and it persists a running `summary` each time it fires. Under the
 # mock LLM, `general_faq_eval_node` always escalates, which trips `_should_summarize`
 # after every single round. ---
-def test_general_support_thread_accumulates_and_summarizes(client):
+def test_api_general_support_thread_accumulates_and_summarizes(client):
     r1 = client.post(
         "/api/support/general",
-        json={"customer_context": CUSTOMER_CONTEXT, "general_inquiry": "What is your return policy?"},
+        json={"customer_context": PSEUDO_CUSTOMER_CONTEXT, "general_inquiry": "What is your return policy?"},
     )
     assert r1.status_code == 200
     thread_id = r1.json()["thread_id"]
@@ -146,7 +163,7 @@ def test_general_support_thread_accumulates_and_summarizes(client):
         "/api/support/general",
         json={
             "thread_id": thread_id,
-            "customer_context": CUSTOMER_CONTEXT,
+            "customer_context": PSEUDO_CUSTOMER_CONTEXT,
             "general_inquiry": "How long does delivery take?",
         },
     )
@@ -175,17 +192,11 @@ def _run_order_init_fresh_inquiry(agent: CustomerSupportAgent, state: dict) -> d
     render_result = asyncio.run(agent.order_init_static_response_node(state))
     return {**retrieve_result, **render_result}
 
-def test_order_init_succeed(client):
-    email_addr = "anderson.cooper@cnn.com"
-    resp = client.post("/api/auth", json={"email_addr": email_addr})
-    assert resp.status_code == 200
-    data = resp.json()
-    context: CustomerContext = CustomerContext(**data['customer_context'])
-    target_order_id = context.latest_orders[0].order_id
-    assert context.email == email_addr
+def test_order_init_succeed(customer_context):
+    target_order_id = customer_context.latest_orders[0].order_id
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     state = {
-        "customer_context": context,
+        "customer_context": customer_context,
         "order_number_provided": target_order_id
     }
     result = _run_order_init_fresh_inquiry(agent, state)
@@ -201,7 +212,7 @@ def test_order_init_succeed(client):
     assert phrase in result["response"]
     assert phrase in result["messages"][0].content
 
-    update_order = context.latest_orders[0]
+    update_order = customer_context.latest_orders[0]
     update_order.status = 'transit'
     result = _run_order_init_fresh_inquiry(agent, state)
     order: Order = result["target_order"]
@@ -210,7 +221,7 @@ def test_order_init_succeed(client):
     assert phrase in result["response"]
     assert phrase in result["messages"][0].content
 
-    update_order = context.latest_orders[0]
+    update_order = customer_context.latest_orders[0]
     update_order.status = 'pending'
     result = _run_order_init_fresh_inquiry(agent, state)
     order: Order = result["target_order"]
@@ -219,17 +230,12 @@ def test_order_init_succeed(client):
     assert phrase in result["response"]
     assert phrase in result["messages"][0].content
 
-def test_order_init_fail(client):
-    email_addr = "anderson.cooper@cnn.com"
-    resp = client.post("/api/auth", json={"email_addr": email_addr})
-    assert resp.status_code == 200
-    data = resp.json()
-    context: CustomerContext = CustomerContext(**data['customer_context'])
-    target_order_id = context.latest_orders[0].order_id
+def test_order_init_fail(customer_context):
+    target_order_id = customer_context.latest_orders[0].order_id
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     state = {
-        "customer_context": context,
-        "order_number_provided": target_order_id + 1
+        "customer_context": customer_context,
+        "order_number_provided": target_order_id + 1,
     }
     result = asyncio.run(agent.retrieve_target_order_node(state))
     assert len(result["messages"]) == 1
@@ -238,48 +244,39 @@ def test_order_init_fail(client):
     assert result["messages"][0].role == ROLE_AGENT
     assert result["messages"][0].additional_kwargs['source'] == SOURCE_ORDER_RETRIEVAL
 
-def test_detect_order_revisit_node_defaults_false_under_mock(client):
+def test_detect_order_revisit_node_defaults_false_under_mock(customer_context):
     # Mock LLM can't fake with_structured_output, so this call always returns None,
     # matching order_continue_chat_node's same documented limitation.
-    email_addr = "anderson.cooper@cnn.com"
-    resp = client.post("/api/auth", json={"email_addr": email_addr})
-    context: CustomerContext = CustomerContext(**resp.json()['customer_context'])
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     state = {
-        "target_order": context.latest_orders[0],
-        "order_number_provided": context.latest_orders[0].order_id,
+        "target_order": customer_context.latest_orders[0],
+        "order_number_provided": customer_context.latest_orders[0].order_id,
         "summary": "",
         "messages": [],
     }
     result = asyncio.run(agent.detect_order_revisit_node(state))
     assert result["order_is_revisit"] is False
 
-def test_detect_order_revisit_node_true_when_llm_confirms(client):
+def test_detect_order_revisit_node_true_when_llm_confirms(customer_context):
     class _FakeRevisitLLM:
         async def ainvoke(self, messages):
             return OrderRevisitEval(is_revisit=True)
 
-    email_addr = "anderson.cooper@cnn.com"
-    resp = client.post("/api/auth", json={"email_addr": email_addr})
-    context: CustomerContext = CustomerContext(**resp.json()['customer_context'])
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     agent.order_llm_for_revisit_eval = _FakeRevisitLLM()
     state = {
-        "target_order": context.latest_orders[0],
-        "order_number_provided": context.latest_orders[0].order_id,
+        "target_order": customer_context.latest_orders[0],
+        "order_number_provided": customer_context.latest_orders[0].order_id,
         "summary": "Customer previously reported this order's shipment as lost.",
         "messages": [],
     }
     result = asyncio.run(agent.detect_order_revisit_node(state))
     assert result["order_is_revisit"] is True
 
-def test_route_after_retrieve_target_order(client):
-    email_addr = "anderson.cooper@cnn.com"
-    resp = client.post("/api/auth", json={"email_addr": email_addr})
-    context: CustomerContext = CustomerContext(**resp.json()['customer_context'])
+def test_route_after_retrieve_target_order(customer_context):
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     assert agent.route_after_retrieve_target_order({"target_order": None}) == "summarize_node"
-    assert agent.route_after_retrieve_target_order({"target_order": context.latest_orders[0]}) == "detect_order_revisit_node"
+    assert agent.route_after_retrieve_target_order({"target_order": customer_context.latest_orders[0]}) == "detect_order_revisit_node"
 
 def test_route_after_detect_order_revisit():
     agent = CustomerSupportAgent(checkpointer=None, store=None)
@@ -288,7 +285,7 @@ def test_route_after_detect_order_revisit():
     assert agent.route_after_detect_order_revisit({}) == "order_init_static_response_node"
 
 
-def test_routes_up_to_order(client):
+def test_routes_up_to_order(customer_context):
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     state = {
        "support_category": "general/ others",
@@ -306,35 +303,23 @@ def test_routes_up_to_order(client):
     route = agent.route_branch(state)
     assert route == "order_init"
 
-    email_addr = "anderson.cooper@cnn.com"
-    resp = client.post("/api/auth", json={"email_addr": email_addr})
-    assert resp.status_code == 200
-    data = resp.json()
-    context: CustomerContext = CustomerContext(**data['customer_context'])
-
     state = {
         "support_category": "order_inquery",
         "order_number_provided": 123464,
-        "target_order": context.latest_orders[0],
+        "target_order": customer_context.latest_orders[0],
         }
     assert agent.route_branch(state) == "order_init_done"
     
 
-def test_invoke_order_init_workflow(client):
-    email_addr = "anderson.cooper@cnn.com"
-    resp = client.post("/api/auth", json={"email_addr": email_addr})
-    assert resp.status_code == 200
-    data = resp.json()
-    context: CustomerContext = CustomerContext(**data['customer_context'])
-    target_order_id = context.latest_orders[0].order_id
+def test_api_invoke_order_init_workflow(client, customer_context):
+    target_order_id = customer_context.latest_orders[0].order_id
     # I got into Object of type CustomerContext is not JSON serializable error. 
     # I must use Pydantic's built-in serialization methods rather than Python's standard json.dumps()
     # Native Pydantic dict conversion
     result_init = client.post(
         "/api/support/order/init",
-        json={"customer_context": context.model_dump(mode= "json"), "order_number_provided": target_order_id},
+        json={"customer_context": customer_context.model_dump(mode="json"), "order_number_provided": target_order_id},
     )
-    
     thread_id = result_init.json()["thread_id"]
     graph = client.app.state.support_graph
     config = {"configurable": {"thread_id": thread_id}}
@@ -351,19 +336,14 @@ def test_invoke_order_init_workflow(client):
     assert snapshot_init.values["target_order"]
     assert snapshot_init.values["summary"]
 
-def test_invoke_order_continue_workflow(client):
-    email_addr = "anderson.cooper@cnn.com"
-    resp = client.post("/api/auth", json={"email_addr": email_addr})
-    assert resp.status_code == 200
-    data = resp.json()
-    context: CustomerContext = CustomerContext(**data['customer_context'])
-    target_order_id = context.latest_orders[0].order_id
+def test_invoke_order_continue_workflow(client, customer_context):
+    target_order_id = customer_context.latest_orders[0].order_id
     # I got into Object of type CustomerContext is not JSON serializable error. 
     # I must use Pydantic's built-in serialization methods rather than Python's standard json.dumps()
     # Native Pydantic dict conversion
     resp = client.post(
         "/api/support/order/init",
-        json={"customer_context": context.model_dump(mode= "json"), "order_number_provided": target_order_id},
+        json={"customer_context": customer_context.model_dump(mode="json"), "order_number_provided": target_order_id},
     )
     
     thread_id = resp.json()["thread_id"]
@@ -384,21 +364,15 @@ def test_invoke_order_continue_workflow(client):
     assert chat_message.role == ROLE_AGENT
     assert chat_message.additional_kwargs["source"] ==SOURCE_ORDER_INQUIRY
     assert PREFIX_ANSWER_QUESTION in chat_message.content
-
-
-def test_invoke_order_continue_workflow_error(client):
-    email_addr = "anderson.cooper@cnn.com"
-    resp = client.post("/api/auth", json={"email_addr": email_addr})
-    assert resp.status_code == 200
-    data = resp.json()
-    context: CustomerContext = CustomerContext(**data['customer_context'])
-    target_order_id = context.latest_orders[0].order_id
+    
+def test_api_invoke_order_continue_workflow_error(client, customer_context):
+    target_order_id = customer_context.latest_orders[0].order_id
     # I got into Object of type CustomerContext is not JSON serializable error. 
     # I must use Pydantic's built-in serialization methods rather than Python's standard json.dumps()
     # Native Pydantic dict conversion
     resp = client.post(
         "/api/support/order/init",
-        json={"customer_context": context.model_dump(mode= "json"), "order_number_provided": target_order_id + 1},
+        json={"customer_context": customer_context.model_dump(mode="json"), "order_number_provided": target_order_id + 1},
     )
     
     thread_id = resp.json()["thread_id"]
@@ -409,11 +383,9 @@ def test_invoke_order_continue_workflow_error(client):
     assert resp.status_code == 400
 
 
-def test_order_init_resets_order_turns_and_prior_topic(client):
-    resp = client.post("/api/auth", json={"email_addr": "anderson.cooper@cnn.com"})
-    context: CustomerContext = CustomerContext(**resp.json()['customer_context'])
-    order_id = context.latest_orders[0].order_id
-    payload = {"customer_context": context.model_dump(mode="json"), "order_number_provided": order_id}
+def test_api_order_init_resets_order_turns_and_prior_topic(client, customer_context):
+    order_id = customer_context.latest_orders[0].order_id
+    payload = {"customer_context": customer_context.model_dump(mode="json"), "order_number_provided": order_id}
     thread_id = client.post("/api/support/order/init", json=payload).json()["thread_id"]
     client.post("/api/support/order/continue", json={"thread_id": thread_id, "user_conversation": "hello"})
     graph = client.app.state.support_graph
@@ -426,7 +398,7 @@ def test_order_init_resets_order_turns_and_prior_topic(client):
     assert values["order_turns"] == 0
     assert values["order_prior_topic"] is None
 
-def test_order_init_with_csr_role(client):
+def test_api_order_init_with_csr_role(client):
     client.app.state.role = "csr"
 
     resp = client.post("/api/support/general", json={})
@@ -451,5 +423,115 @@ def test_order_init_with_csr_role(client):
     assert resp.status_code == 403
     
 
+def test_faq_llm_match_with_fake_llm():
+    question = "what is the company's return policy?"
+    answer = "The company's return policy allows returns within 35 days."
+    class _FakeFaqMatchLLM:
+        async def ainvoke(self, messages):
+            return FAQMatchResult(question=question, answer=answer, confidence_score=100.0)
+    
+    agent = CustomerSupportAgent(checkpointer=None, store=None)
+    agent.general_llm_for_faq_match_result = _FakeFaqMatchLLM()
+    result = asyncio.run(agent.general_faq_llm_match_node({"general_inquiry": question}))
+    assert result["general_issue_resolved"] is True
+    assert result["response"] == answer
+    assert isinstance(result["messages"][-1], AIMessage)
+    message: AIMessage = result["messages"][-1]
+    assert message.content == answer
+    assert message.additional_kwargs["source"] == SOURCE_FAQ_LLM_MATCH
 
 
+def test_irrelevant_question_for_faq_llm_evals_with_fake_llm():
+    question = "What is the company's return policy?"
+    both_are_not_helpful = FAQMatchEvals(rapid_fuzz_partial_ratio_match_helpful= False, llm_semantic_match_helpful=False)
+    class _FakeFaqEvalsLLM:
+        async def ainvoke(self, messages):
+            return both_are_not_helpful
+    
+    agent = CustomerSupportAgent(checkpointer=None, store=None)
+    agent.general_llm_for_faq_match_evals = _FakeFaqEvalsLLM()
+    result = asyncio.run(agent.general_faq_eval_node({"general_inquiry": question}))
+    assert result["general_issue_resolved"] is True
+
+    assert ESCALATE_MESSAGE in result["response"]
+    assert result["messages"][0].role == ROLE_AGENT
+    assert result["messages"][0].additional_kwargs['source'] == SOURCE_FAQ_LLM_EVALS
+    assert result["faq_match_evals"] == both_are_not_helpful
+
+def test_faq_question_for_faq_llm_evals_with_fake_llm():
+    question = "What is your return policy?"
+    both_are_helpful = FAQMatchEvals(rapid_fuzz_partial_ratio_match_helpful= True, llm_semantic_match_helpful=True)
+    class _FakeFaqEvalsLLM:
+        async def ainvoke(self, messages):
+            return both_are_helpful
+    
+    agent = CustomerSupportAgent(checkpointer=None, store=None)
+    agent.general_llm_for_faq_match_evals = _FakeFaqEvalsLLM()
+    result = asyncio.run(agent.general_faq_eval_node({"general_inquiry": question}))
+    assert not result.get("general_issue_resolved", False)
+    assert result["faq_match_evals"] == both_are_helpful
+    assert not result.get("response") or ESCALATE_MESSAGE not in result["response"]
+
+def test_simple_question_for_order_continue_chat_with_fake_llm(customer_context):
+    question = "My order is transit.  How can I track it?"
+    response = "You can track your order using the tracking number provided in your order confirmation email."
+    output = OrderStructuredOutput(
+        response=response,
+        escalate=False,
+        escalation_reason=None,
+    )
+    class _FakeOrderChatLLM:
+        async def ainvoke(self, messages):
+            return output
+
+    state = {
+        "messages": [HumanMessage(content=question)],
+        "target_order": customer_context.latest_orders[0],
+        "order_number_provided": customer_context.latest_orders[0].order_id,
+    }
+    agent = CustomerSupportAgent(checkpointer=None, store=None)
+    agent.order_llm_for_inquiry_chat = _FakeOrderChatLLM()
+    result = asyncio.run(agent.order_continue_chat_node(state))
+    assert result["response"] == response
+    assert ESCALATE_MESSAGE not in result["response"]
+    assert isinstance(result["messages"][0], AIMessage)
+    message: AIMessage = result["messages"][0]
+    assert message.additional_kwargs["source"] == SOURCE_ORDER_INQUIRY
+    assert message.content == response
+    assert result["order_turns"] == 1
+
+def test_escalate_situation_for_order_continue_chat_with_fake_llm(customer_context):
+    question = "I need help for my lost shipment."
+    response = f"{PREFIX_LOST_SHIPMENT} {ESCALATE_MESSAGE}"
+    output = OrderStructuredOutput(
+        response=response,
+        escalate=True,
+        escalation_reason=ESCALATE_REASON.HELP_LOST_SHIPMENT,
+    )
+    class _FakeOrderChatLLM:
+        async def ainvoke(self, messages):
+            return output
+
+    state = {
+        "messages": [HumanMessage(content=question)],
+        "target_order": customer_context.latest_orders[0],
+        "order_number_provided": customer_context.latest_orders[0].order_id,
+        "order_turns": 1,
+        "order_is_revisit": True,
+        "order_prior_topic": "lost_shipment",
+    }
+    agent = CustomerSupportAgent(checkpointer=None, store=None)
+    agent.order_llm_for_inquiry_chat = _FakeOrderChatLLM()
+    result = asyncio.run(agent.order_continue_chat_node(state))
+    assert result["response"] == response
+    assert ESCALATE_MESSAGE in result["response"]
+    assert isinstance(result["messages"][0], ChatMessage)
+    message: ChatMessage = result["messages"][0]
+    assert message.role == "assistant"
+    assert message.additional_kwargs["source"] == SOURCE_ORDER_INQUIRY
+    assert message.content == response
+    assert result["order_turns"] == 2
+    assert ESCALATE_REASON.HELP_LOST_SHIPMENT in result["escalation_reason"]
+    assert result["order_issue_escalated"] is True
+
+    

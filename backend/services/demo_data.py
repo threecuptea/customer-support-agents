@@ -68,6 +68,9 @@ def _auto_adjust_days(order: dict):
         order["ship_date"] = order["estimated_delivery_date"] - timedelta(days= 5)
         order["order_date"] = order["ship_date"] - timedelta(days= 3)
 
+def get_demo_customer(email: str) -> dict:
+    adjust_days_demo_data_testable()
+    return demo_customers.get(email, {})
                
 demo_customers = {
     "anderson.cooper@cnn.com": {

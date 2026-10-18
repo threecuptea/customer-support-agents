@@ -154,6 +154,7 @@ class CustomerSupportAgent:
         against FAQs
         Here is the customer's question: {state["general_inquiry"]}.
         Here is FAQ context: {self.faq_context}.
+        Here is the full return policy {RETURN_POLICY}.
         Here is the summary of the previous conversation if any: {state.get("summary") if state.get("summary") else "None yet"}.
         There are two matching options:
         - Matches with fuzz.partial_ratio scorer of python Rapidfuzz library. The fuzz.partial_ratio process.extractOne finds 
@@ -162,8 +163,9 @@ class CustomerSupportAgent:
         two differ in length (e.g. extra words before/after).
         - LLM semantic matching
         The above options are NOT mutual exclusive.
-        Some context for your reference.  There is a full return policy document.  LLM semantic matching will be given that 
-        along with FAQs as the context.  However, I extract the majority of content of the return policy into FAQ's questions and answers that Rapidfuzz partial_ratio can count on too. 
+        Some context for your reference.  LLM semantic matching will be given the full return policy along with FAQs as the context.
+        Rapidfuzz partial_ratio will only use FAQ questions and answers as the context.
+        However, I do extract the majority of content of the return policy into FAQ's questions and answers.
         Set `rapid_fuzz_partial_ratio_match_helpful` if you think that the fuzz match option will be helpful.
         Set `llm_semantic_match_helpful` if you think the LLM semantic match will be help.
         state `reason` as needed.
@@ -605,7 +607,7 @@ class CustomerSupportAgent:
         recent_conversations = "\n".join(
             [f"- {message.content}" for message in state['messages'] if not isinstance(message, SystemMessage)]
         )
-        logger.info(f"return_refund_chat_node beginning state for order #{state['order_number_provided']}, assigned_refund_request_id={state['assigned_refund_request_id']}:\nmemory notes: {memory_notes}\nrecent conversations: {recent_conversations}\nsummary: {state.get('summary') if state.get('summary') else 'None yet'}")
+        logger.info(f"return_refund_chat_node beginning state for order #{state['order_number_provided']}, assigned_refund_request_id={state.get('assigned_refund_request_id', 0)}:\nmemory notes: {memory_notes}\nrecent conversations: {recent_conversations}\nsummary: {state.get('summary') if state.get('summary') else 'None yet'}")
         refund_request = state["refund_request_to_process"]
         decision = state["initial_return_refund_decision"]
         processed = (state.get("assigned_refund_request_id") or 0) > 0
@@ -638,7 +640,7 @@ class CustomerSupportAgent:
                 "The request is not processed yet. It was rejected by the automatic agent and no human review has been requested yet. "
                 "(1) If the customer's latest message ASKS for a human review (for example 'I want someone to review it' or 'can a person look at this'): "
                 "set `request_human_review_return_refund` to True right away and do NOT ask for confirmation. Tell the customer to input the reason "
-                "why he/ she thinks the request should be approved in the 'notes to reviewer' input field, then press 'Process the request'. "
+                "why he/ she thinks that the request should be approved in the 'notes to reviewer' input field, then press 'Process the request'. "
                 "(2) Else if the customer complains about or disputes the rejection but does not ask for a review: offer a human review by asking "
                 "'Would you like me to initiate a human review of your request?' and leave the flag False. "
                 "(3) Otherwise (for example a general question): do not offer a human review."

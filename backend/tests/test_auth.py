@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 import pytest
+from models.model import CustomerContext
 from main import app
 import services.auth_service as auth_service
 from datetime import datetime, timedelta
@@ -202,5 +203,60 @@ def test_order_missing_required(client):
     assert resp.status_code == 200
     data = resp.json()
     assert data['is_auth'] == False
-        
-    
+
+def test_app_state_role_customer_end_to_end(client): 
+    email_addr = "anderson.cooper@cnn.com"
+    resp = client.post("/api/auth", json={"email_addr": email_addr})
+    data = resp.json()
+    assert data['role'] == 'customer'
+    customer_context = CustomerContext.model_validate(data['customer_context'])
+    assert customer_context is not None
+    assert client.app.state.role == 'customer' # ensure the app state role is set correctly
+
+    # Ensure RoleCheck is functioning correctly and we start general inquiry with a customer role
+    resp = client.post(
+        "/api/support/general",
+        json={"customer_context": customer_context.model_dump(mode="json"), "general_inquiry": "What is your return policy?"},
+    )
+    assert resp.status_code == 200
+
+    # Ensure RoleCheck is functioning correctly and we start order inquiry/ return for refund with a customer role
+    order_id = customer_context.latest_orders[0].order_id
+    payload = {"customer_context": customer_context.model_dump(mode="json"), "order_number_provided": order_id}
+    resp = client.post(
+        "/api/support/order/init",
+        json=payload,
+    )
+    assert resp.status_code == 200
+
+    # Ensure RoleCheck is functioning correctly and we cannot start approval tasks with a customer role
+    resp = client.post("/api/approval/start", json={"task": "Write a welcome email"})
+    assert resp.status_code == 403
+
+
+def test_app_state_role_csr_end_to_end(client):
+    # An order that has been delivered is allowed to return  
+    email_addr = "threecuptea@gmail.com"
+    resp = client.post("/api/auth", json={"email_addr": email_addr})
+    data = resp.json()
+    assert data['role'] == 'csr'
+    assert client.app.state.role == 'csr' # ensure the app state role is set correctly
+
+    # Ensure RoleCheck is functioning correctly and we can start approval tasks with a csr role
+    resp = client.post("/api/approval/start", json={"task": "Write a welcome email"})
+    assert resp.status_code == 200
+
+    # Ensure RoleCheck is functioning correctly and we cannot start general inquiry with a csr role
+    resp = client.post(
+        "/api/support/general",
+        json={"customer_context": {}, "general_inquiry": "What is your return policy?"},
+    )
+    assert resp.status_code == 403
+
+    # Ensure RoleCheck is functioning correctly and we cannot start order inquiry/ return for refund with a csr role
+    payload = {"customer_context": {}, "order_number_provided": 101}
+    resp = client.post(
+        "/api/support/order/init",
+        json=payload,
+    )
+    assert resp.status_code == 403
