@@ -10,7 +10,7 @@ class ApprovalStart(BaseModel):
 
 class ApprovalDecision(BaseModel):
     thread_id: str
-    action: str = Literal["approve", "edit", "reject"]
+    action: Literal["approve", "edit", "reject"]
     content: str | None = None  # edited draft, when action == "edit"
     feedback: str | None = None  # change request, when action == "reject"
 

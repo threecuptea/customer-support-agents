@@ -283,3 +283,45 @@ def test_app_state_role_csr_end_to_end(client):
         json=payload,
     )
     assert resp.status_code == 403
+
+
+def test_no_session_role_gets_401_not_500(client):
+    # Never signed in (or the session cookie expired/was cleared): no role in request.session.
+    resp = client.post("/api/approval/start", json={"task": "Write a welcome email"})
+    assert resp.status_code == 401
+    resp = client.post(
+        "/api/support/general",
+        json={"customer_context": {}, "general_inquiry": "What is your return policy?"},
+    )
+    assert resp.status_code == 401
+
+
+def test_failed_login_grants_no_role(client):
+    resp = client.post("/api/auth", json={"email_addr": "nobody@nowhere.example"})
+    assert resp.status_code == 200
+    assert resp.json()[0]["is_auth"] is False
+    # An unknown email must not pass RoleChecker("customer").
+    resp = client.post(
+        "/api/support/general",
+        json={"customer_context": {}, "general_inquiry": "What is your return policy?"},
+    )
+    assert resp.status_code == 401
+
+
+def test_failed_login_clears_previous_csr_role(client):
+    assert client.post("/api/auth", json={"email_addr": "threecuptea@gmail.com"}).json()[0]["role"] == "csr"
+    assert client.post("/api/approval/start", json={"task": "Write a welcome email"}).status_code == 200
+    client.post("/api/auth", json={"email_addr": "nobody@nowhere.example"})
+    assert client.post("/api/approval/start", json={"task": "Write a welcome email"}).status_code == 401
+
+
+def test_logout_clears_session_role(client):
+    client.post("/api/auth", json={"email_addr": "threecuptea@gmail.com"})
+    assert client.post("/api/auth/logout").status_code == 200
+    assert client.post("/api/approval/start", json={"task": "Write a welcome email"}).status_code == 401
+
+
+def test_approval_decide_rejects_invalid_action(client):
+    client.post("/api/auth", json={"email_addr": "threecuptea@gmail.com"})
+    resp = client.post("/api/approval/decide", json={"thread_id": "t", "action": "bogus"})
+    assert resp.status_code == 422

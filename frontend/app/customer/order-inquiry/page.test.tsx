@@ -395,7 +395,9 @@ describe("OrderInquiryPage", () => {
     await screen.findByText(/order #1002/i);
     await userEvent.click(screen.getAllByRole("button", { name: /exit/i })[0]);
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    // no thread -> no /support/exit; only the server-session logout call
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toContain("/auth/logout");
     expect(push).toHaveBeenCalledWith("/");
     expect(localStorage.getItem("csa_session")).toBeNull();
   });
@@ -421,10 +423,12 @@ describe("OrderInquiryPage", () => {
 
     await userEvent.click(screen.getAllByRole("button", { name: /exit/i })[0]);
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    // calls: [..., /support/exit, /auth/logout (best-effort server session clear)]
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
     const [exitUrl, exitInit] = fetchMock.mock.calls[1];
     expect(exitUrl).toContain("/support/exit");
     expect(JSON.parse(exitInit.body)).toEqual({ thread_id: "t1" });
+    expect(fetchMock.mock.calls[2][0]).toContain("/auth/logout");
     expect(push).toHaveBeenCalledWith("/");
   });
 });

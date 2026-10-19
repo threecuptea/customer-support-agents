@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, LogIn } from "lucide-react";
-import { useAuth, AuthResponse } from "../lib/auth-context";
+import { useAuth, AuthApiResult } from "../lib/auth-context";
 import { FAQ_SECTIONS } from "../lib/faq";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "/api";
@@ -54,13 +54,13 @@ export default function LoginPage() {
         body: JSON.stringify({ email_addr: emailValue }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: AuthResponse = await res.json();
-      if (!data.is_auth) {
+      const [authResp, customerContext]: AuthApiResult = await res.json();
+      if (!authResp.is_auth) {
         setNotFound(true);
         return;
       }
-      login(data);
-      router.push(data.role === "customer" ? "/customer" : "/csr");
+      login(authResp, customerContext);
+      router.push(authResp.role === "customer" ? "/customer" : "/csr");
     } catch (e) {
       setError("Could not reach the server. Please try again.");
     } finally {

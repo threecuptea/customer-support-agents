@@ -34,5 +34,17 @@ async def auth(auth_request: AuthRequest, request: Request) -> tuple[AuthRespons
     auth_request.email_addr = auth_request.email_addr.strip()
     logger.info(f"Authenticate/ authorize {auth_request.email_addr}")
     response, customer_context = await validate_populate_context(auth_request.email_addr)
-    request.session["role"] = response.role
+    if response.is_auth:
+        request.session["role"] = response.role
+    else:
+        # A failed login must never leave (or keep) a role: AuthResponse.role defaults to
+        # "customer" even when is_auth is False, which would otherwise pass RoleChecker.
+        request.session.clear()
     return response, customer_context
+
+
+@router.post("/logout")
+async def logout(request: Request) -> dict[str, bool]:
+    """Drop the server-side session (the UI's Exit button), so the cookie no longer carries a role."""
+    request.session.clear()
+    return {"logged_out": True}

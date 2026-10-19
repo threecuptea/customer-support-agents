@@ -7,7 +7,14 @@ class RoleChecker:
         self.allowed_role = allowed_role
 
     def __call__(self, request: Request):
-        if request.session["role"] != self.allowed_role:
+        role = request.session.get("role")
+        if role is None:
+            # No role in the session cookie: never signed in, or the cookie expired/was cleared.
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Not authenticated"
+            )
+        if role != self.allowed_role:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have permission to access this resource"
