@@ -120,10 +120,12 @@ describe("GeneralInquiryPage", () => {
 
     await userEvent.click(screen.getAllByRole("button", { name: /exit/i })[0]);
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    // calls: [..., /support/exit, /auth/logout (best-effort server session clear)]
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
     const [exitUrl, exitInit] = fetchMock.mock.calls[1];
     expect(exitUrl).toContain("/support/exit");
     expect(JSON.parse(exitInit.body)).toEqual({ thread_id: "t1" });
+    expect(fetchMock.mock.calls[2][0]).toContain("/auth/logout");
     expect(push).toHaveBeenCalledWith("/");
     expect(localStorage.getItem("csa_session")).toBeNull();
   });

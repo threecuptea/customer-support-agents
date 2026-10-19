@@ -3,7 +3,7 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
-// Mirrors backend/models/model.py — OrderItem, Order, CustomerContext, AuthResponse.
+// Mirrors backend/models — OrderItem, Order, CustomerContext (customer_support_model.py), AuthResponse (auth_model.py).
 
 export interface OrderItem {
   product_id: string;
@@ -42,8 +42,10 @@ export interface AuthResponse {
   email_addr: string;
   is_auth: boolean;
   role: "csr" | "customer";
-  customer_context: CustomerContext | null;
 }
+
+// POST /api/auth returns a 2-element array: [AuthResponse, CustomerContext | null].
+export type AuthApiResult = [AuthResponse, CustomerContext | null];
 
 // Session is only ever constructed from an AuthResponse once is_auth === true.
 export interface AuthSession {
@@ -57,8 +59,22 @@ const STORAGE_KEY = "csa_session";
 interface AuthContextValue {
   session: AuthSession | null;
   isLoading: boolean;
-  login: (response: AuthResponse) => void;
+  login: (response: AuthResponse, customerContext: CustomerContext | null) => void;
   logout: () => void;
+}
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "/api";
+
+// RBAC (CSA-21): the backend answers 401 when the server-side session has no role
+// (never signed in, cookie expired/cleared, secret key changed) and 403 when the role
+// doesn't match the endpoint. Either way the locally stored session (localStorage) no
+// longer matches the server, so drop it and go back to the login page. Handled here once
+// by wrapping window.fetch for /api calls rather than at every call site.
+// /auth itself is excluded: a failed login is handled by the login page.
+export function isSessionRejection(url: string, status: number) {
+  if (status !== 401 && status !== 403) return false;
+  if (!url.startsWith(API_URL) && !url.includes("/api/")) return false;
+  return !/\/auth(\/|\?|$)/.test(url);
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -78,17 +94,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const login = (response: AuthResponse) => {
+  const router = useRouter();
+
+  useEffect(() => {
+    const originalFetch = window.fetch;
+    window.fetch = async (input, init) => {
+      const res = await originalFetch(input, init);
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (isSessionRejection(url, res.status)) {
+        setSession(null);
+        try {
+          localStorage.removeItem(STORAGE_KEY);
+        } catch {
+          // ignore
+        }
+        router.replace("/");
+      }
+      return res;
+    };
+    return () => {
+      window.fetch = originalFetch;
+    };
+  }, [router]);
+
+  const login = (response: AuthResponse, customerContext: CustomerContext | null) => {
     const next: AuthSession = {
       email_addr: response.email_addr,
       role: response.role,
-      customer_context: response.customer_context,
+      customer_context: customerContext,
     };
     setSession(next);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   };
 
   const logout = () => {
+    // Best-effort: also drop the server-side session cookie's role.
+    fetch(`${API_URL}/auth/logout`, { method: "POST" }).catch(() => {});
     setSession(null);
     localStorage.removeItem(STORAGE_KEY);
   };

@@ -1,5 +1,5 @@
 from scripts.export_exchange_return_reasons import OUTPUT_PATH, render
-from models.model import ExchangeReturnReason
+from models.customer_support_model import ExchangeReturnReason
 
 
 def test_exchange_return_reasons_export_is_up_to_date():

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from langchain_core.tools import tool
 from rapidfuzz import process, fuzz
-from models.model import CustomerContext, Order, RefundRequest, ReturnRefundInitialDecision, FAQMatchResult, OrderToReturn, \
+from models.customer_support_model import CustomerContext, Order, RefundRequest, ReturnRefundInitialDecision, FAQMatchResult, OrderToReturn, \
     ReturnedOrderItem, ReturnedOrder, OrderRefundStatus
 from dotenv import load_dotenv
 import os

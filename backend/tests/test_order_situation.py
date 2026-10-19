@@ -4,7 +4,7 @@ import itertools
 
 import pytest
 
-from models.model import OrderStructuredOutput
+from models.customer_support_model import OrderStructuredOutput
 from tests.llm_harness.cases import build_order_continue_state
 from workflow.customer_support import CustomerSupportAgent
 from workflow.order_situation import (
@@ -93,7 +93,7 @@ def test_counter_increments_on_the_escalate_path_too():
 # ---- step 2: the revisit node also classifies the prior topic -----------------------------------
 from typing import get_args
 
-from models.model import OrderPriorTopic, OrderRevisitEval
+from models.customer_support_model import OrderPriorTopic, OrderRevisitEval
 
 
 def test_prior_topic_literal_matches_the_situation_module():
@@ -175,7 +175,7 @@ def test_always_on_text_has_no_situation_specific_rules():
 
 
 # ---- code veto of impossible escalations (CSA-19 step 3)
-from models.model import ESCALATE_REASON
+from models.customer_support_model import ESCALATE_REASON
 from workflow.order_situation import escalation_allowed
 
 

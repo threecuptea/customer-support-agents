@@ -25,6 +25,7 @@ from workflow.customer_support import CustomerSupportAgent
 from routes.approval import router as approval_router  # noqa: E402
 from routes.customer_support import router as chat_router # noqa: E402
 from routes.auth import router as auth_router # noqa: E402
+from starlette.middleware.sessions import SessionMiddleware
 
 
 load_dotenv(override=True)
@@ -97,6 +98,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 # FastAPI depends upon lifespan. lifespan depends upon FastAPI parameter app. 
 # Without from __future__ import annotations, the app parameter would be evaluated at runtime, which would cause a circular import error.
 app = FastAPI(title="Custom Support Agent", lifespan=lifespan)  # noqa: E402
+app.add_middleware(SessionMiddleware, secret_key=os.getenv("FASTAPI_SECRET_KEY", "my personality is my integrity"))
 # not app.add_route(...)
 app.include_router(approval_router)
 app.include_router(chat_router)

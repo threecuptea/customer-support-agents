@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from models.model import ESCALATE_REASON
+from models.customer_support_model import ESCALATE_REASON
 
 # Prior-visit topics that have their own situations. Anything else (including None) is not special.
 PRIOR_LOST_SHIPMENT = "lost_shipment"

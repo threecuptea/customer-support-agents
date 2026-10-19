@@ -13,12 +13,12 @@ interrupt, mirroring what ``HumanInTheLoopMiddleware`` offers for tool calls.
 from __future__ import annotations
 
 import logging
-from typing import Annotated, Any, Dict, List, TypedDict
 
-from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
+from models.approval_model import ApprovalState 
+from typing import Any
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
-from langgraph.graph.message import add_messages
 from langgraph.types import interrupt
 
 from workflow.llm import get_llm
@@ -29,18 +29,7 @@ logger = logging.getLogger(__name__)
 MAX_REVISIONS = 3
 
 
-class ApprovalState(TypedDict):
-    messages: Annotated[List[AnyMessage], add_messages]
-    task: str
-    draft: str
-    feedback: str
-    revision_count: int
-    decision: str
-    status: str
-    final_output: str
-
-
-async def drafter(state: ApprovalState) -> Dict[str, Any]:
+async def drafter(state: ApprovalState) -> dict[str, Any]:
     """Draft (or redraft) content for the task, using reviewer feedback if any."""
     logger.info("Drafting content (revision %s)", state.get("revision_count", 0))
     llm = get_llm()
@@ -70,7 +59,7 @@ async def drafter(state: ApprovalState) -> Dict[str, Any]:
     return {"draft": response.content, "status": "awaiting_review"}
 
 
-async def human_review(state: ApprovalState) -> Dict[str, Any]:
+async def human_review(state: ApprovalState) -> dict[str, Any]:
     """Pause for the human to approve, edit, or reject the draft."""
     logger.info("Awaiting human review")
     response = interrupt(
@@ -114,7 +103,7 @@ def route_after_review(state: ApprovalState) -> str:
     return "finalize"
 
 
-async def finalize(state: ApprovalState) -> Dict[str, Any]:
+async def finalize(state: ApprovalState) -> dict[str, Any]:
     """'Send' the approved (or edited) draft."""
     logger.info("Finalizing and sending")
     draft = state.get("draft", "")

@@ -3,6 +3,7 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithAuth, jsonResponse } from "../lib/test-utils";
 import LoginPage from "./page";
+import authFixtures from "../lib/fixtures/auth-responses.json";
 
 const push = vi.fn();
 vi.mock("next/navigation", () => ({
@@ -10,6 +11,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 beforeEach(() => {
+  localStorage.clear();
   push.mockClear();
   vi.restoreAllMocks();
 });
@@ -37,7 +39,7 @@ describe("LoginPage", () => {
 
   it("signs in with a DOM-set email value that never fired onChange", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse({ email_addr: "x@x.com", is_auth: false, role: "customer", customer_context: null })
+      jsonResponse([{ email_addr: "x@x.com", is_auth: false, role: "customer" }, null])
     );
     vi.stubGlobal("fetch", fetchMock);
     renderWithAuth(<LoginPage />);
@@ -51,7 +53,7 @@ describe("LoginPage", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
-        jsonResponse({ email_addr: "x@x.com", is_auth: false, role: "customer", customer_context: null })
+        jsonResponse([{ email_addr: "x@x.com", is_auth: false, role: "customer" }, null])
       )
     );
     renderWithAuth(<LoginPage />);
@@ -64,30 +66,26 @@ describe("LoginPage", () => {
     expect(push).not.toHaveBeenCalled();
   });
 
-  it("redirects customers to /customer on success", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        jsonResponse({
-          email_addr: "cust@x.com",
-          is_auth: true,
-          role: "customer",
-          customer_context: { customer_id: 1, title: "Ms.", first_name: "A", last_name: "B", email: "cust@x.com", latest_orders: [] },
-        })
-      )
-    );
+  it("redirects customers to /customer and stores the CustomerContext (2nd array element)", async () => {
+    // Fixture is generated from the backend models (scripts/export_auth_fixture.py), so a
+    // backend contract change breaks this test instead of silently passing on a stale mock.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(authFixtures.customer)));
     renderWithAuth(<LoginPage />);
-    await userEvent.type(screen.getByPlaceholderText("you@example.com"), "cust@x.com");
+    await userEvent.type(screen.getByPlaceholderText("you@example.com"), "customer@example.com");
     await userEvent.click(screen.getByRole("button", { name: /sign in/i }));
 
     await waitFor(() => expect(push).toHaveBeenCalledWith("/customer"));
+    const stored = JSON.parse(localStorage.getItem("csa_session")!);
+    expect(stored.role).toBe("customer");
+    expect(stored.email_addr).toBe("customer@example.com");
+    expect(stored.customer_context).toEqual(authFixtures.customer[1]);
   });
 
   it("redirects CSRs to /csr on success", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
-        jsonResponse({ email_addr: "csr@x.com", is_auth: true, role: "csr", customer_context: null })
+        jsonResponse(authFixtures.csr)
       )
     );
     renderWithAuth(<LoginPage />);
@@ -95,6 +93,7 @@ describe("LoginPage", () => {
     await userEvent.click(screen.getByRole("button", { name: /sign in/i }));
 
     await waitFor(() => expect(push).toHaveBeenCalledWith("/csr"));
+    expect(JSON.parse(localStorage.getItem("csa_session")!).customer_context).toBeNull();
   });
 
   it("shows a generic error banner on network failure", async () => {

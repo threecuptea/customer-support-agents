@@ -1,14 +1,14 @@
 from __future__ import annotations
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from models.model import OrderRefundStatus
+from models.customer_support_model import OrderRefundStatus
 import os
-
+from dotenv import load_dotenv
 # I need to start thinking about some way to dynamically adjust dates to match the status
 
 _zoneinfo = ZoneInfo("America/New_York")
-
-threshold_days_auto_approve = int(os.getenv("DAYS_THRESHOLD_AUTO"))
+load_dotenv(override=True)
+threshold_days_auto_approve = int(os.getenv("DAYS_THRESHOLD_AUTO", 35))
 
 
 customer_order_status_map = {
@@ -68,6 +68,9 @@ def _auto_adjust_days(order: dict):
         order["ship_date"] = order["estimated_delivery_date"] - timedelta(days= 5)
         order["order_date"] = order["ship_date"] - timedelta(days= 3)
 
+def get_demo_customer(email: str) -> dict:
+    adjust_days_demo_data_testable()
+    return demo_customers.get(email, {})
                
 demo_customers = {
     "anderson.cooper@cnn.com": {

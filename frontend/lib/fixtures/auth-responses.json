@@ -1,0 +1,49 @@
+{
+  "customer": [
+    {
+      "email_addr": "customer@example.com",
+      "is_auth": true,
+      "role": "customer"
+    },
+    {
+      "customer_id": 1,
+      "title": "Ms.",
+      "first_name": "Ada",
+      "last_name": "Lovelace",
+      "email": "customer@example.com",
+      "latest_orders": [
+        {
+          "order_id": 1001,
+          "order_date": "2026-01-15T12:00:00Z",
+          "total_amount_incl_tax": 108.0,
+          "tax_applied_rate": 0.08,
+          "status": "delivered",
+          "notes": null,
+          "ship_date": null,
+          "estimated_delivery_date": null,
+          "tracking_number": null,
+          "delivery_date": "2026-01-15T12:00:00Z",
+          "items": [
+            {
+              "product_id": "P-1",
+              "product_name": "Widget",
+              "supplier_name": "Acme",
+              "unit_price": 50.0,
+              "number_units": 2,
+              "nonrefundable_item": false,
+              "nonrefundable_reason": null
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "csr": [
+    {
+      "email_addr": "csr@example.com",
+      "is_auth": true,
+      "role": "csr"
+    },
+    null
+  ]
+}

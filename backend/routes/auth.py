@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 import logging
 import os
-from models.model import AuthRequest, AuthResponse
+from models.auth_model import AuthRequest, AuthResponse
+from models.customer_support_model import CustomerContext
 from collections.abc import AsyncGenerator
 from services.auth_service import validate_populate_context
 from services.demo_data import adjust_days_demo_data_testable
@@ -27,7 +28,24 @@ async def auth_lifespan(router: APIRouter) -> AsyncGenerator[None, None]:
 
 router = APIRouter(prefix="/api/auth", tags=['auth'], lifespan= auth_lifespan)
 
-@router.post("", response_model=AuthResponse)
-async def auth(request: AuthRequest) -> AuthResponse:
-    logger.info(f"Authenticate/ authorize {request.email_addr.strip()}")
-    return await validate_populate_context(request.email_addr.strip())
+
+@router.post("")
+async def auth(auth_request: AuthRequest, request: Request) -> tuple[AuthResponse, CustomerContext | None]:
+    auth_request.email_addr = auth_request.email_addr.strip()
+    logger.info(f"Authenticate/ authorize {auth_request.email_addr}")
+    response, customer_context = await validate_populate_context(auth_request.email_addr)
+    if response.is_auth:
+        request.session["role"] = response.role
+        request.session["email"] = response.email_addr  # identity binding: see services/ownership.py
+    else:
+        # A failed login must never leave (or keep) a role: AuthResponse.role defaults to
+        # "customer" even when is_auth is False, which would otherwise pass RoleChecker.
+        request.session.clear()
+    return response, customer_context
+
+
+@router.post("/logout")
+async def logout(request: Request) -> dict[str, bool]:
+    """Drop the server-side session (the UI's Exit button), so the cookie no longer carries a role."""
+    request.session.clear()
+    return {"logged_out": True}

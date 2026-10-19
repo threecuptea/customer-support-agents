@@ -2,7 +2,9 @@
 
 Customer-support agents that combine LangGraph workflow automation with human-in-the-loop review. They answer general FAQs, handle order inquiries, and automate return/ refund requests, escalating to a human when a request is outside the agent's authority.
 
-### Customer-support workflow
+### Workflows
+
+#### Customer-support workflow
 
 The diagram below is the compiled LangGraph for the customer-support flow. Each API call (`/api/support/...`) enters at `__start__` and a router sends it to one branch. Dotted arrows are conditional edges, and their labels are the router's decisions.
 
@@ -67,7 +69,7 @@ graph TD;
 	classDef last fill:#bfb6fc
 ```
 
-### Approval workflow (CSR draft letters)
+#### Approval workflow (CSR draft letters)
 
 A customer-support representative (CSR) asks the AI to draft a customized customer letter, and a human approves it before it is "sent". This is the LangGraph `interrupt` / `Command(resume=...)` pattern: `human_review` pauses the thread execution until the CSR responds.
 
@@ -313,7 +315,7 @@ Langgraph interrupt - Command resume framework work well if the person to reques
 
 The entire project is packaged into a Docker container.
 
-The backend is in `backend/` — a `uv` project (Python 3.12) using FastAPI.  I follow a consistent architect design across all my projects.  I separates API files into `routes` and `services` and `models`. I also added a `workflow` folder that all LangGraph workflows and supporting Python modules reside in. Currently, all API endpoints are either in `backend/main.py` or in python modules of `routes` subfolder.  `models/model.py` have all model schemas shared by `auth` and `customer_support` service and `customer_support` workflow.  
+The backend is in `backend/` — a `uv` project (Python 3.12) using FastAPI.  I follow a consistent architect design across all my projects.  All sub-domains: `auth`, `approval` and `customer_support` are organized into `routes` and `services` and `models` folders. I also added a `workflow` folder that all LangGraph workflows and supporting Python modules reside in. Currently, all API endpoints are either in `backend/main.py` or in python modules of `routes` subfolder.    
 
 The frontend is in `frontend/` — Next.js 16, React 19, Tailwind 4. It will be statically exported (`next.config.ts` → `output: "export"`) to `frontend/out/`.
 
