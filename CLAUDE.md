@@ -357,19 +357,25 @@ See README.md for the details. I might add memory sections and eleborate the sum
    - Find the correct scope to set 'role' attribute or property. `request.state` for the transient state per request is too narrow. `app.state` for the global state across all users is too broad. `request.session` is the correct scope.
    - FastAPI does not have built-in `request.session`. I need to install `SessionMiddleware` as `app.add_middleware(SessionMiddleware, .....)` to `main.py`.
    - Set `request.session["role"]` in `routes/auth.py` after receiving `AuthResponse` from `services/auth_service.py`.
-   - Implement 
+   - Implement (the updated version)
    ```python
    class RoleChecker:
     def __init__(self, allowed_role: ALLOWED_ROLES):
         self.allowed_role = allowed_role
 
     def __call__(self, request: Request):
-        if request.session["role"] != self.allowed_role:
+        role = request.session.get("role")
+        if role is None:
+            # No role in the session cookie: never signed in, or the cookie expired/was cleared.
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Not authenticated"
+            )
+        if role != self.allowed_role:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have permission to access this resource"
-            )
-        return request 
+            ) 
    ```
    - Modified `Request = Depends(restrict_to_customer)` to all API calls in `routes/customer_support.py` and `restrict_to_customer = RoleChecker("customer")`
    - Modified `Request = Depends(restrict_to_csr)` to all API calls in `routes/approval.py` and `restrict_to_csr = RoleChecker("csr")`
@@ -393,7 +399,7 @@ See README.md for the details. I might add memory sections and eleborate the sum
     - `/api/auth` now returns `[AuthResponse, CustomerContext | null]`. `frontend/lib/auth-context.tsx`: `AuthResponse` no longer has `customer_context`; new `AuthApiResult` tuple type; `login(response, customerContext)`. The stored `AuthSession` shape (`email_addr`, `role`, `customer_context`) is **unchanged**, so no other page needed edits and an old `csa_session` in `localStorage` still loads (no migration/cleanup needed). `app/page.tsx` destructures `[authResp, customerContext]`.
     - `csa_session` is a `localStorage` key (cleared by Exit/`logout()`); the server role lives in the separate signed `session` cookie set by `SessionMiddleware` (default 14 days). The two can drift (cookie cleared/expired, `FASTAPI_SECRET_KEY` changed, backend restart with a new key).
     - `RoleChecker` now uses `request.session.get("role")`: **401** "Not authenticated" when the session has no role, **403** when the role doesn't match (it used to raise `KeyError` -> 500). Test: `test_no_session_role_gets_401_not_500` in `tests/test_auth.py`.
-    - 401/403 handler: `AuthProvider` wraps `window.fetch` once (restored on unmount). A 401/403 from any `/api/*` call except `/api/auth` clears `csa_session` and `router.replace("/")`. `isSessionRejection(url, status)` is the exported predicate. Tests: `frontend/lib/auth-context.test.tsx`. To simulate by hand: sign in, delete the `session` cookie in DevTools (Application -> Cookies), then ask a question.
+    - 401/403 handler: `AuthProvider` wraps `window.fetch` once (restored on unmount). A 401/403 from any `/api/*` call except `/api/auth` clears `csa_session` and `router.replace("/")`. `isSessionRejection(url, status)` is the exported predicate. Tests: `frontend/lib/auth-context.test.tsx`. To simulate by hand: sign in, delete the `session` cookie in DevTools (Application -> Cookies -> localhost:3000 if you built with `npm run dev`, right click the domain then click `Clear`), then ask a question.  
     - **Contract test, and what to do when the backend response changes again:** unit tests mock `fetch`, so a hand-written mock can stay on the old contract and still pass. `backend/scripts/export_auth_fixture.py` builds `frontend/lib/fixtures/auth-responses.json` (a `customer` and a `csr` example, fixed values, no dates) from the real pydantic models (`AuthResponse`, `CustomerContext`, `Order`, `OrderItem`); `app/page.test.tsx` mocks `/auth` with it and asserts what is stored in `localStorage`. `tests/test_auth_fixture_freshness.py` fails if the committed fixture is stale, and also calls the live `/api/auth` and compares its keys with the fixture. Steps when you change `/api/auth` or those models: (1) run `uv run python -m scripts.export_auth_fixture` from `backend/` and commit the JSON; (2) run `npm test` and `npx tsc --noEmit` in `frontend/`; (3) fix `auth-context.tsx` / `app/page.tsx` for whatever the new shape breaks. If you add fields to the models, the fixture's example values are in the script's `build()`.
 
   - **CSA-21 review pass (two review agents, findings verified):**
@@ -403,6 +409,7 @@ See README.md for the details. I might add memory sections and eleborate the sum
     - Wrapper tests extended: `URL`/`Request` inputs, absolute API URL, `/api/auth` 401 does not redirect.
     - **Known limits, not fixed (decide before a real deployment):** (1) identity binding is DONE (see next bullet) but the signed-in customer's own `customer_context` body is still trusted for its *contents* (e.g. a forged `latest_orders` with the right email); fix = ignore the body and re-derive the context server-side from the session email; (2) `FASTAPI_SECRET_KEY` falls back to a hardcoded default (forgeable cookie), fail fast outside demo mode; (3) `SessionMiddleware` cookie flags are defaults (not `https_only`, 14-day max_age); (4) CORS defaults to `*` with credentials, set `CORS_ORIGINS`. `test_live_auth_endpoint_matches_fixture_shape` depends on `.env` (CSR whitelist) and the demo emails, like the other auth tests.
     - **Identity binding (done, CSA-21):** `/api/auth` now also stores `request.session["email"]` (only on success). New `backend/services/ownership.py`: `check_context_owner` (403 if a request body's `customer_context.email` differs from the session email, case-insensitive) is called in `/support/general` and `/support/order/init`; `check_thread_owner` (403 if an existing LangGraph thread's checkpointed `customer_context.email` differs; a thread with no state yet is not owned) is called at the top of every `/support/*` service function that takes or generates a `thread_id`, including `/exit`. No session email gives 401. Tests in `tests/test_auth.py` (`test_customer_cannot_use_another_customers_context`, `test_customer_cannot_reuse_another_customers_thread`). Any test posting a `customer_context` to a protected endpoint must now sign in as THAT customer (the old `PSEUDO_CUSTOMER_CONTEXT` general tests were switched to the `auth_client` context). When adding a new `/support/*` endpoint, call the matching `check_*_owner` helper in its service function, not just `RoleChecker`.
+    - **Manual verification (2026-10-19, user):** deleting the `session` cookie in DevTools, then navigating, returns to login only on the *next API call* (e.g. FAQ -> Order inquiry still renders; Continue then redirects). Expected: screen changes are client-side and render from `csa_session`, and the 401/403 handler reacts to API responses only. No data is exposed in between (the server checks the role on every call). Accepted as-is. If an immediate kick-out is ever wanted: add an open `GET /api/auth/me` (200 with a role, else 401) and call it from `useRequireRole` on mount. Also verified: unknown-email login then `/api/support/general` via Swagger returns 401.
 
 ### Current API Endpoints
 - `GET /api/health` — liveness check
