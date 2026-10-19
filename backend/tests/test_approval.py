@@ -12,7 +12,6 @@ from main import app
 @pytest.fixture()
 def auth_client():
     # `with` triggers the FastAPI lifespan so app.state.approval_graph is built. app instead of router should be the entry point.
-    # captured_request: Request = None
     with TestClient(app) as test_client:
         test_client.post("/api/auth", json={"email_addr": "threecuptea@gmail.com"})
         yield test_client

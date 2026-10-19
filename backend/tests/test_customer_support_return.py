@@ -22,7 +22,7 @@ shared_order_id = 12462
 @pytest.fixture()
 def client():
     # `with` triggers the FastAPI lifespan so app.state.support_graph is built.
-    with TestClient(app) as test_client: # so that the RoleChecker will allow access to the customer support endpoints
+    with TestClient(app) as test_client:
         yield test_client
 
 
