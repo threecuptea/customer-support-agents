@@ -112,11 +112,11 @@ def test_general_faq_llm_evals_node_directly_escalates():
 # the route used to call `GeneralSupportResponse(...)` with positional args, which
 # pydantic BaseModel rejects). K. K, so the flow always escalates. ---
 def test_api_general_support_endpoint_escalates_under_mock_llm(auth_client):
-    client, _ = auth_client
+    client, customer_context = auth_client
     # PSEUDO_CUSTOMER_CONTEXT is simple dict without datetime fields can be serialized directly to JSON
     resp = client.post(
         "/api/support/general",
-        json={"customer_context": PSEUDO_CUSTOMER_CONTEXT, "general_inquiry": "What is your return policy?"},
+        json={"customer_context": customer_context.model_dump(mode="json"), "general_inquiry": "What is your return policy?"},
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -132,10 +132,10 @@ def test_api_general_support_endpoint_escalates_under_mock_llm(auth_client):
 # mock LLM, `general_faq_eval_node` always escalates, which trips `_should_summarize`
 # after every single round. ---
 def test_api_general_support_thread_accumulates_and_summarizes(auth_client):
-    client, _ = auth_client
+    client, customer_context = auth_client
     r1 = client.post(
         "/api/support/general",
-        json={"customer_context": PSEUDO_CUSTOMER_CONTEXT, "general_inquiry": "What is your return policy?"},
+        json={"customer_context": customer_context.model_dump(mode="json"), "general_inquiry": "What is your return policy?"},
     )
     assert r1.status_code == 200
     thread_id = r1.json()["thread_id"]
@@ -156,7 +156,7 @@ def test_api_general_support_thread_accumulates_and_summarizes(auth_client):
         "/api/support/general",
         json={
             "thread_id": thread_id,
-            "customer_context": PSEUDO_CUSTOMER_CONTEXT,
+            "customer_context": customer_context.model_dump(mode="json"),
             "general_inquiry": "How long does delivery take?",
         },
     )

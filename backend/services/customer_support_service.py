@@ -7,6 +7,7 @@ from models.customer_support_model import ExchangeOrReturnOutput, GeneralSupport
     GenericChatInput, SummarizeOnExit, OrderToReturn, Order, ExchangeOrReturnInput, GenericResponse, InitialReturnRefundResponse, RefundRequest, \
     ReturnRefundProcessRequest, ReturnRefundProcessResponse, ReturnRefundChatResponse
 from memory import load_user_memory
+from services.ownership import check_context_owner, check_thread_owner
 import uuid
 import logging
 from workflow.customer_support_utils import check_if_order_to_return_in_valid_state
@@ -17,6 +18,9 @@ logger = logging.getLogger(__name__)
 
 async def invoke_general_support_workflow(support: GeneralSupportRequest, request: Request) -> GenericResponse:
     graph = request.app.state.support_graph
+    check_context_owner(request, support.customer_context)
+    if support.thread_id:
+        await check_thread_owner(graph, support.thread_id, request)
     thread_id = support.thread_id if support.thread_id else str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
 
@@ -50,6 +54,9 @@ async def invoke_general_support_workflow(support: GeneralSupportRequest, reques
     
 async def invoke_order_init_workflow(support: OrderInitRequest, request: Request) -> OrderInitResponse:
     graph = request.app.state.support_graph
+    check_context_owner(request, support.customer_context)
+    if support.thread_id:
+        await check_thread_owner(graph, support.thread_id, request)
     thread_id = support.thread_id if support.thread_id else str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
 
@@ -88,6 +95,7 @@ async def invoke_order_init_workflow(support: OrderInitRequest, request: Request
 async def invoke_order_continue_workflow(support: GenericChatInput, request: Request) -> GenericResponse:
     graph = request.app.state.support_graph
     thread_id = support.thread_id
+    await check_thread_owner(graph, thread_id, request)
     config = {"configurable": {"thread_id": thread_id}}
     # We cannot inject long-terms memory for each invoke. That should come from `invoke_order_init_workflow``
     # Guard against a thread_id that was never initialized via /order/init (or whose init failed to find
@@ -114,6 +122,7 @@ async def invoke_order_continue_workflow(support: GenericChatInput, request: Req
 async def invoke_exchange_return_recommendation_workflow(exchange_return_reason: ExchangeOrReturnInput, request: Request) -> ExchangeOrReturnOutput:
     graph = request.app.state.support_graph
     thread_id = exchange_return_reason.thread_id
+    await check_thread_owner(graph, thread_id, request)
     config = {"configurable": {"thread_id": thread_id}}
     # Guard against a thread_id that was never initialized via /order/init: this node reads
     # state["order_number_provided"] without a fallback, so a missing/stale thread_id would
@@ -149,6 +158,7 @@ async def invoke_exchange_return_recommendation_workflow(exchange_return_reason:
 async def invoke_return_refund_init_workflow(order_to_return: OrderToReturn, request: Request) -> InitialReturnRefundResponse:
     graph = request.app.state.support_graph
     thread_id = order_to_return.thread_id
+    await check_thread_owner(graph, thread_id, request)
     config = {"configurable": {"thread_id": thread_id}}
     existing_state = await graph.aget_state(config)       
     try:
@@ -191,6 +201,7 @@ async def invoke_return_refund_init_workflow(order_to_return: OrderToReturn, req
 async def invoke_return_refund_process_workflow(request_to_process: ReturnRefundProcessRequest, request: Request) -> ReturnRefundProcessResponse:
     graph = request.app.state.support_graph
     thread_id = request_to_process.thread_id
+    await check_thread_owner(graph, thread_id, request)
     config = {"configurable": {"thread_id": thread_id}}
     existing_state = await graph.aget_state(config)
     refund_request: RefundRequest = existing_state.values.get("refund_request_to_process")
@@ -226,6 +237,7 @@ async def invoke_return_refund_process_workflow(request_to_process: ReturnRefund
 async def invoke_return_refund_chat_workflow(support: GenericChatInput, request: Request) -> ReturnRefundChatResponse:
     graph = request.app.state.support_graph
     thread_id = support.thread_id
+    await check_thread_owner(graph, thread_id, request)
     config = {"configurable": {"thread_id": thread_id}}
     existing_state = await graph.aget_state(config)
     refund_request: RefundRequest = existing_state.values.get("refund_request_to_process")
@@ -256,6 +268,7 @@ async def invoke_return_refund_chat_workflow(support: GenericChatInput, request:
 async def invoke_summarize_on_exit(support: SummarizeOnExit, request: Request):
     graph = request.app.state.support_graph
     thread_id = support.thread_id
+    await check_thread_owner(graph, thread_id, request)
     config = {"configurable": {"thread_id": thread_id}}
     try:
         await graph.ainvoke({"summarize_on_exit": True}, config)

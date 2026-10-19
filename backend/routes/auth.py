@@ -36,6 +36,7 @@ async def auth(auth_request: AuthRequest, request: Request) -> tuple[AuthRespons
     response, customer_context = await validate_populate_context(auth_request.email_addr)
     if response.is_auth:
         request.session["role"] = response.role
+        request.session["email"] = response.email_addr  # identity binding: see services/ownership.py
     else:
         # A failed login must never leave (or keep) a role: AuthResponse.role defaults to
         # "customer" even when is_auth is False, which would otherwise pass RoleChecker.

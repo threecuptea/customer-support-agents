@@ -325,3 +325,41 @@ def test_approval_decide_rejects_invalid_action(client):
     client.post("/api/auth", json={"email_addr": "threecuptea@gmail.com"})
     resp = client.post("/api/approval/decide", json={"thread_id": "t", "action": "bogus"})
     assert resp.status_code == 422
+
+
+# --- Identity binding (services/ownership.py): role alone is not enough ---
+def _customer_context(client, email):
+    return client.post("/api/auth", json={"email_addr": email}).json()[1]
+
+
+def test_customer_cannot_use_another_customers_context(client):
+    victim_ctx = _customer_context(client, "anderson.cooper@cnn.com")
+    other_email = "sonya_ling1947@yahoo.com"
+    assert client.post("/api/auth", json={"email_addr": other_email}).json()[0]["is_auth"] is True
+    # signed in as sonya, posting anderson's context
+    resp = client.post("/api/support/general", json={"customer_context": victim_ctx, "general_inquiry": "hi"})
+    assert resp.status_code == 403
+    resp = client.post(
+        "/api/support/order/init",
+        json={"customer_context": victim_ctx, "order_number_provided": victim_ctx["latest_orders"][0]["order_id"]},
+    )
+    assert resp.status_code == 403
+
+
+def test_customer_cannot_reuse_another_customers_thread(client):
+    ctx = _customer_context(client, "anderson.cooper@cnn.com")
+    r = client.post("/api/support/general", json={"customer_context": ctx, "general_inquiry": "What is your return policy?"})
+    assert r.status_code == 200
+    thread_id = r.json()["thread_id"]
+
+    # a different customer signs in (same browser session cookie is replaced) and targets that thread
+    other_ctx = _customer_context(client, "sonya_ling1947@yahoo.com")
+    r = client.post("/api/support/general", json={"thread_id": thread_id, "customer_context": other_ctx, "general_inquiry": "hi"})
+    assert r.status_code == 403
+    assert client.post("/api/support/exit", json={"thread_id": thread_id}).status_code == 403
+    assert client.post("/api/support/order/continue", json={"thread_id": thread_id, "user_conversation": "hi"}).status_code == 403
+
+    # the owner can still use it
+    client.post("/api/auth", json={"email_addr": "anderson.cooper@cnn.com"})
+    r = client.post("/api/support/general", json={"thread_id": thread_id, "customer_context": ctx, "general_inquiry": "Again?"})
+    assert r.status_code == 200
