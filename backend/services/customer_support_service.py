@@ -11,9 +11,13 @@ from services.ownership import check_context_owner, check_thread_owner
 import uuid
 import logging
 from workflow.customer_support_utils import check_if_order_to_return_in_valid_state
+from workflow.return_refund_utils import refund_requests_processing_dict
+
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
+
+integrate_slack = os.getenv("INTEGRATE_SLACK", "false").lower() == "true"
 
 
 async def invoke_general_support_workflow(support: GeneralSupportRequest, request: Request) -> GenericResponse:
@@ -31,7 +35,6 @@ async def invoke_general_support_workflow(support: GeneralSupportRequest, reques
     messages.append(HumanMessage(content= support.general_inquiry))
     initial_state = {
             "messages": messages,
-            "customer_name": " ".join([support.customer_context.title, support.customer_context.last_name]),
             "customer_context": support.customer_context,
             "support_category": "general/ others",
             "general_inquiry": support.general_inquiry,
@@ -67,7 +70,6 @@ async def invoke_order_init_workflow(support: OrderInitRequest, request: Request
     messages.append(HumanMessage(content= f"Order inquiry: {support.order_number_provided}"))
     initial_state = {
             "messages": messages,
-            "customer_name": " ".join([support.customer_context.title, support.customer_context.last_name]),
             "customer_context": support.customer_context,
             "support_category": "order_inquery",
             "order_number_provided": support.order_number_provided,
@@ -223,11 +225,17 @@ async def invoke_return_refund_process_workflow(request_to_process: ReturnRefund
             "notes_for_human_review_override": request_to_process.notes_for_human_review_override
         }
         customer_support_state  = await graph.ainvoke(initial_state, config)
+        # This needs to change once we remove "refund_request_to_process" from state management
+        refund_request_in_process = refund_requests_processing_dict.get(customer_support_state["assigned_refund_request_id"])
+        if refund_request_in_process and refund_request_in_process.status == "wait_for_manual_review" and integrate_slack:
+            from services.slack_adaptor import send_interactive_blocks_payload
+            await send_interactive_blocks_payload(refund_request_in_process)
+
         return ReturnRefundProcessResponse(
             thread_id = thread_id,
             response = customer_support_state["response"],
             assigned_refund_request_id = customer_support_state["assigned_refund_request_id"],
-            refund_request_to_process = customer_support_state["refund_request_to_process"],
+            refund_request_to_process = refund_request_in_process,
         )
     except Exception as exc:
         error_msg = f"Error process a return refund request for the order: {refund_request.returned_order.origin_order_id}"

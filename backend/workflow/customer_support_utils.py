@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from langchain_core.tools import tool
 from rapidfuzz import process, fuzz
-from models.customer_support_model import CustomerContext, Order, RefundRequest, ReturnRefundInitialDecision, FAQMatchResult, OrderToReturn, \
+from models.customer_support_model import Customer, CustomerContext, Order, RefundRequest, ReturnRefundInitialDecision, FAQMatchResult, OrderToReturn, \
     ReturnedOrderItem, ReturnedOrder, OrderRefundStatus
 from dotenv import load_dotenv
 import os
@@ -169,12 +169,13 @@ def retrieve_target_order(context: CustomerContext, order_number: int) -> Order 
     return None
 
 
-def _populateRefundRequest(order_to_return: OrderToReturn, original_order: Order) -> RefundRequest:
+def _populateRefundRequest(order_to_return: OrderToReturn, original_order: Order, customer: Customer) -> RefundRequest:
     """
     Populate a RefundRequest object from an OrderToReturn object based upon the original Order and OrderItem
     Args:
         order_to_return: a simplified order of returned item with product_id and qty
         original_order: the original Order and OrderItem as references
+        customer: the Customer associated with the refund request
     Returns:
         a RefundRequest referencing a ReturnedOrder and list of ReturnedOrderItem
     Please notice that _check_if_order_to_return_in_valid_state in the customer_support_service.py 
@@ -203,7 +204,8 @@ def _populateRefundRequest(order_to_return: OrderToReturn, original_order: Order
         items = items)
     return RefundRequest(
         request_date= datetime.now(tz= original_order.order_date.tzinfo), 
-        returned_order= returned_order)
+        returned_order= returned_order,
+        customer= customer)
                
 def _calculate_amount_refund_incl_tax(refund_request: RefundRequest) -> float:
     """Calculate total refund amount including tax base upon `ReturnedOrder` and `ReturnedOrderItem` associated 
@@ -278,7 +280,7 @@ def check_if_order_to_return_in_valid_state(return_order: OrderToReturn, origina
             raise ValueError(f"The return {item_return.qty} units of {item_return.product_id} is {NOT_A_VALID_RETURN_QUANTITY}: {original_order.order_id}.")
     return True    
 
-def get_initial_return_refund_decision(return_order: OrderToReturn, original_order: Order) -> tuple[RefundRequest, ReturnRefundInitialDecision]:
+def get_initial_return_refund_decision(return_order: OrderToReturn, original_order: Order, customer: Customer) -> tuple[RefundRequest, ReturnRefundInitialDecision]:
     """ Get ReturnRefundDecision with OrderRefundStatus signals how we should handle return refund
         It goes through the following steps:
             check_if_order_to_return_in_valid_state:  to pre-check and flag/ exclude all abnormal cases
@@ -288,6 +290,8 @@ def get_initial_return_refund_decision(return_order: OrderToReturn, original_ord
     Args:
         return_order: OrderToReturn with items of product_id and quantity to return
         original_order: the referenced original Order
+        customer: the customer making the return/ refund request
+        
     Returns:
         RefundRequest so that the customer will know total amount will be refunded.
         ReturnRefundDecision with OrderRefundStatus
@@ -297,7 +301,7 @@ def get_initial_return_refund_decision(return_order: OrderToReturn, original_ord
     except ValueError as verr:
         # It should not come here. The service layer has validate before invoke the graph
         return (None, ReturnRefundInitialDecision(order_refund_status= OrderRefundStatus.ORDER_INVALID_REFUNDABLE_STATE))
-    refund_request: RefundRequest = _populateRefundRequest(return_order, original_order)
+    refund_request: RefundRequest = _populateRefundRequest(return_order, original_order, customer)
     refund_request.returned_order.estimated_amount_refund_incl_tax = _calculate_amount_refund_incl_tax(refund_request)
     
     initial_decision: ReturnRefundInitialDecision = _get_initial_return_refund_decision(refund_request)

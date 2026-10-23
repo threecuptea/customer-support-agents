@@ -124,6 +124,7 @@ class RefundRequest(BaseModel):
     decided_by: Annotated[str, Field(min_length=1)] | None = None
     decision_reason: Annotated[str, Field(min_length=1, max_length=MAX_REASON_CHARS)] | None = None
     decided_date: datetime | None = None
+    customer: Customer
     returned_order: ReturnedOrder
 
 class FAQMatchEvals(BaseModel):
@@ -156,7 +157,6 @@ class CustomerSupportState(MessagesState):
     """
     response: str = ""
     summary: str
-    customer_name: str
     customer_context: CustomerContext
     support_category: Literal["order_inquery", "exchange_or_return", "return_refund", "general/ others"] = 'general/ others'
     general_inquiry: str
@@ -194,7 +194,14 @@ class ReturnRefundInitialDecision(BaseModel):
                                  OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS,
                                  OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT,
                                  OrderRefundStatus.ORDER_INVALID_REFUNDABLE_STATE]
-    
+
+class Customer(BaseModel):
+    customer_id: Annotated[int, Field(gt=0)]
+    title: Literal["Mr.", "Ms.", "Mrs.", "Dr.", "Mx."] = "Mx."
+    first_name: Annotated[str, Field(min_length=1)]
+    last_name: Annotated[str, Field(min_length=1)]
+    email: Annotated[str, Field(min_length=1)]
+
  # latest_orders should be by date instead of by count. For example, order_date within the last 45 days.
  # UI should be able to display the summary of recent orders in descending order so that the customer can choose
  # which order is what he/ she is concerned about.   

@@ -41,6 +41,8 @@ async def load_user_memory(
     #TODO load the last X days
     if not store or not user_id:
         return ""
+    # PostgresStore / AsyncPostgresStore: Returns results ordered by updated_at descending (most recently updated first).
+    # We rely on this ordering to get the most recent memories first.
     try:
         items = await store.asearch(_namespace(user_id), limit=limit)
         if items:
