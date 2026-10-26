@@ -515,7 +515,8 @@ class CustomerSupportAgent:
         order_to_return: OrderToReturn = state["order_to_return"]
         target_order: Order = state["target_order"]
         customer_context: CustomerContext = state["customer_context"]
-        customer: Customer = Customer(customer_context.customer_id, customer_context.title, customer_context.first_name, customer_context.last_name, customer_context.email)
+        customer: Customer = Customer(
+            customer_id=customer_context.customer_id, title=customer_context.title, first_name=customer_context.first_name, last_name=customer_context.last_name, email=customer_context.email)
         refund_request, initial_decision = get_initial_return_refund_decision(order_to_return, target_order, customer)
         messages = []
         

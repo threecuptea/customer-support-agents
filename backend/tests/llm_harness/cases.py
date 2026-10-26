@@ -12,12 +12,15 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from models.customer_support_model import (
     Order, OrderItem, OrderRefundStatus, RefundRequest, ReturnedOrder, ReturnedOrderItem,
-    ReturnRefundInitialDecision,
+    ReturnRefundInitialDecision, Customer,
 )
 from tests.llm_harness.harness import Case
 
 NOW = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
 ORDER_ID = 12462
+TEST_CUSTOMER = Customer(
+    customer_id=1, title="Mr.", first_name="John", last_name="Doe", email="john.doe@example.com"
+)
 
 
 def make_order(status: str = "delivered", **overrides) -> Order:
@@ -40,6 +43,7 @@ def make_refund_request(status: str, notes: str | None = None) -> RefundRequest:
     return RefundRequest(
         refund_request_id=0, request_date=NOW, status=status,
         notes_for_human_review_override=notes,
+        customer=TEST_CUSTOMER,
         returned_order=ReturnedOrder(
             origin_order_id=ORDER_ID, original_delivery_date=NOW - timedelta(days=40), tax_applied_rate=0.085,
             estimated_amount_refund_incl_tax=108.5,

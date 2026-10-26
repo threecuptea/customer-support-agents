@@ -1,15 +1,13 @@
 import logging
 
-from fastapi import FastAPI, HTTPException, Request, Form, status
+from fastapi import FastAPI, HTTPException, Request, status, BackgroundTasks
 from slack_sdk.signature import SignatureVerifier
 import os
 from dotenv import load_dotenv
 from typing import Any
 import json
-from zoneinfo import ZoneInfo
 from datetime import datetime
 
-from traitlets import This
 from models.slack_model import ReviewResponse
 from services.slack_adaptor import send_interactive_acknowledgement
 from workflow.return_refund_utils import refund_requests_processing_dict
@@ -34,7 +32,7 @@ async def health():
 
 
 @app.post("/webhook/slack/interactive")
-async def human_review_postback(request: Request):
+async def human_review_postback(request: Request, background_tasks: BackgroundTasks):
     # payload: str = Form(...), This will parse form data from request body.  Therefore, cannot call reuest.body() again.
     # The RuntimeError: Stream consumed error in frameworks like FastAPI or Starlette happens when you try to read request.body() more than once.
     body = await request.body()
@@ -58,13 +56,17 @@ async def human_review_postback(request: Request):
     if not actions:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No human review action or action value found")
     review_response = process_review_response(data)
-    await update_refund_request(review_response)
-    await send_interactive_acknowledgement(review_response)
-
+    # await update_refund_request(review_response) # This app cannnot accesss the refund_request_processing_dict.  Therefore, it always return not found
+    # Need to implement Redis or another external storage to persist the refund request processing state across different app instances.
+    background_tasks.add_task(send_interactive_acknowledgement, review_response)
+    # The main difference is that asyncio.create_task() schedules a coroutine to run concurrently on the Python event loop immediately, 
+    # whereas FastAPI's BackgroundTasks.add_task() queues a callable to run after the HTTP response has already been sent to the client.
+    # Slack requires return a response within 3 seconds to avoid timeout errors.
     return {"status": "ok"}
 
 
 def process_review_response(data: dict[str, Any]) -> ReviewResponse:
+    response_url = data.get("response_url", "")
     action_obj = data.get("actions", [])[0] # if we have action[0], we will definitively have its value and block_id
     action = action_obj.get("value")
     combo = action_obj.get("block_id").split("|")
@@ -77,6 +79,7 @@ def process_review_response(data: dict[str, Any]) -> ReviewResponse:
     reason = data.get("state", {}).get("values", {}).get("reason_input", {}).get("reason_value", {}).get("value") # this is optional
 
     return ReviewResponse(
+        response_url=response_url,
         refund_request_id=refund_request_id,
         origin_order_id=origin_order_id,
         estimated_amount_refund_incl_tax=estimated_amount_refund_incl_tax,
@@ -89,6 +92,7 @@ def process_review_response(data: dict[str, Any]) -> ReviewResponse:
 
 async def update_refund_request(review_response: ReviewResponse) -> None:
     # Implement the logic to update the refund request based on the review response
+    logger.info(refund_requests_processing_dict)
     refund_request = refund_requests_processing_dict.get(review_response.refund_request_id)
     if refund_request:
         refund_request.status = f'manual_{review_response.action}'

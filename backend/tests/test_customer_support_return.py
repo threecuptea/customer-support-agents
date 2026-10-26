@@ -7,7 +7,7 @@ import pytest
 
 from main import app
 from services.demo_data import get_demo_customer
-from models.customer_support_model import Order, CustomerContext, ExchangeOrReturnInput, ExchangeReturnReason, ExchangeReturnRefundAction, ESCALATE_REASON, \
+from models.customer_support_model import Customer, Order, CustomerContext, ExchangeOrReturnInput, ExchangeReturnReason, ExchangeReturnRefundAction, ESCALATE_REASON, \
     ReturnRefundInitialDecision, RefundRequest, OrderRefundStatus, OrderToReturn, ItemToReturn, ReturnRefundStructuredOutput
 from workflow.customer_support import SOURCE_RETURN_REFUND_CHAT, CustomerSupportAgent, ROLE_FUNCTION, ROLE_AGENT, SOURCE_EXCHANGE_RETURN_REASON, SOURCE_RETURN_REFUND_PROCESS, \
     PREFIX_NEED_EXPEDIT_REPLACEMENT, PREFIX_RCVD_DAMAGED_PRODUCT, PREFIX_RCVD_WRONG_ITEM, PREFIX_FOUND_BETTER_PRICE, ESCALATE_MESSAGE
@@ -459,11 +459,13 @@ def test_request_human_review_for_return_refund_chat_with_fake_llm():
             return output
         
     email_addr = "wolf.blitzer@cnn.com"
-    context = CustomerContext(**get_demo_customer(email_addr)) # It does not use API and call workflow directly
-    target_order = context.latest_orders[0]
+    customer_context = CustomerContext(**get_demo_customer(email_addr)) # It does not use API and call workflow directly
+    target_order = customer_context.latest_orders[0]
+    customer: Customer = Customer(
+            customer_id=customer_context.customer_id, title=customer_context.title, first_name=customer_context.first_name, last_name=customer_context.last_name, email=customer_context.email)
     items = [ItemToReturn(product_id=item.product_id, qty=item.number_units) for item in target_order.items]
     order_to_return = OrderToReturn(thread_id=shared_thread_id, items=items)
-    refund_request, initial_decision = get_initial_return_refund_decision(order_to_return, target_order)
+    refund_request, initial_decision = get_initial_return_refund_decision(order_to_return, target_order, customer)
 
     state = {
         "messages": [HumanMessage(content=question)],

@@ -225,7 +225,7 @@ async def invoke_return_refund_process_workflow(request_to_process: ReturnRefund
             "notes_for_human_review_override": request_to_process.notes_for_human_review_override
         }
         customer_support_state  = await graph.ainvoke(initial_state, config)
-        # This needs to change once we remove "refund_request_to_process" from state management
+        logger.info(f"assigned_refund_request_id: {customer_support_state['assigned_refund_request_id']}")
         refund_request_in_process = refund_requests_processing_dict.get(customer_support_state["assigned_refund_request_id"])
         if refund_request_in_process and refund_request_in_process.status == "wait_for_manual_review" and integrate_slack:
             from services.slack_adaptor import send_interactive_blocks_payload

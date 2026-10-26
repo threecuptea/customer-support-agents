@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 import pytest
 
-from models.customer_support_model import OrderToReturn, ItemToReturn, CustomerContext, OrderRefundStatus
+from models.customer_support_model import Customer, OrderToReturn, ItemToReturn, CustomerContext, OrderRefundStatus
 from workflow.customer_support_utils import check_if_order_to_return_in_valid_state, get_initial_return_refund_decision, \
     ORIGINAL_ORDER_FOR_RETURN_IS_NOT_DELIVERED, NOT_A_VALID_PRODUCT_ID, NOT_A_VALID_RETURN_QUANTITY
 import uuid
@@ -71,14 +71,14 @@ def test_get_return_refund_decision_status(client, comment, email_addr, expected
     email_addr = email_addr
     resp = client.post("/api/auth", json={"email_addr": email_addr})
     data = resp.json()
-    context = CustomerContext(**data[1])
-    original_order = context.latest_orders[0]
+    customer_context = CustomerContext(**data[1])
+    original_order = customer_context.latest_orders[0]
+    customer: Customer = Customer(
+            customer_id=customer_context.customer_id, title=customer_context.title, first_name=customer_context.first_name, last_name=customer_context.last_name, email=customer_context.email)
 
     item = ItemToReturn(product_id= original_order.items[0].product_id, qty= 1)
     return_order = OrderToReturn(thread_id= str(uuid.uuid4()), items= [item])
         
-    _, decision = get_initial_return_refund_decision(return_order, original_order)
+    _, decision = get_initial_return_refund_decision(return_order, original_order, customer)
     assert decision.order_refund_status == expected_order_refund_status
      
-
-        
