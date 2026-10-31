@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 @dataclass
 class ReviewResponse:
     response_url: str
+    thread_id: str
     refund_request_id: int
     origin_order_id: int
     estimated_amount_refund_incl_tax: float

@@ -1,6 +1,6 @@
 ## Customer-Support-Agents
 
-Customer-support agents that combine LangGraph workflow automation with human-in-the-loop review. They answer general FAQs, handle order inquiries, and automate return/ refund requests, escalating to a human when a request is outside the agent's authority.
+Customer-support agents that combine LangGraph workflow automation with human-in-the-loop review. They answer general FAQs, handle order inquiries, and automate return/ refund requests, escalating to a human review when a request is outside the agent's authority. 
 
 ### Workflows
 

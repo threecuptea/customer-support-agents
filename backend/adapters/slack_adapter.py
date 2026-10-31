@@ -18,13 +18,13 @@ SLACK_CHANNEL_ID_REVIEW_DEV = os.getenv("SLACK_CHANNEL_ID_REVIEW_DEV")
 slack_client = WebClient(token=SLACK_BOT_TOKEN)
 
 
-def build_interactive_blocks_payload(refund_request: RefundRequest) -> list[any]:
+def build_interactive_blocks_payload(thread_id: str, refund_request: RefundRequest) -> list[any]:
     """
     Format a Slack interactive message for a refund request review.
 
     Args:
-        refund_request (RefundRequest): The refund request to be reviewed.
         thread_id (str): The Slack thread ID to which the message should be sent.
+        refund_request (RefundRequest): The refund request to be reviewed.
 
     Returns:
         list: A list of dictionaries representing the Slack 'blocks' message.
@@ -63,7 +63,7 @@ def build_interactive_blocks_payload(refund_request: RefundRequest) -> list[any]
             },
             {
                 "type": "actions",
-                "block_id": f"{refund_request.refund_request_id}|{refund_request.returned_order.origin_order_id}|{refund_request.returned_order.estimated_amount_refund_incl_tax}|{customer_name}",
+                "block_id": f"{thread_id}|{refund_request.refund_request_id}|{refund_request.returned_order.origin_order_id}|{refund_request.returned_order.estimated_amount_refund_incl_tax}|{customer_name}",
                 "elements": [
                     {
                         "type": "button",
@@ -99,13 +99,13 @@ def build_interactive_blocks_payload(refund_request: RefundRequest) -> list[any]
         ]
 
 
-async def send_interactive_blocks_payload(refund_request: RefundRequest) -> None:
+async def send_interactive_blocks_payload(thread_id: str, refund_request: RefundRequest) -> None:
     """Send an interactive blocks message to Slack for a return/ refund request review.
 
     Args:
         refund_request (RefundRequest): The refund request to be reviewed.
     """
-    blocks = build_interactive_blocks_payload(refund_request)
+    blocks = build_interactive_blocks_payload(thread_id, refund_request)
     logger.debug(f"Prepared interactive blocks payload: {blocks}")
     try:
         response = slack_client.chat_postMessage(
@@ -113,7 +113,7 @@ async def send_interactive_blocks_payload(refund_request: RefundRequest) -> None
             text="CSR's review is required for the following return for refund request",
             blocks=blocks
         )
-        logger.info(f"The review interactive blocks message was sent successfully! TS: {response['ts']}")
+        logger.info(f"The return for refund review blocks message for ID: {refund_request.refund_request_id} was sent successfully to Slack  channel: 'customer-support-dev'")
     except SlackApiError as e:
         logger.error(f"Failed to send interactive blocks message to Slack: {e}")
 
@@ -142,9 +142,10 @@ def build_acknowledgement_text(data: ReviewResponse) -> str:
         )
     elif data.action == "flag":
         text = (
-            "⚠️ *The return/ refund request review status: Flagged*\n"
+            "🚩 *The return/ refund request review status: Flagged*\n"
             f"The request id: *{data.refund_request_id}* (origin order id: *{data.origin_order_id}*) of *${data.estimated_amount_refund_incl_tax}*\n"
             f"requested by *{data.customer_name}* was flagged by *{data.decided_by}*\n"
+            "⚠️ Please review this invoice manually and follow up with the customer.\n"
         )
     optional_reason = f"*Reason:* {data.reason}\n" if data.reason else ""
     divider = "-------------------------------------------------------------------------------------------------\n"  
@@ -165,11 +166,13 @@ async def send_interactive_acknowledgement(data: ReviewResponse) -> None:
     try:
         async with httpx.AsyncClient(timeout=30.0) as http_client:
             payload = {
+            "response_type": "in_channel",
             "text": acknowledgement_text,
             "replace_original": False  # Purely acknowledgement, do not replace the original message
             }
             # The response_url dynamically generated responding to a specific interaction is different from the static webhook URL tied to the Slack Bot token 
             # after re-install into the Slack workspace for permission changes.  Therefore, we cannot use slack_client that send the acknowledge to the static webhook URL.
+            logger.info("Sending an interactive acknowledgement to the response_url")
             response = await http_client.post(
                 data.response_url,
                 json=payload

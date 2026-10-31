@@ -183,13 +183,15 @@ async def invoke_return_refund_init_workflow(order_to_return: OrderToReturn, req
             "desire_to_chat_return_refund":False,
             "request_human_review_return_refund": False,
             "notes_for_human_review_override": None,
+            "redis_atomic_counter": 0,
         }
         customer_support_state  = await graph.ainvoke(initial_state, config)
+        refund_request_in_process = await request.app.state.redis_adapter.retrieve_refund_request(customer_support_state["redis_atomic_counter"])
         return InitialReturnRefundResponse(
             thread_id = thread_id,
             response = customer_support_state["response"],
             initial_return_refund_decision = customer_support_state["initial_return_refund_decision"],
-            refund_request_to_process = customer_support_state["refund_request_to_process"],
+            refund_request_to_process = refund_request_in_process,
         )
     except ValueError as verr:
         error_msg = f"Error start a return refund request for thread: {order_to_return.thread_id}"
@@ -225,17 +227,16 @@ async def invoke_return_refund_process_workflow(request_to_process: ReturnRefund
             "notes_for_human_review_override": request_to_process.notes_for_human_review_override
         }
         customer_support_state  = await graph.ainvoke(initial_state, config)
-        logger.info(f"assigned_refund_request_id: {customer_support_state['assigned_refund_request_id']}")
-        refund_request_in_process = refund_requests_processing_dict.get(customer_support_state["assigned_refund_request_id"])
+        refund_request_in_process = await request.app.state.redis_adapter.retrieve_refund_request(customer_support_state["redis_atomic_counter"])
         if refund_request_in_process and refund_request_in_process.status == "wait_for_manual_review" and integrate_slack:
-            from services.slack_adaptor import send_interactive_blocks_payload
-            await send_interactive_blocks_payload(refund_request_in_process)
-
+            from adapters.slack_adapter import send_interactive_blocks_payload
+            await send_interactive_blocks_payload(thread_id, refund_request_in_process)
+        # I can rename refund_request_to_process to refund_request_in_process or temp_refund_request to signal to UI that can be subject to change if the status is wait_for_manual_review.
         return ReturnRefundProcessResponse(
             thread_id = thread_id,
             response = customer_support_state["response"],
             assigned_refund_request_id = customer_support_state["assigned_refund_request_id"],
-            refund_request_to_process = refund_request_in_process,
+            refund_request_to_process = refund_request_in_process, 
         )
     except Exception as exc:
         error_msg = f"Error process a return refund request for the order: {refund_request.returned_order.origin_order_id}"

@@ -13,12 +13,10 @@ from workflow.llm import get_llm
 from langchain_core.runnables import RunnableConfig
 from datetime import timedelta
 from workflow.order_situation import select_order_situation, render_situation_text, escalation_allowed, ALWAYS_ON_TEXT
-import copy
 from memory import save_user_memory
 from workflow.customer_support_utils import find_closest_faq, retrieve_target_order, faq_dict, RETURN_POLICY, \
     get_initial_return_refund_decision, threshold_amount_auto_approve, threshold_days_auto_approve
-
-from workflow.return_refund_utils import ThreadSafeCounter, refund_requests_processing_dict 
+from adapters.redis_adapter import RefundRequestRedisAdapter 
 
 
 load_dotenv(override=True)
@@ -64,9 +62,10 @@ def _flow(text: str) -> str:
     return " ".join(text.split())
 
 class CustomerSupportAgent:
-    def __init__(self, checkpointer, store):
+    def __init__(self, checkpointer, store, redis_adapter: RefundRequestRedisAdapter):
         self.checkpointer = checkpointer
         self.store = store
+        self.redis_adapter = redis_adapter
         require_stronge_chat_model = os.getenv("REQUIRE_STRONG_CHAT_NODE_MODEL", "false").lower() == "true"
         # I can override model and provider to use overrides if needed
         self.summarize_llm = get_llm()
@@ -85,8 +84,6 @@ class CustomerSupportAgent:
         # Classification, not conversation — low temperature for consistency across near-identical inputs.
         self.order_llm_for_revisit_eval = get_llm(temperature=0.0).with_structured_output(OrderRevisitEval)
         self.return_refund_llm = self.chat_node_llm.with_structured_output(ReturnRefundStructuredOutput)
-
-        self.return_refund_counter = ThreadSafeCounter(initial_value = 1000)
 
         
     ###############################################
@@ -541,24 +538,28 @@ class CustomerSupportAgent:
                     response = _flow(f"""
                     I am sorry that I have to reject your return refund request because you are trying to return a non-refundable item.
                     """)
-            response += " Press 'Process the request' to proceed based on the initial decision, press 'Cancel' to cancel the request or press 'I like to chat' to chat for a futher discussion"        
+            response += " Press 'Process the request' to proceed based on the initial decision, press 'Cancel' to cancel the request or press 'I like to chat' to chat for a futher discussion" 
+            redis_atomic_counter = await self.redis_adapter.insert_refund_request(refund_request)       
             return {
                 "response": response, 
                 "messages": messages, 
                 "initial_return_refund_decision": initial_decision, 
-                "refund_request_to_process": refund_request,
+                "refund_request_to_process": refund_request, # Will retrieve it from redis when the customer press 'Process the request' button
+                "redis_atomic_counter": redis_atomic_counter
                 }
-
+        # UI need to switch to make a judgement based upon redis_atomic_counter rather than refund_request_to_process which will be retired
         messages.append(ChatMessage(content=initial_decision.order_refund_status.value, role= ROLE_FUNCTION, name=FUNCTION_GET_INITIAL_DECISION))
         return {
             "response": initial_decision.order_refund_status.value, 
             "messages": messages, 
             "initial_return_refund_decision": initial_decision, 
-            "refund_request_to_process": None,
+            "refund_request_to_process": None, 
+            "redis_atomic_counter": 0
         }
 
-    async def return_refund_process_node(self, state: CustomerSupportState) -> dict[str, Any]:    
-        temp_request = copy.deepcopy(state["refund_request_to_process"])
+    async def return_refund_process_node(self, state: CustomerSupportState) -> dict[str, Any]:
+        redis_atomic_counter = state["redis_atomic_counter"]    
+        temp_request = await self.redis_adapter.retrieve_refund_request(redis_atomic_counter)
         initial_decision = state["initial_return_refund_decision"]
         response = ""
         match initial_decision.order_refund_status:
@@ -591,9 +592,9 @@ class CustomerSupportAgent:
                     "If approved, Your email will have the instructions on how and where to send your package."
             case _:
                 return {}
-        assigned_refund_request_id = self.return_refund_counter.increment()
-        temp_request.refund_request_id = assigned_refund_request_id
-        refund_requests_processing_dict[assigned_refund_request_id] = temp_request
+        assigned_refund_request_id = redis_atomic_counter # keep it for backward compatibility and will retire it later
+        # temp_request.refund_request_id = assigned_refund_request_id
+        await self.redis_adapter.update_refund_request(redis_atomic_counter, temp_request)
         message = ChatMessage(content=response, role= ROLE_AGENT, additional_kwargs={"source": SOURCE_RETURN_REFUND_PROCESS})
         
         return {

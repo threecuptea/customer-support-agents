@@ -382,6 +382,8 @@ def test_api_invoke_order_continue_workflow_error(auth_client):
 def test_api_order_init_resets_order_turns_and_prior_topic(auth_client):
     client, customer_context = auth_client
     order_id = customer_context.latest_orders[0].order_id
+    # model_dump_json() returns a serialized string, 
+    # whereas model_dump(mode="json") returns a native Python dictionary containing only JSON-serializable
     payload = {"customer_context": customer_context.model_dump(mode="json"), "order_number_provided": order_id}
     thread_id = client.post("/api/support/order/init", json=payload).json()["thread_id"]
     client.post("/api/support/order/continue", json={"thread_id": thread_id, "user_conversation": "hello"})
