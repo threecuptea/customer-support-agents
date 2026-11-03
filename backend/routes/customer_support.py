@@ -3,12 +3,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Request, Depends
 import os
 from models.customer_support_model import ExchangeOrReturnOutput, GeneralSupportRequest, OrderInitRequest, OrderInitResponse, \
-    GenericChatInput, SummarizeOnExit, OrderToReturn, ExchangeOrReturnInput, GenericResponse, InitialReturnRefundResponse, \
+    GenericChatInput, RefundRequest, SummarizeOnExit, OrderToReturn, ExchangeOrReturnInput, GenericResponse, InitialReturnRefundResponse, \
     ReturnRefundProcessRequest, ReturnRefundProcessResponse, ReturnRefundChatResponse
 import logging
 from services.customer_support_service import invoke_general_support_workflow, invoke_order_init_workflow, invoke_order_continue_workflow, \
     invoke_exchange_return_recommendation_workflow, invoke_return_refund_init_workflow,  invoke_return_refund_process_workflow, \
-    invoke_return_refund_chat_workflow, invoke_summarize_on_exit
+    invoke_return_refund_chat_workflow, invoke_summarize_on_exit, retrieve_refund_request, retrieve_refund_requests_by_order
 from routes.role_checker import RoleChecker
 
 
@@ -58,6 +58,16 @@ async def return_refund_process(request_to_process: ReturnRefundProcessRequest, 
 async def return_refund_chat(support: GenericChatInput, request: Request = Depends(restrict_to_customer)) -> ReturnRefundChatResponse:
     logger.info(f"Chat about a return refund request for thread: {support.thread_id}")
     return await invoke_return_refund_chat_workflow(support, request)
+
+@router.get("/return_refund/{refund_request_id}")
+async def return_refund_get(refund_request_id: int, request: Request = Depends(restrict_to_customer)) -> RefundRequest | None:
+    logger.info(f"Get return refund request by ID: {refund_request_id}")
+    return await retrieve_refund_request(refund_request_id, request)
+
+@router.get("/return_refund/by_order/{order_id}")
+async def return_refunds_get_by_order(order_id: int, request: Request = Depends(restrict_to_customer)) -> list[RefundRequest]:
+    logger.info(f"Get return refund request by order ID: {order_id}")
+    return await retrieve_refund_requests_by_order(order_id, request)
 
 @router.post("/exit")
 async def exit_signal(support: SummarizeOnExit, request: Request = Depends(restrict_to_customer)):

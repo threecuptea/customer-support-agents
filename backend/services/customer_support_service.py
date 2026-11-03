@@ -276,7 +276,23 @@ async def invoke_return_refund_chat_workflow(support: GenericChatInput, request:
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
 
-                
+async def retrieve_refund_request(refund_request_id: int, request: Request) -> RefundRequest | None:    
+    try:
+        return await request.app.state.redis_adapter.retrieve_refund_request(refund_request_id)
+    except Exception as exc:
+        error_msg = f"Error retrieving refund request by ID: {refund_request_id}"
+        logger.exception(error_msg)
+        raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
+
+async def retrieve_refund_requests_by_order(order_id: int, request: Request) -> list[RefundRequest]:
+    try:
+        return await request.app.state.redis_adapter.retrieve_refund_requests_by_order(order_id)
+    except Exception as exc:
+        error_msg = f"Error retrieving refund requests by order ID: {order_id}"
+        logger.exception(error_msg)
+        raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
+    
+    
 async def invoke_summarize_on_exit(support: SummarizeOnExit, request: Request):
     graph = request.app.state.support_graph
     thread_id = support.thread_id

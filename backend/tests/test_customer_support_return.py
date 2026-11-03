@@ -29,7 +29,7 @@ def client():
     with TestClient(app) as test_client:
         yield test_client
 
-@pytest.fixture(scope="class")
+@pytest.fixture()
 def redis_client():
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
     redis_client = redis.Redis.from_url(redis_url)
@@ -436,6 +436,7 @@ def test_api_invoke_return_refund_process_or_chat_workflow_error(client):
 
 
 def test_api_invoke_return_refund_chat_workflow(client, redis_client):
+    # redis client can help cleanup 
     email_addr = "sonya_ling1947@yahoo.com"
     resp = client.post("/api/auth", json={"email_addr": email_addr})
     context = CustomerContext(**resp.json()[1])
@@ -518,4 +519,69 @@ def test_request_human_review_for_return_refund_chat_with_fake_llm():
     assert message.additional_kwargs["source"] == SOURCE_RETURN_REFUND_CHAT
     assert message.content == response
     assert result["request_human_review_return_refund"]
+
+def test_api_refund_request_get(client, redis_client):
+    # redis client can help cleanup Redis cache after each test.
+    email_addr = "manu.raju@cnn.com"
+    resp = client.post("/api/auth", json={"email_addr": email_addr})
+    context = CustomerContext(**resp.json()[1])
+    target_order_id = context.latest_orders[0].order_id
+    result_init = client.post(
+        "/api/support/order/init",
+        json={"customer_context": context.model_dump(mode= "json"), "order_number_provided": target_order_id}
+    )
+    # The premise to do any exchange_return_recommendation or return refund is to have ordr_number and target_order
+    data = result_init.json()
+    thread_id = data["thread_id"]
+    target_order: Order = Order(**data['target_order'])
+
+    # One order has two refund requests
+    item1 = next(({"product_id": item.product_id, "qty": item.number_units} for item in target_order.items), None)
+    if item1 is None:
+        pytest.fail("No item found in the target order")
+    resp = client.post(
+        "/api/support/return_refund/init",
+        json={"thread_id": thread_id, "items": [item1]})
+    assert resp.status_code == 200
+    assert "rr_in_process" in resp.json()
+    rr_in_process = RefundRequest(**resp.json()["rr_in_process"])
+    rr_id_1 = rr_in_process.refund_request_id
+    resp = client.get(f"/api/support/return_refund/{rr_id_1}")
+    assert resp.status_code == 200
+    rr1 = RefundRequest(**resp.json())
+    assert rr1 == rr_in_process
+    assert rr1.refund_request_id == rr_id_1
+    assert rr1.returned_order.items[0].product_id == target_order.items[0].product_id
+    assert rr1.returned_order.items[0].product_id == item1["product_id"]
+    assert rr1.returned_order.items[0].number_units == item1["qty"]
+
+    # Will next advance to the second item in the target order without the condition? 
+    item2 = next(({"product_id": item.product_id, "qty": item.number_units} for item in target_order.items if item.product_id != item1["product_id"]), None)
+    if item2 is None:
+        pytest.fail("No item found in the target order")
+    resp = client.post(
+            "/api/support/return_refund/init",
+            json={"thread_id": thread_id, "items": [item2]})
+    assert resp.status_code == 200
+    assert "rr_in_process" in resp.json()
+    rr_in_process = RefundRequest(**resp.json()["rr_in_process"])
+    rr_id_2 = rr_in_process.refund_request_id
+    resp = client.get(f"/api/support/return_refund/{rr_id_2}")
+    assert resp.status_code == 200
+    rr2 = RefundRequest(**resp.json())
+    assert rr2 == rr_in_process
+    assert rr2.refund_request_id == rr_id_2
+    assert rr2.returned_order.items[0].product_id == target_order.items[1].product_id
+    assert rr2.returned_order.items[0].product_id == item2["product_id"]
+    assert rr2.returned_order.items[0].number_units == item2["qty"]
+
+    resp = client.get(f"/api/support/return_refund/by_order/{target_order_id}")
+    assert resp.status_code == 200
+    data = resp.json()
+    rr_list = [RefundRequest(**datum) for datum in data]
+    assert len(rr_list) == 2
+    assert rr1 in rr_list
+    assert rr2 in rr_list
+    
+    
     

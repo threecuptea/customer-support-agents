@@ -184,7 +184,7 @@ class CustomerSupportState(MessagesState):
     request_human_review_return_refund: bool = False
     notes_for_human_review_override: str = None
     summarize_on_exit: bool = False
-    rr_id_in_process: int = 0 # This is the ID of the refund request that we are actively working on in place of assigned_refund_request_id
+    rr_id_in_process: int = 0 # This is the ID of the refund request that we are actively working on.  It exists after a refund request is initiated and before it is fully processed.
     rr_being_processed: bool = False
 
 # Unfortunately we have to know what items to be return to devide

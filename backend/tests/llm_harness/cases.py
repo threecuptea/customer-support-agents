@@ -47,7 +47,6 @@ def build_return_refund_state(*,  rr_being_processed: bool, flag: bool, question
         "order_number_provided": ORDER_ID,
         "rr_id_in_process": 1001,
         "rr_being_processed": rr_being_processed,
-        # "refund_request_to_process": make_refund_request(request_status),
         "initial_return_refund_decision": ReturnRefundInitialDecision(order_refund_status=initial),
         "request_human_review_return_refund": flag,
     }
