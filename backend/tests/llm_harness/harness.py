@@ -25,6 +25,7 @@ class Case:
     id: str
     description: str
     build_state: Callable[[], dict]          # fresh state per trial (nodes must not share mutable state)
+    rr_status: str | None = None
     must_contain: list[Phrase] = field(default_factory=list)
     must_not_contain: list[str] = field(default_factory=list)
     # Expected values of fields in the node's returned dict. A missing key counts as False,
@@ -32,6 +33,7 @@ class Case:
     expect: dict[str, Any] = field(default_factory=dict)
     threshold: float = 0.8                    # required pass rate over `trials`
     known_issue: str | None = None            # below threshold is reported, not failed
+   
 
 
 @dataclass
@@ -173,7 +175,7 @@ def effective_llm_settings(llm: Any) -> dict[str, Any]:
     }
 
 
-def build_agent(model: str | None = None, temperature: str | None = None):
+def build_agent(model: str | None = None, temperature: str | None = None, redis_adapter: Any = None):
     """Build a CustomerSupportAgent whose LLM really uses the requested model and temperature.
 
     Importing workflow.customer_support runs load_dotenv(override=True), which clobbers
@@ -192,7 +194,7 @@ def build_agent(model: str | None = None, temperature: str | None = None):
         os.environ["LLM_MODEL"] = model
         os.environ["CHAT_NODE_MODEL"] = model
     os.environ["LLM_TEMPERATURE"] = str(temperature if temperature is not None else DEFAULT_TEMPERATURE)
-    agent = CustomerSupportAgent(checkpointer=None, store=None)
+    agent = CustomerSupportAgent(checkpointer=None, store=None, redis_adapter=redis_adapter)
     info = effective_llm_settings(agent.summarize_llm)
     chat = effective_llm_settings(agent.chat_node_llm)
     info["chat_node_model"] = chat["model"]

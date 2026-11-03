@@ -15,7 +15,7 @@ threshold_amount_auto_approve = float(os.getenv("AMOUNT_THRESHOLD_AUTO"))
 
 _zoneinfo = ZoneInfo("America/New_York")
 
-@pytest.fixture()
+@pytest.fixture(scope="class")
 def client():
     # `with` triggers the FastAPI lifespan so app.state.approval_graph is built. app instead of router should be the entry point.
     with TestClient(app) as test_client:

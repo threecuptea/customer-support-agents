@@ -16,7 +16,7 @@ shared_thread_id = str(uuid.uuid4())
 shared_order_id = 12462
 
 
-@pytest.fixture()
+@pytest.fixture(scope="class")
 def auth_client():
     # `with` triggers the FastAPI lifespan so app.state.support_graph is built.
     with TestClient(app) as test_client:
@@ -24,7 +24,7 @@ def auth_client():
         customer_context = CustomerContext(**resp.json()[1])
         yield test_client, customer_context
 
-@pytest.fixture()
+@pytest.fixture(scope="class")
 def test_customer_context():
     return CustomerContext(**get_demo_customer("anderson.cooper@cnn.com"))
 

@@ -11,7 +11,6 @@ from services.ownership import check_context_owner, check_thread_owner
 import uuid
 import logging
 from workflow.customer_support_utils import check_if_order_to_return_in_valid_state
-from workflow.return_refund_utils import refund_requests_processing_dict
 
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -177,21 +176,22 @@ async def invoke_return_refund_init_workflow(order_to_return: OrderToReturn, req
             "support_category": "return_refund",
             "order_to_return": order_to_return,
             "initial_return_refund_decision": None,
-            "refund_request_to_process": None,
             "proceed_to_process_return_refund": False, 
-            "assigned_refund_request_id":0,
             "desire_to_chat_return_refund":False,
             "request_human_review_return_refund": False,
             "notes_for_human_review_override": None,
-            "redis_atomic_counter": 0,
+            "rr_id_in_process": 0,
+            "rr_being_processed": False,
         }
         customer_support_state  = await graph.ainvoke(initial_state, config)
-        refund_request_in_process = await request.app.state.redis_adapter.retrieve_refund_request(customer_support_state["redis_atomic_counter"])
+        rr_in_process = await request.app.state.redis_adapter.retrieve_refund_request(customer_support_state["rr_id_in_process"])
         return InitialReturnRefundResponse(
             thread_id = thread_id,
             response = customer_support_state["response"],
             initial_return_refund_decision = customer_support_state["initial_return_refund_decision"],
-            refund_request_to_process = refund_request_in_process,
+            refund_request_to_process = rr_in_process,  # for backward compatibility
+            rr_in_process = rr_in_process,
+            rr_being_processed = customer_support_state["rr_being_processed"],
         )
     except ValueError as verr:
         error_msg = f"Error start a return refund request for thread: {order_to_return.thread_id}"
@@ -208,38 +208,41 @@ async def invoke_return_refund_process_workflow(request_to_process: ReturnRefund
     await check_thread_owner(graph, thread_id, request)
     config = {"configurable": {"thread_id": thread_id}}
     existing_state = await graph.aget_state(config)
-    refund_request: RefundRequest = existing_state.values.get("refund_request_to_process")
-    if not refund_request:
+    rr_id_in_process = existing_state.values.get("rr_id_in_process")
+    if not rr_id_in_process:
         raise HTTPException(
             status_code=400,
             detail="Return/ refund session not found or expired. Please Exit and re-login.",
         )
-    if existing_state.values.get("assigned_refund_request_id"):
+    if existing_state.values.get("rr_being_processed"):
         raise HTTPException(
             status_code=400,
             detail="This return/ refund request has already been processed.",
         )
     try:
-        message = HumanMessage(content= f"Please process return refund for order id: {refund_request.returned_order.origin_order_id}")
+        message = HumanMessage(content= f"Please process return refund for order id: {existing_state.values.get('order_number_provided')}")
         initial_state = {
             "messages": [message],
             "proceed_to_process_return_refund": True,
             "notes_for_human_review_override": request_to_process.notes_for_human_review_override
         }
         customer_support_state  = await graph.ainvoke(initial_state, config)
-        refund_request_in_process = await request.app.state.redis_adapter.retrieve_refund_request(customer_support_state["redis_atomic_counter"])
-        if refund_request_in_process and refund_request_in_process.status == "wait_for_manual_review" and integrate_slack:
+        rr_in_process = await request.app.state.redis_adapter.retrieve_refund_request(customer_support_state["rr_id_in_process"])
+        turn_off_slack_integration_for_test = request_to_process.turn_off_slack_integration_for_test
+        if rr_in_process and rr_in_process.status == "wait_for_manual_review" and integrate_slack and not turn_off_slack_integration_for_test:
             from adapters.slack_adapter import send_interactive_blocks_payload
-            await send_interactive_blocks_payload(thread_id, refund_request_in_process)
+            await send_interactive_blocks_payload(thread_id, rr_in_process)
         # I can rename refund_request_to_process to refund_request_in_process or temp_refund_request to signal to UI that can be subject to change if the status is wait_for_manual_review.
         return ReturnRefundProcessResponse(
             thread_id = thread_id,
             response = customer_support_state["response"],
-            assigned_refund_request_id = customer_support_state["assigned_refund_request_id"],
-            refund_request_to_process = refund_request_in_process, 
+            assigned_refund_request_id = customer_support_state["rr_id_in_process"], # for backward compatibility
+            refund_request_to_process = rr_in_process, # for backward compatibility
+            rr_in_process = rr_in_process,
+            rr_being_processed = customer_support_state["rr_being_processed"],
         )
     except Exception as exc:
-        error_msg = f"Error process a return refund request for the order: {refund_request.returned_order.origin_order_id}"
+        error_msg = f"Error process a return refund request for the order: {existing_state.values.get('order_number_provided')}"
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
 
@@ -249,8 +252,8 @@ async def invoke_return_refund_chat_workflow(support: GenericChatInput, request:
     await check_thread_owner(graph, thread_id, request)
     config = {"configurable": {"thread_id": thread_id}}
     existing_state = await graph.aget_state(config)
-    refund_request: RefundRequest = existing_state.values.get("refund_request_to_process")
-    if not refund_request:
+    rr_id_in_process = existing_state.values.get("rr_id_in_process")
+    if not rr_id_in_process:
         raise HTTPException(
             status_code=400,
             detail="Return/ refund session not found or expired. Please Exit and re-login.",
@@ -269,7 +272,7 @@ async def invoke_return_refund_chat_workflow(support: GenericChatInput, request:
         )
         
     except Exception as exc:
-        error_msg = f"Error chat about a return refund request for thread: {refund_request.returned_order.origin_order_id}"
+        error_msg = f"Error chat about a return refund request for thread: {thread_id}"
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
 

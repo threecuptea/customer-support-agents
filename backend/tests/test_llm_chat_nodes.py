@@ -11,9 +11,11 @@ import os
 
 import pytest
 
-from tests.llm_harness.cases import ORDER_CONTINUE_CASES, RETURN_REFUND_CASES, REVISIT_CASES
+from tests.llm_harness.cases import ORDER_CONTINUE_CASES, RETURN_REFUND_CASES, REVISIT_CASES, TEST_CUSTOMER, ORDER_ID, NOW
+from datetime import timedelta
 from tests.llm_harness import harness
 from tests.llm_harness.harness import RESULTS, build_agent, run_case
+from models.customer_support_model import RefundRequest, ReturnedOrder, ReturnedOrderItem
 
 TRIALS = int(os.getenv("LLM_TRIALS", "5"))
 
@@ -46,8 +48,25 @@ def _evaluate(node, case):
 
 
 @pytest.mark.parametrize("case", RETURN_REFUND_CASES, ids=lambda c: c.id)
-def test_return_refund_chat_node(agent, case):
-    _evaluate(agent.return_refund_chat_node, case)
+def test_return_refund_chat_node(case):
+    def make_refund_request(status: str, notes: str | None = None) -> RefundRequest:
+        return RefundRequest(
+            refund_request_id=1001, request_date=NOW, status=status,
+            notes_for_human_review_override=notes,
+            customer=TEST_CUSTOMER,
+            returned_order=ReturnedOrder(
+                origin_order_id=ORDER_ID, original_delivery_date=NOW - timedelta(days=40), tax_applied_rate=0.085,
+                estimated_amount_refund_incl_tax=108.5,
+                items=[ReturnedOrderItem(product_id="PRD-1", product_name="Wine Glasses", supplier_name="Heritage Brands",
+                                        unit_price=25.0, number_units=4)],
+            ),
+    )
+    class _FakeRedisAdapter:
+                async def retrieve_refund_request(self, refund_request_id: int) -> RefundRequest | None:
+                    return make_refund_request(case.rr_status)
+
+    agent_with_redis = build_agent(harness.REQUESTED_MODEL, harness.REQUESTED_TEMPERATURE, redis_adapter=_FakeRedisAdapter())
+    _evaluate(agent_with_redis.return_refund_chat_node, case)
 
 
 @pytest.mark.parametrize("case", ORDER_CONTINUE_CASES, ids=lambda c: c.id)

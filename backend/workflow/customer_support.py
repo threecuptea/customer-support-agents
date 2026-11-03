@@ -62,7 +62,7 @@ def _flow(text: str) -> str:
     return " ".join(text.split())
 
 class CustomerSupportAgent:
-    def __init__(self, checkpointer, store, redis_adapter: RefundRequestRedisAdapter):
+    def __init__(self, checkpointer, store, redis_adapter: Any = None):
         self.checkpointer = checkpointer
         self.store = store
         self.redis_adapter = redis_adapter
@@ -539,27 +539,26 @@ class CustomerSupportAgent:
                     I am sorry that I have to reject your return refund request because you are trying to return a non-refundable item.
                     """)
             response += " Press 'Process the request' to proceed based on the initial decision, press 'Cancel' to cancel the request or press 'I like to chat' to chat for a futher discussion" 
-            redis_atomic_counter = await self.redis_adapter.insert_refund_request(refund_request)       
+            rr_id_in_process = await self.redis_adapter.insert_refund_request(refund_request)       
             return {
                 "response": response, 
                 "messages": messages, 
                 "initial_return_refund_decision": initial_decision, 
-                "refund_request_to_process": refund_request, # Will retrieve it from redis when the customer press 'Process the request' button
-                "redis_atomic_counter": redis_atomic_counter
+                "rr_id_in_process": rr_id_in_process,
+                "rr_being_processed": False,
                 }
-        # UI need to switch to make a judgement based upon redis_atomic_counter rather than refund_request_to_process which will be retired
         messages.append(ChatMessage(content=initial_decision.order_refund_status.value, role= ROLE_FUNCTION, name=FUNCTION_GET_INITIAL_DECISION))
         return {
             "response": initial_decision.order_refund_status.value, 
             "messages": messages, 
-            "initial_return_refund_decision": initial_decision, 
-            "refund_request_to_process": None, 
-            "redis_atomic_counter": 0
+            "initial_return_refund_decision": initial_decision,
+            "rr_id_in_process": 0,
+            "rr_being_processed": False,
         }
 
     async def return_refund_process_node(self, state: CustomerSupportState) -> dict[str, Any]:
-        redis_atomic_counter = state["redis_atomic_counter"]    
-        temp_request = await self.redis_adapter.retrieve_refund_request(redis_atomic_counter)
+        rr_id_in_process = state["rr_id_in_process"]    
+        temp_request = await self.redis_adapter.retrieve_refund_request(rr_id_in_process)
         initial_decision = state["initial_return_refund_decision"]
         response = ""
         match initial_decision.order_refund_status:
@@ -592,16 +591,13 @@ class CustomerSupportAgent:
                     "If approved, Your email will have the instructions on how and where to send your package."
             case _:
                 return {}
-        assigned_refund_request_id = redis_atomic_counter # keep it for backward compatibility and will retire it later
-        # temp_request.refund_request_id = assigned_refund_request_id
-        await self.redis_adapter.update_refund_request(redis_atomic_counter, temp_request)
+        await self.redis_adapter.update_refund_request(rr_id_in_process, temp_request)
         message = ChatMessage(content=response, role= ROLE_AGENT, additional_kwargs={"source": SOURCE_RETURN_REFUND_PROCESS})
         
         return {
             "response": response,
             "messages": [message],
-            "assigned_refund_request_id" : assigned_refund_request_id,
-            "refund_request_to_process": temp_request
+            "rr_being_processed": True,
         }
             
     async def return_refund_chat_node(self, state: CustomerSupportState) -> dict[str, Any]:
@@ -611,10 +607,12 @@ class CustomerSupportAgent:
         recent_conversations = "\n".join(
             [f"- {message.content}" for message in state['messages'] if not isinstance(message, SystemMessage)]
         )
-        logger.info(f"return_refund_chat_node beginning state for order #{state['order_number_provided']}, assigned_refund_request_id={state.get('assigned_refund_request_id', 0)}:\nmemory notes: {memory_notes}\nrecent conversations: {recent_conversations}\nsummary: {state.get('summary') if state.get('summary') else 'None yet'}")
-        refund_request = state["refund_request_to_process"]
+        logger.info(f"return_refund_chat_node beginning state for order #{state['order_number_provided']}:\nmemory notes: {memory_notes}\nrecent conversations: {recent_conversations}\nsummary: {state.get('summary') if state.get('summary') else 'None yet'}")
+
+        rr_id_in_process = state["rr_id_in_process"]
+        refund_request = await self.redis_adapter.retrieve_refund_request(rr_id_in_process)
         decision = state["initial_return_refund_decision"]
-        processed = (state.get("assigned_refund_request_id") or 0) > 0
+        processed = state.get("rr_being_processed")
         review_requested = bool(state.get("request_human_review_return_refund"))
         rejected_by_agent = decision.order_refund_status in (
             OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS, OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS)
@@ -655,7 +653,7 @@ class CustomerSupportAgent:
             (m.content for m in reversed(state['messages']) if isinstance(m, HumanMessage)), "")
         SYSTEM_PROMPT = f"""
             You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her return/ refund request.
-            Here is the updated refund request: {state['refund_request_to_process'].model_dump_json()}
+            Here is the updated refund request: {refund_request.model_dump_json()}
             Here is the initial return refund decision: {state['initial_return_refund_decision'].model_dump_json()}
             Here is what we remember about this customer from past visits, if any: {memory_notes if memory_notes else "None yet"}.
             Here is the most recent conversations in sequential order: {recent_conversations if recent_conversations else "None yet"}.
@@ -743,7 +741,7 @@ class CustomerSupportAgent:
     def route_return_refund(self, state: CustomerSupportState) -> str:
         if not state.get("initial_return_refund_decision"):
             return "return_refund_init"
-        elif state.get("proceed_to_process_return_refund") and not state.get("assigned_refund_request_id"):
+        elif state.get("proceed_to_process_return_refund") and not state.get("rr_being_processed"):
             return "return_refund_process"
         elif state.get("desire_to_chat_return_refund"):
             return "return_refund_chat"
