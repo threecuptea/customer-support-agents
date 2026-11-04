@@ -156,7 +156,9 @@ class CustomerSupportState(MessagesState):
     We will summarize `messages` so to prevent its size from growing. 
     """
     response: str = ""
-    summary: str
+    history: str = "" # conversation of previous visits stored in memory
+    summary: str = "" # conversation of this visit stored or will be stored in memory
+    human_reviews: str = ""
     customer_context: CustomerContext
     support_category: Literal["order_inquery", "exchange_or_return", "return_refund", "general/ others"] = 'general/ others'
     general_inquiry: str

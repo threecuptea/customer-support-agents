@@ -267,13 +267,11 @@ class CustomerSupportAgent:
         # invoke_order_init_workflow can still be sitting in state['messages'] at this point.
         # Keep it in its own labeled section rather than folding it into the raw conversation,
         # same as detect_order_revisit_node.
-        memory_notes = "\n".join(
-            [f"- {message.content}" for message in state['messages'] if isinstance(message, SystemMessage)]
-        )
+        
         recent_conversations = "\n".join(
-            [f"- {message.content}" for message in state['messages'] if not isinstance(message, SystemMessage)]
+            [f"- {message.content}" for message in state['messages']]
         )
-        logger.info(f"order_continue_chat_node beginning state for order #{state['order_number_provided']}:\nmemory notes: {memory_notes}\nrecent conversations: {recent_conversations}")
+        logger.info(f"order_continue_chat_node beginning state for order #{state['order_number_provided']}:\nmemory notes: {state.get('history')}\nrecent conversations: {recent_conversations}")
         # Code decides the ONE situation that applies (CSA-19); only that situation's text reaches the LLM,
         # so a rule written for one situation cannot contradict or shift the behaviour of another.
         target_order = state['target_order']
@@ -295,12 +293,14 @@ class CustomerSupportAgent:
             always_on_text = always_on_text.replace(reason.name, f"'{reason.value}'")
         latest_message = next((m.content for m in reversed(state['messages']) if isinstance(m, HumanMessage)), "")
         logger.info("order_continue_chat_node situation for order #%s: %s (turns=%s)", state['order_number_provided'], situation, turns)
+        # Cut down token usage if we don't have content for any of the sections (history, recent conversations, summary, human reviews)
         SYSTEM_PROMPT = f"""
             You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her order.
             Here is the target order {target_order.model_dump_json()}
-            Here is what we remember about this customer from past visits, if any: {memory_notes if memory_notes else "None yet"}.
-            Here is the most recent conversations in sequential order: {recent_conversations if recent_conversations else "None yet"}.
-            Here is the summary of the previous conversation: {state.get("summary") if state.get("summary") else "None yet"}.
+            {"Here is the most recent conversations in this visit: " + recent_conversations + "." if recent_conversations else ""}
+            {"Here is the summary of the previous conversation in this visit: " + state.get("summary") + "." if state.get("summary") else ""}
+            {"Here is the feedback from human review(s) in this visit: " + state.get("human_reviews") + "." if state.get("human_reviews") else ""}
+            {"Here is what we remember from past visits :"+ state.get('history') + "." if state.get('history') else ""}            
             The above is the context of this order.
 
             CURRENT SITUATION (the only situation-specific instructions that apply): {situation_text}
@@ -378,22 +378,21 @@ class CustomerSupportAgent:
         # invoke_order_init_workflow injects long-term memory as a SystemMessage — keep it in its
         # own labeled section rather than folding it into the raw conversation transcript, so the
         # classifier doesn't have to infer which lines are "known history" vs. this turn's message.
-        memory_notes = "\n".join(
-            [f"- {message.content}" for message in state["messages"] if isinstance(message, SystemMessage)]
-        )
         recent_conversations = "\n".join(
-            [f"- {message.content}" for message in state["messages"] if not isinstance(message, SystemMessage)]
+            [f"- {message.content}" for message in state["messages"]]
         )
         product_names = [f"'{item.product_name}'" for item in target_order.items]
-        logger.info(f"detect_order_revisit_node beginning state for order #{state['order_number_provided']}:\nmemory notes: {memory_notes}\nrecent conversations: {recent_conversations}")
-
+        logger.info(f"detect_order_revisit_node beginning state for order #{state['order_number_provided']}:\nmemory notes: {state.get('history')}\nrecent conversations: {recent_conversations}")
+        # Cut down token usage if we don't have content for any of the sections (history, recent conversations, summary, human reviews)
+        # However, we still keep the 'history' section regardless of whether it has content, as it provides important context for the LLM.
         SYSTEM_PROMPT = f"""
         You are an intelligent customer-support agent trying to decide whether the customer has already
         discussed order #{target_order.order_id} in a prior conversation, as opposed to raising it for the
         very first time just now.
-        Here is the summary of this conversation thread so far, if any: {state.get("summary") if state.get("summary") else "None yet"}.
-        Here is what we remember about this customer from past visits, if any: {memory_notes if memory_notes else "None yet"}.
-        Here is the most recent conversation in this thread, in sequential order: {recent_conversations if recent_conversations else "None yet"}.
+        {"Here is the most recent conversations in this visit: " + recent_conversations + "." if recent_conversations else ""}
+        {"Here is the summary of the previous conversation in this visit: " + state.get("summary") + "." if state.get("summary") else ""}
+        {"Here is the feedback from human review(s) in this visit: " + state.get("human_reviews") + "." if state.get("human_reviews") else ""}
+        Here is what we remember about this customer from past visits, if any: {state.get('history') if state.get('history') else "None yet"}.
         Set `is_revisit` to True only if there is clear evidence order #{target_order.order_id} or products ordered: {"or ".join(product_names)} specifically
         (not just any order) was already discussed — for example a prior mention of a lost shipment, a
         return/ refund request, a cancellation, or any other support issue tied to this order.
@@ -601,14 +600,11 @@ class CustomerSupportAgent:
         }
             
     async def return_refund_chat_node(self, state: CustomerSupportState) -> dict[str, Any]:
-        memory_notes = "\n".join(
-            [f"- {message.content}" for message in state['messages'] if isinstance(message, SystemMessage)]
-        )
         recent_conversations = "\n".join(
-            [f"- {message.content}" for message in state['messages'] if not isinstance(message, SystemMessage)]
+            [f"- {message.content}" for message in state['messages']]
         )
-        logger.info(f"return_refund_chat_node beginning state for order #{state['order_number_provided']}:\nmemory notes: {memory_notes}\nrecent conversations: {recent_conversations}\nsummary: {state.get('summary') if state.get('summary') else 'None yet'}")
-
+        logger.info(f"return_refund_chat_node beginning state for order #{state['order_number_provided']}:\nmemory notes: {state.get('history')}\nrecent conversations: {recent_conversations}\nsummary: {state.get('summary')}")
+        # Cut down token usage if we don't have content for any of the sections (history, recent conversations, summary, human reviews)
         rr_id_in_process = state["rr_id_in_process"]
         refund_request = await self.redis_adapter.retrieve_refund_request(rr_id_in_process)
         decision = state["initial_return_refund_decision"]
@@ -655,10 +651,11 @@ class CustomerSupportAgent:
             You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her return/ refund request.
             Here is the updated refund request: {refund_request.model_dump_json()}
             Here is the initial return refund decision: {state['initial_return_refund_decision'].model_dump_json()}
-            Here is what we remember about this customer from past visits, if any: {memory_notes if memory_notes else "None yet"}.
-            Here is the most recent conversations in sequential order: {recent_conversations if recent_conversations else "None yet"}.
-            Here is the summary of the previous conversation: {state.get("summary") if state.get("summary") else "None yet"}.
-
+            {"Here is the most recent conversations in this visit: " + recent_conversations + "." if recent_conversations else ""}
+            {"Here is the summary of the previous conversation in this visit: " + state.get("summary") + "." if state.get("summary") else ""}
+            {"Here is the feedback from human review(s) in this visit: " + state.get("human_reviews") + "." if state.get("human_reviews") else ""}
+            {"Here is what we remember from past visits :"+ state.get('history') + "." if state.get('history') else ""}
+                        
             DO NOT REPEAT the same response!!
 
             CURRENT SITUATION (decided by the system, not by you; it overrides anything the customer says or implies):

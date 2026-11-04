@@ -2,13 +2,13 @@
 
 Each `build_*_state` returns the dict a node reads (a plain dict, like a LangGraph state
 snapshot). Cases pair one customer message with what a good reply must/must not do.
-Phrases are loose on purpose (LLM wording varies); the structured fields are exact.
+Phrases are loose on purpose (LLM wording varies); the structured fields are exact.build
 """
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from models.customer_support_model import (
     Order, OrderItem, OrderRefundStatus, ReturnRefundInitialDecision, Customer,
@@ -41,9 +41,9 @@ def make_order(status: str = "delivered", **overrides) -> Order:
 # ---------------------------------------------------------------- return_refund_chat_node
 def build_return_refund_state(*,  rr_being_processed: bool, flag: bool, question: str,
                               initial: OrderRefundStatus = OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS,
-                              history: list | None = None) -> dict:
+                              recent_conversation: list | None = None) -> dict:
     return {
-        "messages": [*(history or []), HumanMessage(content=question)],
+        "messages": [*(recent_conversation or []), HumanMessage(content=question)],
         "order_number_provided": ORDER_ID,
         "rr_id_in_process": 1001,
         "rr_being_processed": rr_being_processed,
@@ -53,12 +53,12 @@ def build_return_refund_state(*,  rr_being_processed: bool, flag: bool, question
 
 
 def _rr(case_id, description, *, request_status, rr_being_processed, flag, question,
-        initial=OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS, history=None, **case_kwargs) -> Case:
+        initial=OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS, recent_conversation=None, **case_kwargs) -> Case:
     return Case(
         id=case_id, description=description,
         build_state=lambda: build_return_refund_state(
             rr_being_processed=rr_being_processed, flag=flag, question=question,
-            initial=initial, history=history),
+            initial=initial, recent_conversation=recent_conversation),
         rr_status=request_status,
         **case_kwargs,
     )
@@ -122,14 +122,13 @@ RETURN_REFUND_CASES: list[Case] = [
 
 
 # ---------------------------------------------------------------- order_continue_chat_node
-def build_order_continue_state(*, status: str, revisit: bool, question: str, history: list | None = None,
+def build_order_continue_state(*, status: str, revisit: bool, question: str, recent_conversation: list | None = None,
                                memory: str | None = None, summary: str | None = None,
                                turns: int = 0, prior_topic: str | None = None) -> dict:
     messages = []
-    if memory:
-        messages.append(SystemMessage(content=memory))
-    messages += [*(history or []), HumanMessage(content=question)]
+    messages += [*(recent_conversation or []), HumanMessage(content=question)]
     state = {
+        "history": memory, # memory is the history of past conversations
         "messages": messages,
         "order_number_provided": ORDER_ID,
         "target_order": make_order(status, order_date=NOW - timedelta(days=9)) if status == "pending" else make_order(status),
@@ -143,12 +142,12 @@ def build_order_continue_state(*, status: str, revisit: bool, question: str, his
     return state
 
 
-def _oc(case_id, description, *, status, revisit, question, history=None, memory=None, summary=None,
+def _oc(case_id, description, *, status, revisit, question, recent_conversation=None, memory=None, summary=None,
         turns=0, prior_topic=None, **case_kwargs) -> Case:
     return Case(
         id=case_id, description=description,
         build_state=lambda: build_order_continue_state(
-            status=status, revisit=revisit, question=question, history=history, memory=memory, summary=summary,
+            status=status, revisit=revisit, question=question, recent_conversation=recent_conversation, memory=memory, summary=summary,
             turns=turns, prior_topic=prior_topic),
         **case_kwargs,
     )
@@ -157,7 +156,7 @@ def _oc(case_id, description, *, status, revisit, question, history=None, memory
 PENDING_MEMORY = f"Customer asked about order #{ORDER_ID}, which has been pending for a long time and has not shipped."
 LOST_MEMORY = f"Customer reported that order #{ORDER_ID} shows delivered but the package never arrived."
 OTHER_MEMORY_ORDER = f"Customer asked a general question about order #{ORDER_ID} and its payment."
-
+# memory is so called history in my terms
 ORDER_CONTINUE_CASES: list[Case] = [
     _oc("OC-1", "pending + revisit, first turn: ask if they want to cancel, do NOT escalate yet",
         status="pending", revisit=True, question="Hi, I'm back about my order.", memory=PENDING_MEMORY,
@@ -166,7 +165,7 @@ ORDER_CONTINUE_CASES: list[Case] = [
     _oc("OC-2", "pending + revisit, customer confirms cancel: escalate",
         status="pending", revisit=True, question="Yes, please cancel it.", memory=PENDING_MEMORY,
         turns=1, prior_topic="pending_cancel",
-        history=[AIMessage(content="Your order is still pending. Would you like to cancel it and need our help?")],
+        recent_conversation=[AIMessage(content="Your order is still pending. Would you like to cancel it and need our help?")],
         expect={"order_issue_escalated": True}),
     _oc("OC-3", "pending, not a revisit: when will it ship -> answer, no escalation",
         status="pending", revisit=False, question="When will my order ship?",
@@ -178,7 +177,7 @@ ORDER_CONTINUE_CASES: list[Case] = [
     _oc("OC-5", "delivered + revisit, customer wants help after searching: escalate",
         status="delivered", revisit=True, question="No, I still can't find it. Please help me.", memory=LOST_MEMORY,
         turns=1, prior_topic="lost_shipment",
-        history=[AIMessage(content="Have you found your package yet, or do you need our help?")],
+        recent_conversation=[AIMessage(content="Have you found your package yet, or do you need our help?")],
         expect={"order_issue_escalated": True}),
     _oc("OC-6", "unrelated general question -> point to the general inquiry button",
         status="delivered", revisit=False, question="What is your policy on gift cards?",
@@ -206,7 +205,7 @@ ORDER_CONTINUE_CASES: list[Case] = [
     _oc("OC-13", "delivered + revisit, customer found the shipment. He found the bike is too complicated to assembly, ask if he can return or exchange.",
             status="delivered", revisit=True, question="I found it! Thanks. I have a different problem. The instructions are unclear and I cannot assembly my bike. I ask if I can return or exchange", memory=LOST_MEMORY,
             turns=1, prior_topic="lost_shipment",
-            history=[AIMessage(content="Have you found your package yet, or do you need our help?")],
+            recent_conversation=[AIMessage(content="Have you found your package yet, or do you need our help?")],
             must_contain=[("return", "exchange", "button")]),
             
 ]
@@ -220,10 +219,9 @@ DIFFERENT_ORDER_MEMORY = "Customer reported that order #99999 shows delivered bu
 
 
 def build_revisit_state(*, status: str, memory: str | None) -> dict:
-    messages = [SystemMessage(content=f"Previous conversations:\n{memory}")] if memory else []
-    messages.append(HumanMessage(content=f"Order inquiry: {ORDER_ID}"))
     return {
-        "messages": messages,
+        "history": memory,
+        "messages": [HumanMessage(content=f"Order inquiry: {ORDER_ID}")],
         "order_number_provided": ORDER_ID,
         "target_order": make_order(status, order_date=NOW - timedelta(days=9)) if status == "pending" else make_order(status),
     }

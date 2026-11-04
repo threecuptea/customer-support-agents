@@ -138,9 +138,9 @@ def get_updated_refund_request_and_summary(refund_request: RefundRequest, review
     tzinfo = refund_request.returned_order.original_delivery_date.tzinfo
     refund_request.decided_date = datetime.fromtimestamp(review_response.decided_ts, tz=tzinfo)
     summary= (f"Updating the refund request of ID: {refund_request.refund_request_id} with \n"
-                            f"status: {refund_request.status}\n"
-                            f"decision_reason: {refund_request.decision_reason}\n"
-                            f"decided_by: {refund_request.decided_by}\n"
+                            f"status: {refund_request.status}, "
+                            f"decision_reason: {refund_request.decision_reason}, "
+                            f"decided_by: {refund_request.decided_by}, "
                             f"decided_date: {refund_request.decided_date}")
     return refund_request, summary
 
@@ -149,10 +149,10 @@ async def update_refund_request(refund_request: RefundRequest, summary: str) -> 
     logger.info(summary)
     await app.state.redis_adapter.update_refund_request(refund_request.refund_request_id, refund_request)
     
-async def log_review_updated_summary_into_memory(customer_id: str, thread_id: str, summary: str) -> None:
-    logger.info("log human review updated summary into memory for customer_id: %s, thread_id: %s", customer_id, f"{thread_id}-hitl")
-    # Have a different thread to avoid collision with workflow save_user_memory
-    await save_user_memory(app.state.store, customer_id, f"{thread_id}-hitl", summary)
+async def log_review_updated_summary_into_memory(customer_id: str, review_response: ReviewResponse, summary: str) -> None:
+    logger.info("log human review updated summary into memory for customer_id: %s, thread_id: %s", customer_id, f"{review_response.thread_id}-hitl")
+    # Have a different thread to avoid collision with workflow save_user_memory.  There can be multiple refund requests being processed in the same thread
+    await save_user_memory(app.state.store, customer_id, f"{review_response.thread_id}-hitl-{review_response.refund_request_id}", summary)
 
 
 async def post_process_review_response(review_response: ReviewResponse) -> None:
@@ -165,7 +165,7 @@ async def post_process_review_response(review_response: ReviewResponse) -> None:
 
     updated_refund_request, summary = get_updated_refund_request_and_summary(existing_refund_request, review_response)
     await update_refund_request(updated_refund_request, summary)
-    await log_review_updated_summary_into_memory(updated_refund_request.customer.customer_id, review_response.thread_id, summary)
+    await log_review_updated_summary_into_memory(updated_refund_request.customer.customer_id, review_response, summary)
 
 
         

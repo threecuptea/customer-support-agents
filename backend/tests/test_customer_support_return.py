@@ -306,6 +306,12 @@ def test_api_invoke_return_refund_process_workflow(client, redis_client, email_a
 
     assert data["rr_in_process"]
     rr_in_process = RefundRequest(**data.get("rr_in_process"))
+    # I tried to use asyncio.run(redis_adapter.retrieve_refund_request...) and 
+    # got RuntimeError: Future <Future pending> attached to a different loop
+    # Because await app.state.redis_adapter.connect() in lifespan has already started an event loop, we cannot use asyncio.run() to start another event loop here.
+    # I tried to use async client and async test function so that I can use await instead to avoid the above issue and I got fixture-related errors.
+    # Therefore, I settle to use sync redis client here from fixture and clean up keys after each test.
+    # I can use get /api/support/return_refund/{refund_request_id} call instead.  However, I still need to pass in redis_client so that I can clean up.
     rr_json = redis_client.get(f"rr:{rr_in_process.refund_request_id}")
     assert rr_in_process == RefundRequest.model_validate_json(rr_json)
     assert rr_in_process.status == request_status

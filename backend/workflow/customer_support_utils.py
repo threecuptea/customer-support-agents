@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Any
 
 from langchain_core.tools import tool
 from rapidfuzz import process, fuzz
@@ -7,6 +8,9 @@ from models.customer_support_model import Customer, CustomerContext, Order, Refu
 from dotenv import load_dotenv
 import os
 from datetime import datetime, timedelta
+from langgraph.store.base import BaseStore
+from memory import load_user_memory
+
 
 load_dotenv(override= True)
 
@@ -306,3 +310,26 @@ def get_initial_return_refund_decision(return_order: OrderToReturn, original_ord
     
     initial_decision: ReturnRefundInitialDecision = _get_initial_return_refund_decision(refund_request)
     return (refund_request, initial_decision)
+
+
+async def group_memory(store: BaseStore, user_id: Any, limit: int = 5, thread_id: str | None = None, include_history: bool = True) -> dict[str, str]:
+    memory_dict = await load_user_memory(store, user_id, limit)
+    dict_returned = {}
+    if memory_dict:
+        if thread_id:
+            if include_history:
+                history = "\n".join(f"- {v}" for k, v in memory_dict.items() if not k.startswith(thread_id))
+                if history:
+                    dict_returned["history"] = history
+            human_reviews = "\n".join(f"- {v}" for k, v in memory_dict.items() if k.startswith(thread_id + "-hitl-"))        
+            if human_reviews:
+                dict_returned["human_reviews"] = human_reviews
+        else:
+            if include_history:
+                history = "\n".join(f"- {v}" for v in memory_dict.values())
+                dict_returned["history"] = history
+            
+    return dict_returned
+    
+
+

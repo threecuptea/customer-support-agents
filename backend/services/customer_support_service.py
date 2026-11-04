@@ -2,15 +2,14 @@ from __future__ import annotations
 
 from fastapi import Request, HTTPException
 import os
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 from models.customer_support_model import ExchangeOrReturnOutput, GeneralSupportRequest, OrderInitRequest, OrderInitResponse, \
     GenericChatInput, SummarizeOnExit, OrderToReturn, Order, ExchangeOrReturnInput, GenericResponse, InitialReturnRefundResponse, RefundRequest, \
     ReturnRefundProcessRequest, ReturnRefundProcessResponse, ReturnRefundChatResponse
-from memory import load_user_memory
 from services.ownership import check_context_owner, check_thread_owner
 import uuid
 import logging
-from workflow.customer_support_utils import check_if_order_to_return_in_valid_state
+from workflow.customer_support_utils import check_if_order_to_return_in_valid_state, group_memory
 
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -26,14 +25,8 @@ async def invoke_general_support_workflow(support: GeneralSupportRequest, reques
         await check_thread_owner(graph, support.thread_id, request)
     thread_id = support.thread_id if support.thread_id else str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
-
-    messages = []
-    memory = await load_user_memory(graph.store, support.customer_context.customer_id)
-    if memory:
-        messages.append(SystemMessage(content=f"Previous conversations:\n{memory}"))
-    messages.append(HumanMessage(content= support.general_inquiry))
     initial_state = {
-            "messages": messages,
+            "messages": [HumanMessage(content= support.general_inquiry)],
             "customer_context": support.customer_context,
             "support_category": "general/ others",
             "general_inquiry": support.general_inquiry,
@@ -41,13 +34,18 @@ async def invoke_general_support_workflow(support: GeneralSupportRequest, reques
             "faq_match_evals": None,
             "general_issue_resolved": False,
             "summarize_on_exit": False,
-    }    
+    }
+    # {history, human_reviews}
+    memory_dict = await group_memory(store= graph.store, user_id= support.customer_context.customer_id, thread_id= support.thread_id)
+    # Remove history as SystemMessage so that summary won't include history
+    if memory_dict:
+        initial_state.update(memory_dict)
     try:
-       customer_support_state  = await graph.ainvoke(initial_state, config)
-       return GenericResponse(
+        customer_support_state  = await graph.ainvoke(initial_state, config)
+        return GenericResponse(
            thread_id=thread_id,
            response=customer_support_state["response"],
-       )
+        )
 
     except Exception as exc:
         error_msg = "Error starting customer-support general-inquiry"
@@ -61,14 +59,11 @@ async def invoke_order_init_workflow(support: OrderInitRequest, request: Request
         await check_thread_owner(graph, support.thread_id, request)
     thread_id = support.thread_id if support.thread_id else str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
-
-    messages = []
-    memory = await load_user_memory(graph.store, support.customer_context.customer_id)
-    if memory:
-        messages.append(SystemMessage(content=f"Previous conversations:\n{memory}"))         
-    messages.append(HumanMessage(content= f"Order inquiry: {support.order_number_provided}"))
+    # We can add "human_escalates" later. history is pretty steady. However, external human_reviews and human_escalates can come any time.
+    memory_dict = await group_memory(store= graph.store, user_id= support.customer_context.customer_id, thread_id= support.thread_id)
+    # Remove history as SystemMessage so that summary won't include history
     initial_state = {
-            "messages": messages,
+            "messages": [HumanMessage(content= f"Order inquiry: {support.order_number_provided}")],
             "customer_context": support.customer_context,
             "support_category": "order_inquery",
             "order_number_provided": support.order_number_provided,
@@ -80,7 +75,9 @@ async def invoke_order_init_workflow(support: OrderInitRequest, request: Request
             "order_prior_topic": None,
             "escalation_reason": None,
             "summarize_on_exit": False,
-    }    
+    }
+    if memory_dict:
+        initial_state.update(memory_dict)
     try:
        customer_support_state  = await graph.ainvoke(initial_state, config)
        return OrderInitResponse(
@@ -98,18 +95,26 @@ async def invoke_order_continue_workflow(support: GenericChatInput, request: Req
     thread_id = support.thread_id
     await check_thread_owner(graph, thread_id, request)
     config = {"configurable": {"thread_id": thread_id}}
-    # We cannot inject long-terms memory for each invoke. That should come from `invoke_order_init_workflow``
+  
     # Guard against a thread_id that was never initialized via /order/init (or whose init failed to find
     # an order): route_branch/order_continue_chat_node assume target_order is already populated, so without
     # this check a stale/uninitialized thread_id would crash the graph instead of returning a clear error.
     existing_state = await graph.aget_state(config)
-    if not existing_state.values.get("target_order"):
+    if not existing_state.values.get("target_order") or not existing_state.values.get("customer_context"):
         raise HTTPException(
             status_code=400,
             detail="Order inquiry session not found or expired. Please restart from the order selection screen.",
         )
+    initial_state = {
+        "messages": [HumanMessage(content= support.user_conversation)]
+    }
+
+    # history is pretty steady and has been captured in initial states. We like to capture only the latest external human_reviews and human_escalates.
+    memory_dict = await group_memory(store= graph.store, user_id= existing_state.values.get("customer_context").customer_id, thread_id= thread_id, include_history=False)
+    if memory_dict:
+        initial_state.update(memory_dict)
     try:
-       customer_support_state  = await graph.ainvoke({"messages": [HumanMessage(content= support.user_conversation)]}, config)
+       customer_support_state  = await graph.ainvoke(initial_state, config)
        # escalation_reason is for the future use: communication to CSR in slack
        return GenericResponse(
            thread_id=thread_id,
@@ -166,13 +171,8 @@ async def invoke_return_refund_init_workflow(order_to_return: OrderToReturn, req
         # verify if the target order and order to return are in a valid state to start a return refund.
         target_order: Order = existing_state.values.get("target_order")
         check_if_order_to_return_in_valid_state(order_to_return, target_order)
-        messages = []
-        memory = await load_user_memory(graph.store, existing_state.values.get("customer_context").customer_id)
-        if memory:
-            messages.append(SystemMessage(content=f"Previous conversations:\n{memory}"))  
-        messages.append(HumanMessage(content= f"Initialize return refund: {target_order.order_id}"))
         initial_state = {
-            "messages": messages,
+            "messages": [HumanMessage(content= f"Initialize return refund: {target_order.order_id}")],
             "support_category": "return_refund",
             "order_to_return": order_to_return,
             "initial_return_refund_decision": None,
@@ -183,6 +183,10 @@ async def invoke_return_refund_init_workflow(order_to_return: OrderToReturn, req
             "rr_id_in_process": 0,
             "rr_being_processed": False,
         }
+        memory_dict = await group_memory(store= graph.store, user_id= existing_state.values.get("customer_context").customer_id, thread_id= thread_id, include_history=False)
+        if memory_dict:
+            initial_state.update(memory_dict)
+
         customer_support_state  = await graph.ainvoke(initial_state, config)
         rr_in_process = await request.app.state.redis_adapter.retrieve_refund_request(customer_support_state["rr_id_in_process"])
         return InitialReturnRefundResponse(
@@ -264,6 +268,9 @@ async def invoke_return_refund_chat_workflow(support: GenericChatInput, request:
             "messages": [message],
             "desire_to_chat_return_refund": True,
         }
+        memory_dict = await group_memory(store= graph.store, user_id= existing_state.values.get("customer_context").customer_id, thread_id= thread_id, include_history=False)
+        if memory_dict:
+            initial_state.update(memory_dict)
         customer_support_state  = await graph.ainvoke(initial_state, config)
         return ReturnRefundChatResponse(
             thread_id = thread_id,
@@ -291,8 +298,7 @@ async def retrieve_refund_requests_by_order(order_id: int, request: Request) -> 
         error_msg = f"Error retrieving refund requests by order ID: {order_id}"
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
-    
-    
+       
 async def invoke_summarize_on_exit(support: SummarizeOnExit, request: Request):
     graph = request.app.state.support_graph
     thread_id = support.thread_id
