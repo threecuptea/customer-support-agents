@@ -7,7 +7,7 @@ from langchain_core.messages import AIMessage, ChatMessage, HumanMessage
 import pytest
 
 from main import app
-from services.demo_data import get_demo_customer
+from models.demo_data import get_demo_customer
 from models.customer_support_model import Customer, Order, CustomerContext, ExchangeOrReturnInput, ExchangeReturnReason, ExchangeReturnRefundAction, ESCALATE_REASON, \
     ReturnRefundInitialDecision, RefundRequest, OrderRefundStatus, OrderToReturn, ItemToReturn, ReturnRefundStructuredOutput
 from workflow.customer_support import SOURCE_RETURN_REFUND_CHAT, CustomerSupportAgent, ROLE_FUNCTION, ROLE_AGENT, SOURCE_EXCHANGE_RETURN_REASON, \

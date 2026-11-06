@@ -7,7 +7,7 @@ import logging
 import os
 import re
 from fastapi import HTTPException
-from services.demo_data import demo_customers
+from models.demo_data import demo_customers
 from models.customer_support_model import CustomerContext
 from pydantic import ValidationError
 

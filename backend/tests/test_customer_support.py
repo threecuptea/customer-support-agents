@@ -1,6 +1,6 @@
 import asyncio
 from fastapi.testclient import TestClient
-from services.demo_data import get_demo_customer
+from models.demo_data import get_demo_customer
     
 import pytest
 

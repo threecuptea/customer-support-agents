@@ -6,7 +6,7 @@ import os
 from slack_webhook import app, process_review_response, get_updated_refund_request_and_summary
 from models.customer_support_model import CustomerContext, Customer, ItemToReturn, OrderToReturn, RefundRequest
 from workflow.customer_support_utils import get_initial_return_refund_decision
-from services.demo_data import get_demo_customer
+from models.demo_data import get_demo_customer
 import uuid
 from datetime import datetime 
 
