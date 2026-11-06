@@ -74,6 +74,7 @@ async def health():
 async def human_review_postback(request: Request, background_tasks: BackgroundTasks):
     # payload: str = Form(...), This will parse form data from request body.  Therefore, cannot call reuest.body() again.
     # The RuntimeError: Stream consumed error in frameworks like FastAPI or Starlette happens when you try to read request.body() more than once.
+    logger.info(f"Received Slack interactive payload")
     body = await request.body()
     signature = request.headers.get("X-Slack-Signature")
     timestamp = request.headers.get("X-Slack-Request-Timestamp")
@@ -87,6 +88,7 @@ async def human_review_postback(request: Request, background_tasks: BackgroundTa
     except json.JSONDecodeError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload")
     
+    logger.debug("Received Slack interactive payload: %s", data)
     interaction_type = data.get("type")
     if interaction_type != "block_actions":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported interaction type")
@@ -103,6 +105,10 @@ async def human_review_postback(request: Request, background_tasks: BackgroundTa
     # Slack requires return a response within 3 seconds to avoid timeout errors.
     return {"status": "ok"}
 
+@app.post("/webhook/slack/interactive/test", include_in_schema=False)
+async def human_review_postback(data: dict[str, Any], request: Request):
+    review_response = process_review_response(data)
+    await post_process_review_response(review_response)
 
 def process_review_response(data: dict[str, Any]) -> ReviewResponse:
     response_url = data.get("response_url", "")
@@ -137,11 +143,12 @@ def get_updated_refund_request_and_summary(refund_request: RefundRequest, review
     refund_request.decided_by = review_response.decided_by
     tzinfo = refund_request.returned_order.original_delivery_date.tzinfo
     refund_request.decided_date = datetime.fromtimestamp(review_response.decided_ts, tz=tzinfo)
-    summary= (f"Updating the refund request of ID: {refund_request.refund_request_id} with \n"
+    
+    summary= (f"Updating the refund request of ID: {refund_request.refund_request_id}, origin_order_id: {review_response.origin_order_id}, customer: {review_response.customer_name} with "
                             f"status: {refund_request.status}, "
                             f"decision_reason: {refund_request.decision_reason}, "
                             f"decided_by: {refund_request.decided_by}, "
-                            f"decided_date: {refund_request.decided_date}")
+                            f"decided_date: {refund_request.decided_date.strftime('%Y-%m-%d %H:%M:%S')}")
     return refund_request, summary
 
 async def update_refund_request(refund_request: RefundRequest, summary: str) -> None:
@@ -150,7 +157,7 @@ async def update_refund_request(refund_request: RefundRequest, summary: str) -> 
     await app.state.redis_adapter.update_refund_request(refund_request.refund_request_id, refund_request)
     
 async def log_review_updated_summary_into_memory(customer_id: str, review_response: ReviewResponse, summary: str) -> None:
-    logger.info("log human review updated summary into memory for customer_id: %s, thread_id: %s", customer_id, f"{review_response.thread_id}-hitl")
+    logger.info("log human review updated summary into memory for customer_id: %s, thread_id: %s", customer_id, f"{review_response.thread_id}-hitl-{review_response.refund_request_id}")
     # Have a different thread to avoid collision with workflow save_user_memory.  There can be multiple refund requests being processed in the same thread
     await save_user_memory(app.state.store, customer_id, f"{review_response.thread_id}-hitl-{review_response.refund_request_id}", summary)
 

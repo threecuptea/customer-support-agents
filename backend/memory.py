@@ -51,7 +51,29 @@ async def load_user_memory(
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("Memory load failed: %s", exc)
         return {}
-    
+
+
+def clean_user_memory_for_key(store: BaseStore, user_id: Any, key: str) -> None:
+    """Delete all memory for a user."""
+    if not store or not user_id:
+        return
+    try:
+        store.delete(_namespace(user_id), key)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Memory clean failed: %s", exc)   
+
+def clean_user_memory(store: BaseStore, user_id: Any) -> None:
+    """Delete all memory for a user."""
+    if not store or not user_id:
+        return
+    try:
+        items = store.search(_namespace(user_id))
+        if items:
+            for i in items:
+                store.delete(_namespace(user_id), i.key)
+
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Memory clean failed: %s", exc)    
 
 # Need to summarize the conversation and how to summarize the conversation.
 async def save_user_memory(

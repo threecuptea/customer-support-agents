@@ -315,19 +315,23 @@ def get_initial_return_refund_decision(return_order: OrderToReturn, original_ord
 async def group_memory(store: BaseStore, user_id: Any, limit: int = 5, thread_id: str | None = None, include_history: bool = True) -> dict[str, str]:
     memory_dict = await load_user_memory(store, user_id, limit)
     dict_returned = {}
+    # Should we group '-hitl-' of previous thread into history or human_reviews?  I decide to group '-hitl-' into human review 
+    # regradless thread_id. The value does include refund request id as well as origin order id for reference
+    # It is possible that the customer come back to check the status of a previous refund request after logout
     if memory_dict:
+        human_reviews = "\n".join(f"- {v}" for k, v in memory_dict.items() if "-hitl-" in k)
+        if human_reviews:
+            dict_returned["human_reviews"] = human_reviews
         if thread_id:
             if include_history:
-                history = "\n".join(f"- {v}" for k, v in memory_dict.items() if not k.startswith(thread_id))
+                history = "\n".join(f"- {v}" for k, v in memory_dict.items() if not k.startswith(thread_id) and "-hitl-" not in k)
                 if history:
                     dict_returned["history"] = history
-            human_reviews = "\n".join(f"- {v}" for k, v in memory_dict.items() if k.startswith(thread_id + "-hitl-"))        
-            if human_reviews:
-                dict_returned["human_reviews"] = human_reviews
         else:
             if include_history:
-                history = "\n".join(f"- {v}" for v in memory_dict.values())
-                dict_returned["history"] = history
+                history = "\n".join(f"- {v}" for k, v in memory_dict.items() if "-hitl-" not in k)
+                if history:
+                    dict_returned["history"] = history
             
     return dict_returned
     

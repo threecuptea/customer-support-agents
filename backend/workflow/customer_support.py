@@ -271,7 +271,7 @@ class CustomerSupportAgent:
         recent_conversations = "\n".join(
             [f"- {message.content}" for message in state['messages']]
         )
-        logger.info(f"order_continue_chat_node beginning state for order #{state['order_number_provided']}:\nmemory notes: {state.get('history')}\nrecent conversations: {recent_conversations}")
+        logger.info(f"order_continue_chat_node beginning state for order #{state['order_number_provided']}:\nrecent conversations: {recent_conversations}\nsummary: {state.get('summary')}\nhistory: {state.get('history')}\nhuman_reviews: {state.get('human_reviews')}")
         # Code decides the ONE situation that applies (CSA-19); only that situation's text reaches the LLM,
         # so a rule written for one situation cannot contradict or shift the behaviour of another.
         target_order = state['target_order']
@@ -428,10 +428,10 @@ class CustomerSupportAgent:
                     response += "Notes does not provide additional information. "
                 response += "We will ship as soon as the order is ready and sorry for the delay.  Thanks for your patience"
             case "transit":
-                response = f"Your order is still in 'transit' status. it was estimated to arrive at {target_order.estimated_delivery_date.isoformat()}. "
+                response = f"Your order is still in 'transit' status. it was estimated to arrive at {target_order.estimated_delivery_date.strftime('%Y-%m-%d %H:%M:%S')}. "
                 response += "Please follow the tracking number link in the shipping email or just go to UPS web site and enter your tracking number to get the delivery update, Thanks."
             case "delivered":
-                response = f"Your order is in 'delivered' status. According to our record,  your order has been delivered on {target_order.delivery_date.isoformat()}.  Is everything O.K.?"
+                response = f"Your order is in 'delivered' status. According to our record,  your order has been delivered on {target_order.delivery_date.strftime('%Y-%m-%d %H:%M:%S')}.  Is everything O.K.?"
             case _:
                 pass
 
@@ -603,7 +603,7 @@ class CustomerSupportAgent:
         recent_conversations = "\n".join(
             [f"- {message.content}" for message in state['messages']]
         )
-        logger.info(f"return_refund_chat_node beginning state for order #{state['order_number_provided']}:\nmemory notes: {state.get('history')}\nrecent conversations: {recent_conversations}\nsummary: {state.get('summary')}")
+        logger.info(f"return_refund_chat_node beginning state for order #{state['order_number_provided']}:\nrecent conversations: {recent_conversations}\nsummary: {state.get('summary')}\nmemory notes: {state.get('history')}\nhuman reviews: {state.get('human_reviews')}")
         # Cut down token usage if we don't have content for any of the sections (history, recent conversations, summary, human reviews)
         rr_id_in_process = state["rr_id_in_process"]
         refund_request = await self.redis_adapter.retrieve_refund_request(rr_id_in_process)
