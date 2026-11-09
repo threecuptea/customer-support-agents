@@ -266,7 +266,6 @@ class ExchangeOrReturnInput(BaseModel):
 class ExchangeOrReturnOutput(GenericResponse):
     special_exchange_handling: bool = False
 
-
 class InitialReturnRefundResponse(GenericResponse):
     initial_return_refund_decision: ReturnRefundInitialDecision
     refund_request_to_process: RefundRequest | None = None # will replaced with rr_in_process

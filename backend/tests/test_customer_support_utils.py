@@ -129,7 +129,7 @@ def test_group_memory(client):
             json={"thread_id": thread_id, "user_conversation": "Hello"})
     assert resp.status_code ==200
     snapshot = asyncio.run(graph.aget_state(config))
-    # Add hitl thread to memory store should reflect in the variable of human_reviews of the snapshot
+    # Adding hitl thread to memory store should reflect in the variable of human_reviews of the snapshot
     assert snapshot.values.get("human_reviews")
     assert text in snapshot.values["human_reviews"]
 
