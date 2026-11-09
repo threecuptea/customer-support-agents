@@ -216,7 +216,7 @@ describe("ExchangeReturnPage", () => {
         initial_return_refund_decision: {
           order_refund_status: "The return/ refund request has been approved by an automatic agent.",
         },
-        refund_request_to_process: refundRequest,
+        rr_in_process: refundRequest,
       })
     );
 
@@ -251,7 +251,7 @@ describe("ExchangeReturnPage", () => {
         initial_return_refund_decision: {
           order_refund_status: "The return/ refund request has been approved by an automatic agent.",
         },
-        refund_request_to_process: {
+        rr_in_process: {
           refund_request_id: 0,
           request_date: "2026-08-01T00:00:00Z",
           status: "auto_approve",
@@ -282,8 +282,8 @@ describe("ExchangeReturnPage", () => {
       jsonResponse({
         thread_id: "t1",
         response: "You would receive a confirmation email.",
-        assigned_refund_request_id: 7,
-        refund_request_to_process: {
+        rr_being_processed: true,
+        rr_in_process: {
           refund_request_id: 7,
           request_date: "2026-08-01T00:00:00Z",
           status: "auto_approve",
@@ -333,7 +333,7 @@ describe("ExchangeReturnPage", () => {
           order_refund_status:
             "The return/ refund request has been rejected by an automatic agent because it has passed the return window deadline",
         },
-        refund_request_to_process: {
+        rr_in_process: {
           refund_request_id: 0,
           request_date: "2026-08-01T00:00:00Z",
           status: "pending",
@@ -390,7 +390,7 @@ describe("ExchangeReturnPage", () => {
         thread_id: "t1",
         response: "ok",
         initial_return_refund_decision: { order_refund_status: "The return/ refund request ..." },
-        refund_request_to_process: null,
+        rr_in_process: null,
       })
     );
     await userEvent.click(screen.getAllByRole("checkbox")[0]);
