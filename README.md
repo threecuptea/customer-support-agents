@@ -141,9 +141,10 @@ I draft prompts for `order_continue_chat_node` and `refund_request_chat_node`.  
 
 One of problems is that situations in chat nodes often involve multiple variables.  Some are from state CustomerSupportState, some are from RefundRequest.  There are multiple statuses too. When the prompt says "If the initial_return_refund_decision shows that the customer's request has been rejected by an automatic agent", LLM does not know what variables to look for that situation. Claude rewrote it as the following code 
 ```python
-	refund_request = state["refund_request_to_process"]
-	decision = state["initial_return_refund_decision"]
-	processed = (state.get("assigned_refund_request_id") or 0) > 0
+	rr_id_in_process = state["rr_id_in_process"]
+    refund_request = await self.redis_adapter.retrieve_refund_request(rr_id_in_process)
+    decision = state["initial_return_refund_decision"]
+    processed = state.get("rr_being_processed")
     review_requested = bool(state.get("request_human_review_return_refund"))
     rejected_by_agent = decision.order_refund_status in (
         OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS, OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS)
