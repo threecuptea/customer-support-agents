@@ -1,5 +1,13 @@
+from collections.abc import Callable
+from typing import Literal
+
 from redis.asyncio.client import Redis
+from redis.exceptions import WatchError
+
 from models.customer_support_model import RefundRequest
+
+UpdateOutcome = Literal["updated", "not_found", "status_mismatch"]
+CAS_MAX_RETRIES = 5
 
 
 class RefundRequestRedisAdapter:
@@ -53,3 +61,38 @@ class RefundRequestRedisAdapter:
         if not self.redis_client:
             raise RuntimeError("Redis client is not connected.")
         await self.redis_client.set(f"rr:{refund_request_id}", value.model_dump_json())
+
+    async def update_refund_request_if_status(
+        self,
+        refund_request_id: int,
+        expected_status: str,
+        updater: Callable[[RefundRequest], RefundRequest],
+    ) -> tuple[UpdateOutcome, RefundRequest | None]:
+        """Atomic compare-and-set: apply `updater` only if the stored status is still `expected_status`.
+
+        Uses WATCH/MULTI/EXEC, so if anything else writes the key between our read and our write
+        (a double click, a second reviewer, the workflow) Redis aborts the transaction and we re-read
+        and re-check instead of silently overwriting. Returns (outcome, request):
+          ("updated", the new request) | ("not_found", None) | ("status_mismatch", the current request)
+        """
+        if not self.redis_client:
+            raise RuntimeError("Redis client is not connected.")
+        key = f"rr:{refund_request_id}"
+        for _ in range(CAS_MAX_RETRIES):
+            async with self.redis_client.pipeline(transaction=True) as pipe:
+                try:
+                    await pipe.watch(key)
+                    raw = await pipe.get(key)  # immediate execution while watching
+                    if not raw:
+                        return "not_found", None
+                    current = RefundRequest.model_validate_json(raw)
+                    if current.status != expected_status:
+                        return "status_mismatch", current
+                    updated = updater(current)
+                    pipe.multi()
+                    pipe.set(key, updated.model_dump_json())
+                    await pipe.execute()
+                    return "updated", updated
+                except WatchError:
+                    continue  # someone else wrote the key; re-read and re-check the status
+        raise RuntimeError(f"Could not update refund request {refund_request_id}: too much write contention")

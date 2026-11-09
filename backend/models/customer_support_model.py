@@ -268,7 +268,6 @@ class ExchangeOrReturnOutput(GenericResponse):
 
 class InitialReturnRefundResponse(GenericResponse):
     initial_return_refund_decision: ReturnRefundInitialDecision
-    refund_request_to_process: RefundRequest | None = None # will replaced with rr_in_process
     rr_in_process: RefundRequest | None = None
     rr_being_processed: bool = False
 
@@ -282,9 +281,7 @@ class ReturnRefundProcessRequest(BaseModel):
     turn_off_slack_integration_for_test: bool = False
 
 class ReturnRefundProcessResponse(GenericResponse):
-    refund_request_to_process: RefundRequest # will replaced with rr_in_process
-    assigned_refund_request_id: Annotated[int, Field(gt=0)] # will replaced with rr_being_processed
-    rr_in_process: RefundRequest
+    rr_in_process: RefundRequest | None = None
     rr_being_processed: bool = False
 
 class ReturnRefundChatResponse(GenericResponse):

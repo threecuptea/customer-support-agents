@@ -558,6 +558,9 @@ class CustomerSupportAgent:
     async def return_refund_process_node(self, state: CustomerSupportState) -> dict[str, Any]:
         rr_id_in_process = state["rr_id_in_process"]    
         temp_request = await self.redis_adapter.retrieve_refund_request(rr_id_in_process)
+        if temp_request is None:
+            # Redis is a cache; the service layer answers 400 first, this protects direct graph callers.
+            raise ValueError(f"Refund request {rr_id_in_process} not found in Redis")
         initial_decision = state["initial_return_refund_decision"]
         response = ""
         match initial_decision.order_refund_status:
@@ -607,6 +610,14 @@ class CustomerSupportAgent:
         # Cut down token usage if we don't have content for any of the sections (history, recent conversations, summary, human reviews)
         rr_id_in_process = state["rr_id_in_process"]
         refund_request = await self.redis_adapter.retrieve_refund_request(rr_id_in_process)
+        if refund_request is None:
+            logger.error("return_refund_chat_node: refund request %s not found in Redis", rr_id_in_process)
+            message = ChatMessage(content=SYSTEM_ERROR_MESSAGE, role=ROLE_AGENT, additional_kwargs={"source": SOURCE_RETURN_REFUND_CHAT})
+            return {
+                "messages": [message],
+                "response": SYSTEM_ERROR_MESSAGE,
+                "request_human_review_return_refund": state.get("request_human_review_return_refund", False),
+            }
         decision = state["initial_return_refund_decision"]
         processed = state.get("rr_being_processed")
         review_requested = bool(state.get("request_human_review_return_refund"))

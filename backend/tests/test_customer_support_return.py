@@ -29,17 +29,7 @@ def client():
     with TestClient(app) as test_client:
         yield test_client
 
-@pytest.fixture()
-def redis_client():
-    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
-    redis_client = redis.Redis.from_url(redis_url)
-    yield redis_client
-    # Cleanup after the test class is done
-    try:
-        redis_client.flushdb()
-        redis_client.close()
-    except Exception as e:
-        print(f"Error cleaning up Redis client: {e}")
+# `redis_client` fixture lives in conftest.py (dedicated test Redis DB, never the dev DB 0).
 
 
 @pytest.mark.parametrize(
@@ -323,8 +313,11 @@ def test_api_invoke_return_refund_process_workflow(client, redis_client, email_a
     if requires_manual_approval_reason:
         assert rr_in_process.requires_manual_approval_reason == requires_manual_approval_reason
 
-    assert data["rr_being_processed"]    
-    
+    assert data["rr_being_processed"]
+    # retired fields must not come back in the API contract
+    assert "refund_request_to_process" not in data
+    assert "assigned_refund_request_id" not in data
+
     graph = client.app.state.support_graph
     config = {"configurable": {"thread_id": thread_id}}
     snapshot = asyncio.run(graph.aget_state(config))
@@ -581,13 +574,57 @@ def test_api_refund_request_get(client, redis_client):
     assert rr2.returned_order.items[0].product_id == item2["product_id"]
     assert rr2.returned_order.items[0].number_units == item2["qty"]
 
-    resp = client.get(f"/api/support/return_refund/by_order/{target_order_id}")
+    resp = client.get(f"/api/support/return_refund/by_order/{target_order.order_id}")
     assert resp.status_code == 200
     data = resp.json()
     rr_list = [RefundRequest(**datum) for datum in data]
     assert len(rr_list) == 2
     assert rr1 in rr_list
     assert rr2 in rr_list
-    
+
+
+def _start_return_refund(client, email_addr="manu.raju@cnn.com"):
+    """Sign in as `email_addr`, init an order and a return/refund; returns (thread_id, RefundRequest, order_id)."""
+    resp = client.post("/api/auth", json={"email_addr": email_addr})
+    context = CustomerContext(**resp.json()[1])
+    result_init = client.post(
+        "/api/support/order/init",
+        json={"customer_context": context.model_dump(mode="json"), "order_number_provided": context.latest_orders[0].order_id})
+    data = result_init.json()
+    target_order = Order(**data["target_order"])
+    item = {"product_id": target_order.items[0].product_id, "qty": target_order.items[0].number_units}
+    resp = client.post("/api/support/return_refund/init", json={"thread_id": data["thread_id"], "items": [item]})
+    assert resp.status_code == 200
+    return data["thread_id"], RefundRequest(**resp.json()["rr_in_process"]), target_order.order_id
+
+
+def test_refund_request_gets_are_limited_to_the_owner(client, redis_client):
+    _, rr, order_id = _start_return_refund(client, "manu.raju@cnn.com")
+    assert client.get(f"/api/support/return_refund/{rr.refund_request_id}").json()["refund_request_id"] == rr.refund_request_id
+    assert [r["refund_request_id"] for r in client.get(f"/api/support/return_refund/by_order/{order_id}").json()] == [rr.refund_request_id]
+
+    # Another signed-in customer (same client: signing in replaces the session) must not see it. Not-owned looks exactly like missing.
+    other = client.post("/api/auth", json={"email_addr": "pamela.brown@cnn.com"})
+    assert other.status_code == 200
+    resp = client.get(f"/api/support/return_refund/{rr.refund_request_id}")
+    assert resp.status_code == 200 and resp.json() is None
+    assert client.get(f"/api/support/return_refund/9999999").json() is None  # identical to an id that does not exist
+    assert client.get(f"/api/support/return_refund/by_order/{order_id}").json() == []
+
+
+def test_refund_request_gets_require_sign_in(client, redis_client):
+    client.post("/api/auth/logout")
+    assert client.get("/api/support/return_refund/1").status_code in (401, 403)
+    assert client.get("/api/support/return_refund/by_order/1").status_code in (401, 403)
+
+
+def test_process_and_chat_return_400_when_the_refund_request_vanished_from_redis(client, redis_client):
+    thread_id, rr, _ = _start_return_refund(client)
+    redis_client.delete(f"rr:{rr.refund_request_id}")  # Redis flushed/restarted; the sqlite checkpoint still points at it
+    resp = client.post("/api/support/return_refund/process", json={"thread_id": thread_id, "turn_off_slack_integration_for_test": True})
+    assert resp.status_code == 400
+    resp = client.post("/api/support/return_refund/chat", json={"thread_id": thread_id, "user_conversation": "hello?"})
+    assert resp.status_code == 400
+
     
     

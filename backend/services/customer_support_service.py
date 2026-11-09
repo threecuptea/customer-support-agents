@@ -6,7 +6,7 @@ from langchain_core.messages import HumanMessage
 from models.customer_support_model import ExchangeOrReturnOutput, GeneralSupportRequest, OrderInitRequest, OrderInitResponse, \
     GenericChatInput, SummarizeOnExit, OrderToReturn, Order, ExchangeOrReturnInput, GenericResponse, InitialReturnRefundResponse, RefundRequest, \
     ReturnRefundProcessRequest, ReturnRefundProcessResponse, ReturnRefundChatResponse
-from services.ownership import check_context_owner, check_thread_owner
+from services.ownership import check_context_owner, check_thread_owner, owns_refund_request, session_email
 import uuid
 import logging
 from workflow.customer_support_utils import check_if_order_to_return_in_valid_state, group_memory
@@ -193,7 +193,6 @@ async def invoke_return_refund_init_workflow(order_to_return: OrderToReturn, req
             thread_id = thread_id,
             response = customer_support_state["response"],
             initial_return_refund_decision = customer_support_state["initial_return_refund_decision"],
-            refund_request_to_process = rr_in_process,  # for backward compatibility
             rr_in_process = rr_in_process,
             rr_being_processed = customer_support_state["rr_being_processed"],
         )
@@ -205,6 +204,21 @@ async def invoke_return_refund_init_workflow(order_to_return: OrderToReturn, req
         error_msg = f"Error start a return refund request for thread: {order_to_return.thread_id}"
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
+
+async def _require_refund_request_in_redis(request: Request, rr_id_in_process: int) -> None:
+    """The LangGraph checkpoint (sqlite) outlives Redis (a cache that can be flushed/restarted). If the refund
+    request that the thread points to is gone, answer a clean 400 instead of letting a node crash with a 500."""
+    try:
+        rr = await request.app.state.redis_adapter.retrieve_refund_request(rr_id_in_process)
+    except Exception as exc:
+        logger.exception("Error retrieving refund request %s", rr_id_in_process)
+        raise HTTPException(status_code=500, detail=f"Error retrieving refund request: {exc}")
+    if rr is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Return/ refund request not found or expired. Please Exit and re-login.",
+        )
+
 
 async def invoke_return_refund_process_workflow(request_to_process: ReturnRefundProcessRequest, request: Request) -> ReturnRefundProcessResponse:
     graph = request.app.state.support_graph
@@ -218,6 +232,7 @@ async def invoke_return_refund_process_workflow(request_to_process: ReturnRefund
             status_code=400,
             detail="Return/ refund session not found or expired. Please Exit and re-login.",
         )
+    await _require_refund_request_in_redis(request, rr_id_in_process)
     if existing_state.values.get("rr_being_processed"):
         raise HTTPException(
             status_code=400,
@@ -236,12 +251,11 @@ async def invoke_return_refund_process_workflow(request_to_process: ReturnRefund
         if rr_in_process and rr_in_process.status == "wait_for_manual_review" and integrate_slack and not turn_off_slack_integration_for_test:
             from adapters.slack_adapter import send_interactive_blocks_payload
             await send_interactive_blocks_payload(thread_id, rr_in_process)
-        # I can rename refund_request_to_process to refund_request_in_process or temp_refund_request to signal to UI that can be subject to change if the status is wait_for_manual_review.
+        # rr_in_process is a snapshot: it can change after a CSR presses Approve/Reject/Flag in Slack
+        # while the status is wait_for_manual_review.
         return ReturnRefundProcessResponse(
             thread_id = thread_id,
             response = customer_support_state["response"],
-            assigned_refund_request_id = customer_support_state["rr_id_in_process"], # for backward compatibility
-            refund_request_to_process = rr_in_process, # for backward compatibility
             rr_in_process = rr_in_process,
             rr_being_processed = customer_support_state["rr_being_processed"],
         )
@@ -262,6 +276,7 @@ async def invoke_return_refund_chat_workflow(support: GenericChatInput, request:
             status_code=400,
             detail="Return/ refund session not found or expired. Please Exit and re-login.",
         )
+    await _require_refund_request_in_redis(request, rr_id_in_process)
     try:
         message = HumanMessage(content= support.user_conversation)
         initial_state = {
@@ -283,21 +298,29 @@ async def invoke_return_refund_chat_workflow(support: GenericChatInput, request:
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
 
-async def retrieve_refund_request(refund_request_id: int, request: Request) -> RefundRequest | None:    
+async def retrieve_refund_request(refund_request_id: int, request: Request) -> RefundRequest | None:
+    session_email(request)  # 401 if not signed in (before touching Redis)
     try:
-        return await request.app.state.redis_adapter.retrieve_refund_request(refund_request_id)
+        refund_request = await request.app.state.redis_adapter.retrieve_refund_request(refund_request_id)
     except Exception as exc:
         error_msg = f"Error retrieving refund request by ID: {refund_request_id}"
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
+    # Ids are sequential and guessable: someone else's request looks exactly like a missing one (null),
+    # so the endpoint cannot be used to discover which ids exist.
+    if refund_request is None or not owns_refund_request(request, refund_request):
+        return None
+    return refund_request
 
 async def retrieve_refund_requests_by_order(order_id: int, request: Request) -> list[RefundRequest]:
+    session_email(request)
     try:
-        return await request.app.state.redis_adapter.retrieve_refund_requests_by_order(order_id)
+        refund_requests = await request.app.state.redis_adapter.retrieve_refund_requests_by_order(order_id)
     except Exception as exc:
         error_msg = f"Error retrieving refund requests by order ID: {order_id}"
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
+    return [rr for rr in refund_requests if owns_refund_request(request, rr)]
        
 async def invoke_summarize_on_exit(support: SummarizeOnExit, request: Request):
     graph = request.app.state.support_graph

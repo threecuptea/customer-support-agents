@@ -31,6 +31,11 @@ def check_context_owner(request: Request, customer_context) -> None:
         raise _forbidden()
 
 
+def owns_refund_request(request: Request, refund_request) -> bool:
+    """True if the refund request belongs to the signed-in customer (compared by email)."""
+    return _norm(refund_request.customer.email) == session_email(request)
+
+
 async def check_thread_owner(graph, thread_id: str, request: Request) -> None:
     """403 if the thread already exists and belongs to someone else. A thread with no state yet is not owned."""
     email = session_email(request)
