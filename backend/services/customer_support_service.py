@@ -2,18 +2,20 @@ from __future__ import annotations
 
 from fastapi import Request, HTTPException
 import os
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 from models.customer_support_model import ExchangeOrReturnOutput, GeneralSupportRequest, OrderInitRequest, OrderInitResponse, \
     GenericChatInput, SummarizeOnExit, OrderToReturn, Order, ExchangeOrReturnInput, GenericResponse, InitialReturnRefundResponse, RefundRequest, \
     ReturnRefundProcessRequest, ReturnRefundProcessResponse, ReturnRefundChatResponse
-from memory import load_user_memory
-from services.ownership import check_context_owner, check_thread_owner
+from services.ownership import check_context_owner, check_thread_owner, owns_refund_request, session_email
 import uuid
 import logging
-from workflow.customer_support_utils import check_if_order_to_return_in_valid_state
+from workflow.customer_support_utils import check_if_order_to_return_in_valid_state, group_memory
+
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
+
+integrate_slack = os.getenv("INTEGRATE_SLACK", "false").lower() == "true"
 
 
 async def invoke_general_support_workflow(support: GeneralSupportRequest, request: Request) -> GenericResponse:
@@ -23,15 +25,8 @@ async def invoke_general_support_workflow(support: GeneralSupportRequest, reques
         await check_thread_owner(graph, support.thread_id, request)
     thread_id = support.thread_id if support.thread_id else str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
-
-    messages = []
-    memory = await load_user_memory(graph.store, support.customer_context.customer_id)
-    if memory:
-        messages.append(SystemMessage(content=f"Previous conversations:\n{memory}"))
-    messages.append(HumanMessage(content= support.general_inquiry))
     initial_state = {
-            "messages": messages,
-            "customer_name": " ".join([support.customer_context.title, support.customer_context.last_name]),
+            "messages": [HumanMessage(content= support.general_inquiry)],
             "customer_context": support.customer_context,
             "support_category": "general/ others",
             "general_inquiry": support.general_inquiry,
@@ -39,13 +34,18 @@ async def invoke_general_support_workflow(support: GeneralSupportRequest, reques
             "faq_match_evals": None,
             "general_issue_resolved": False,
             "summarize_on_exit": False,
-    }    
+    }
+    # {history, human_reviews}
+    memory_dict = await group_memory(store= graph.store, user_id= support.customer_context.customer_id, thread_id= support.thread_id)
+    # Remove history as SystemMessage so that summary won't include history
+    if memory_dict:
+        initial_state.update(memory_dict)
     try:
-       customer_support_state  = await graph.ainvoke(initial_state, config)
-       return GenericResponse(
+        customer_support_state  = await graph.ainvoke(initial_state, config)
+        return GenericResponse(
            thread_id=thread_id,
            response=customer_support_state["response"],
-       )
+        )
 
     except Exception as exc:
         error_msg = "Error starting customer-support general-inquiry"
@@ -59,15 +59,11 @@ async def invoke_order_init_workflow(support: OrderInitRequest, request: Request
         await check_thread_owner(graph, support.thread_id, request)
     thread_id = support.thread_id if support.thread_id else str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
-
-    messages = []
-    memory = await load_user_memory(graph.store, support.customer_context.customer_id)
-    if memory:
-        messages.append(SystemMessage(content=f"Previous conversations:\n{memory}"))         
-    messages.append(HumanMessage(content= f"Order inquiry: {support.order_number_provided}"))
+    # We can add "human_escalates" later. history is pretty steady. However, external human_reviews and human_escalates can come any time.
+    memory_dict = await group_memory(store= graph.store, user_id= support.customer_context.customer_id, thread_id= support.thread_id)
+    # Remove history as SystemMessage so that summary won't include history
     initial_state = {
-            "messages": messages,
-            "customer_name": " ".join([support.customer_context.title, support.customer_context.last_name]),
+            "messages": [HumanMessage(content= f"Order inquiry: {support.order_number_provided}")],
             "customer_context": support.customer_context,
             "support_category": "order_inquery",
             "order_number_provided": support.order_number_provided,
@@ -79,7 +75,9 @@ async def invoke_order_init_workflow(support: OrderInitRequest, request: Request
             "order_prior_topic": None,
             "escalation_reason": None,
             "summarize_on_exit": False,
-    }    
+    }
+    if memory_dict:
+        initial_state.update(memory_dict)
     try:
        customer_support_state  = await graph.ainvoke(initial_state, config)
        return OrderInitResponse(
@@ -97,18 +95,26 @@ async def invoke_order_continue_workflow(support: GenericChatInput, request: Req
     thread_id = support.thread_id
     await check_thread_owner(graph, thread_id, request)
     config = {"configurable": {"thread_id": thread_id}}
-    # We cannot inject long-terms memory for each invoke. That should come from `invoke_order_init_workflow``
+  
     # Guard against a thread_id that was never initialized via /order/init (or whose init failed to find
     # an order): route_branch/order_continue_chat_node assume target_order is already populated, so without
     # this check a stale/uninitialized thread_id would crash the graph instead of returning a clear error.
     existing_state = await graph.aget_state(config)
-    if not existing_state.values.get("target_order"):
+    if not existing_state.values.get("target_order") or not existing_state.values.get("customer_context"):
         raise HTTPException(
             status_code=400,
             detail="Order inquiry session not found or expired. Please restart from the order selection screen.",
         )
+    initial_state = {
+        "messages": [HumanMessage(content= support.user_conversation)]
+    }
+
+    # history is pretty steady and has been captured in initial states. We like to capture only the latest external human_reviews and human_escalates.
+    memory_dict = await group_memory(store= graph.store, user_id= existing_state.values.get("customer_context").customer_id, thread_id= thread_id, include_history=False)
+    if memory_dict:
+        initial_state.update(memory_dict)
     try:
-       customer_support_state  = await graph.ainvoke({"messages": [HumanMessage(content= support.user_conversation)]}, config)
+       customer_support_state  = await graph.ainvoke(initial_state, config)
        # escalation_reason is for the future use: communication to CSR in slack
        return GenericResponse(
            thread_id=thread_id,
@@ -165,29 +171,30 @@ async def invoke_return_refund_init_workflow(order_to_return: OrderToReturn, req
         # verify if the target order and order to return are in a valid state to start a return refund.
         target_order: Order = existing_state.values.get("target_order")
         check_if_order_to_return_in_valid_state(order_to_return, target_order)
-        messages = []
-        memory = await load_user_memory(graph.store, existing_state.values.get("customer_context").customer_id)
-        if memory:
-            messages.append(SystemMessage(content=f"Previous conversations:\n{memory}"))  
-        messages.append(HumanMessage(content= f"Initialize return refund: {target_order.order_id}"))
         initial_state = {
-            "messages": messages,
+            "messages": [HumanMessage(content= f"Initialize return refund: {target_order.order_id}")],
             "support_category": "return_refund",
             "order_to_return": order_to_return,
             "initial_return_refund_decision": None,
-            "refund_request_to_process": None,
             "proceed_to_process_return_refund": False, 
-            "assigned_refund_request_id":0,
             "desire_to_chat_return_refund":False,
             "request_human_review_return_refund": False,
             "notes_for_human_review_override": None,
+            "rr_id_in_process": 0,
+            "rr_being_processed": False,
         }
+        memory_dict = await group_memory(store= graph.store, user_id= existing_state.values.get("customer_context").customer_id, thread_id= thread_id, include_history=False)
+        if memory_dict:
+            initial_state.update(memory_dict)
+
         customer_support_state  = await graph.ainvoke(initial_state, config)
+        rr_in_process = await request.app.state.redis_adapter.retrieve_refund_request(customer_support_state["rr_id_in_process"])
         return InitialReturnRefundResponse(
             thread_id = thread_id,
             response = customer_support_state["response"],
             initial_return_refund_decision = customer_support_state["initial_return_refund_decision"],
-            refund_request_to_process = customer_support_state["refund_request_to_process"],
+            rr_in_process = rr_in_process,
+            rr_being_processed = customer_support_state["rr_being_processed"],
         )
     except ValueError as verr:
         error_msg = f"Error start a return refund request for thread: {order_to_return.thread_id}"
@@ -198,39 +205,62 @@ async def invoke_return_refund_init_workflow(order_to_return: OrderToReturn, req
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
 
+async def _require_refund_request_in_redis(request: Request, rr_id_in_process: int) -> None:
+    """The LangGraph checkpoint (sqlite) outlives Redis (a cache that can be flushed/restarted). If the refund
+    request that the thread points to is gone, answer a clean 400 instead of letting a node crash with a 500."""
+    try:
+        rr = await request.app.state.redis_adapter.retrieve_refund_request(rr_id_in_process)
+    except Exception as exc:
+        logger.exception("Error retrieving refund request %s", rr_id_in_process)
+        raise HTTPException(status_code=500, detail=f"Error retrieving refund request: {exc}")
+    if rr is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Return/ refund request not found or expired. Please Exit and re-login.",
+        )
+
+
 async def invoke_return_refund_process_workflow(request_to_process: ReturnRefundProcessRequest, request: Request) -> ReturnRefundProcessResponse:
     graph = request.app.state.support_graph
     thread_id = request_to_process.thread_id
     await check_thread_owner(graph, thread_id, request)
     config = {"configurable": {"thread_id": thread_id}}
     existing_state = await graph.aget_state(config)
-    refund_request: RefundRequest = existing_state.values.get("refund_request_to_process")
-    if not refund_request:
+    rr_id_in_process = existing_state.values.get("rr_id_in_process")
+    if not rr_id_in_process:
         raise HTTPException(
             status_code=400,
             detail="Return/ refund session not found or expired. Please Exit and re-login.",
         )
-    if existing_state.values.get("assigned_refund_request_id"):
+    await _require_refund_request_in_redis(request, rr_id_in_process)
+    if existing_state.values.get("rr_being_processed"):
         raise HTTPException(
             status_code=400,
             detail="This return/ refund request has already been processed.",
         )
     try:
-        message = HumanMessage(content= f"Please process return refund for order id: {refund_request.returned_order.origin_order_id}")
+        message = HumanMessage(content= f"Please process return refund for order id: {existing_state.values.get('order_number_provided')}")
         initial_state = {
             "messages": [message],
             "proceed_to_process_return_refund": True,
             "notes_for_human_review_override": request_to_process.notes_for_human_review_override
         }
         customer_support_state  = await graph.ainvoke(initial_state, config)
+        rr_in_process = await request.app.state.redis_adapter.retrieve_refund_request(customer_support_state["rr_id_in_process"])
+        turn_off_slack_integration_for_test = request_to_process.turn_off_slack_integration_for_test
+        if rr_in_process and rr_in_process.status == "wait_for_manual_review" and integrate_slack and not turn_off_slack_integration_for_test:
+            from adapters.slack_adapter import send_interactive_blocks_payload
+            await send_interactive_blocks_payload(rr_in_process)
+        # rr_in_process is a snapshot: it can change after a CSR presses Approve/Reject/Flag in Slack
+        # while the status is wait_for_manual_review.
         return ReturnRefundProcessResponse(
             thread_id = thread_id,
             response = customer_support_state["response"],
-            assigned_refund_request_id = customer_support_state["assigned_refund_request_id"],
-            refund_request_to_process = customer_support_state["refund_request_to_process"],
+            rr_in_process = rr_in_process,
+            rr_being_processed = customer_support_state["rr_being_processed"],
         )
     except Exception as exc:
-        error_msg = f"Error process a return refund request for the order: {refund_request.returned_order.origin_order_id}"
+        error_msg = f"Error process a return refund request for the order: {existing_state.values.get('order_number_provided')}"
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
 
@@ -240,18 +270,22 @@ async def invoke_return_refund_chat_workflow(support: GenericChatInput, request:
     await check_thread_owner(graph, thread_id, request)
     config = {"configurable": {"thread_id": thread_id}}
     existing_state = await graph.aget_state(config)
-    refund_request: RefundRequest = existing_state.values.get("refund_request_to_process")
-    if not refund_request:
+    rr_id_in_process = existing_state.values.get("rr_id_in_process")
+    if not rr_id_in_process:
         raise HTTPException(
             status_code=400,
             detail="Return/ refund session not found or expired. Please Exit and re-login.",
         )
+    await _require_refund_request_in_redis(request, rr_id_in_process)
     try:
         message = HumanMessage(content= support.user_conversation)
         initial_state = {
             "messages": [message],
             "desire_to_chat_return_refund": True,
         }
+        memory_dict = await group_memory(store= graph.store, user_id= existing_state.values.get("customer_context").customer_id, thread_id= thread_id, include_history=False)
+        if memory_dict:
+            initial_state.update(memory_dict)
         customer_support_state  = await graph.ainvoke(initial_state, config)
         return ReturnRefundChatResponse(
             thread_id = thread_id,
@@ -260,11 +294,34 @@ async def invoke_return_refund_chat_workflow(support: GenericChatInput, request:
         )
         
     except Exception as exc:
-        error_msg = f"Error chat about a return refund request for thread: {refund_request.returned_order.origin_order_id}"
+        error_msg = f"Error chat about a return refund request for thread: {thread_id}"
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
 
-                
+async def retrieve_refund_request(refund_request_id: int, request: Request) -> RefundRequest | None:
+    session_email(request)  # 401 if not signed in (before touching Redis)
+    try:
+        refund_request = await request.app.state.redis_adapter.retrieve_refund_request(refund_request_id)
+    except Exception as exc:
+        error_msg = f"Error retrieving refund request by ID: {refund_request_id}"
+        logger.exception(error_msg)
+        raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
+    # Ids are sequential and guessable: someone else's request looks exactly like a missing one (null),
+    # so the endpoint cannot be used to discover which ids exist.
+    if refund_request is None or not owns_refund_request(request, refund_request):
+        return None
+    return refund_request
+
+async def retrieve_refund_requests_by_order(order_id: int, request: Request) -> list[RefundRequest]:
+    session_email(request)
+    try:
+        refund_requests = await request.app.state.redis_adapter.retrieve_refund_requests_by_order(order_id)
+    except Exception as exc:
+        error_msg = f"Error retrieving refund requests by order ID: {order_id}"
+        logger.exception(error_msg)
+        raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
+    return [rr for rr in refund_requests if owns_refund_request(request, rr)]
+       
 async def invoke_summarize_on_exit(support: SummarizeOnExit, request: Request):
     graph = request.app.state.support_graph
     thread_id = support.thread_id

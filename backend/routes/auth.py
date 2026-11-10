@@ -9,7 +9,7 @@ from models.auth_model import AuthRequest, AuthResponse
 from models.customer_support_model import CustomerContext
 from collections.abc import AsyncGenerator
 from services.auth_service import validate_populate_context
-from services.demo_data import adjust_days_demo_data_testable
+from models.demo_data import adjust_days_demo_data_testable
 
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))

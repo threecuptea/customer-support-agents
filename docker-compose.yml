@@ -12,3 +12,20 @@ services:
       # /app/data/<filename> — mounting it here is what makes that durable.
       - ./data:/app/data
     restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: custom-support-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server 
+      --requirepass ${REDIS_PASSWORD}
+      --appendonly yes
+      --save 60 1
+    volumes:
+      - redis_data:/data
+
+volumes:
+  redis_data:

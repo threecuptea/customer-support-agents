@@ -124,6 +124,7 @@ class RefundRequest(BaseModel):
     decided_by: Annotated[str, Field(min_length=1)] | None = None
     decision_reason: Annotated[str, Field(min_length=1, max_length=MAX_REASON_CHARS)] | None = None
     decided_date: datetime | None = None
+    customer: Customer
     returned_order: ReturnedOrder
 
 class FAQMatchEvals(BaseModel):
@@ -155,8 +156,9 @@ class CustomerSupportState(MessagesState):
     We will summarize `messages` so to prevent its size from growing. 
     """
     response: str = ""
-    summary: str
-    customer_name: str
+    history: str = "" # conversation of previous visits stored in memory
+    summary: str = "" # conversation of this visit stored or will be stored in memory
+    human_reviews: str = ""
     customer_context: CustomerContext
     support_category: Literal["order_inquery", "exchange_or_return", "return_refund", "general/ others"] = 'general/ others'
     general_inquiry: str
@@ -179,13 +181,13 @@ class CustomerSupportState(MessagesState):
     special_exchange_handling: bool = False
     order_to_return: OrderToReturn
     initial_return_refund_decision: ReturnRefundInitialDecision
-    refund_request_to_process: RefundRequest = None
     proceed_to_process_return_refund: bool = False
-    assigned_refund_request_id: int = 0
     desire_to_chat_return_refund: bool = False
     request_human_review_return_refund: bool = False
     notes_for_human_review_override: str = None
     summarize_on_exit: bool = False
+    rr_id_in_process: int = 0 # This is the ID of the refund request that we are actively working on.  It exists after a refund request is initiated and before it is fully processed.
+    rr_being_processed: bool = False
 
 # Unfortunately we have to know what items to be return to devide
 class ReturnRefundInitialDecision(BaseModel):
@@ -194,7 +196,14 @@ class ReturnRefundInitialDecision(BaseModel):
                                  OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS,
                                  OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT,
                                  OrderRefundStatus.ORDER_INVALID_REFUNDABLE_STATE]
-    
+
+class Customer(BaseModel):
+    customer_id: Annotated[int, Field(gt=0)]
+    title: Literal["Mr.", "Ms.", "Mrs.", "Dr.", "Mx."] = "Mx."
+    first_name: Annotated[str, Field(min_length=1)]
+    last_name: Annotated[str, Field(min_length=1)]
+    email: Annotated[str, Field(min_length=1)]
+
  # latest_orders should be by date instead of by count. For example, order_date within the last 45 days.
  # UI should be able to display the summary of recent orders in descending order so that the customer can choose
  # which order is what he/ she is concerned about.   
@@ -257,10 +266,10 @@ class ExchangeOrReturnInput(BaseModel):
 class ExchangeOrReturnOutput(GenericResponse):
     special_exchange_handling: bool = False
 
-
 class InitialReturnRefundResponse(GenericResponse):
     initial_return_refund_decision: ReturnRefundInitialDecision
-    refund_request_to_process: RefundRequest | None = None
+    rr_in_process: RefundRequest | None = None
+    rr_being_processed: bool = False
 
 class ReturnRefundStructuredOutput(BaseModel):
     response: str
@@ -269,10 +278,11 @@ class ReturnRefundStructuredOutput(BaseModel):
 class ReturnRefundProcessRequest(BaseModel):
     thread_id: Annotated[str, Field(min_length=1)]
     notes_for_human_review_override: str | None = None
+    turn_off_slack_integration_for_test: bool = False
 
 class ReturnRefundProcessResponse(GenericResponse):
-    refund_request_to_process: RefundRequest
-    assigned_refund_request_id: Annotated[int, Field(gt=0)]
+    rr_in_process: RefundRequest | None = None
+    rr_being_processed: bool = False
 
 class ReturnRefundChatResponse(GenericResponse):
     request_human_review_return_refund: bool = False

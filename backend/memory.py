@@ -35,23 +35,57 @@ def get_active_store() -> Optional[BaseStore]:
 
 
 async def load_user_memory(
-    store: BaseStore, user_id: Any, limit: int = 3
-) -> str:
+    store: BaseStore, user_id: Any, limit: int = 5
+) -> dict[str, str]:
     """Return a short bulleted summary of what we remember about the user."""
     #TODO load the last X days
     if not store or not user_id:
-        return ""
+        return {}
+    # AsyncSqliteStore implementation used for long-term memory in LangGraph / LangChain: Regular Searches (No Vector Index): Results are ordered by updated_at DESC 
     try:
         items = await store.asearch(_namespace(user_id), limit=limit)
         if items:
-            notes = ["on " + i.value.get("timestamp", "") + " "+ i.value.get("text", "") for i in items if i.value.get("text")]
-            return "\n".join(f"- {n}" for n in notes)
+            return {i.key: "on " + datetime.fromtimestamp(float(i.value.get("timestamp", 0.0)), tz=UTC).strftime("%Y-%m-%d %H:%M:%S") + " UTC "+ i.value.get("text", "") for i in items if i.value.get("text")}
         else:
-            return ""
+            return {}
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("Memory load failed: %s", exc)
-        return ""
-    
+        return {}
+
+
+def clean_user_memory_for_key(store: BaseStore, user_id: Any, key: str) -> None:
+    """Delete all memory for a user."""
+    if not store or not user_id:
+        return
+    try:
+        store.delete(_namespace(user_id), key)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Memory clean failed: %s", exc)   
+
+def clean_user_memory(store: BaseStore, user_id: Any) -> None:
+    """Delete all memory for a user."""
+    if not store or not user_id:
+        return
+    try:
+        items = store.search(_namespace(user_id))
+        if items:
+            for i in items:
+                store.delete(_namespace(user_id), i.key)
+
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Memory clean failed: %s", exc)    
+
+HITL_KEY_PREFIX = "hitl-"
+
+
+def hitl_memory_key(refund_request_id: int) -> str:
+    """Memory key of a human review result. The refund request id is globally unique (Redis INCR), so no thread id is needed."""
+    return f"{HITL_KEY_PREFIX}{refund_request_id}"
+
+
+def is_hitl_key(key: str) -> bool:
+    return key.startswith(HITL_KEY_PREFIX)
+
 
 # Need to summarize the conversation and how to summarize the conversation.
 async def save_user_memory(
@@ -62,6 +96,6 @@ async def save_user_memory(
         return
     try:
         # It will just override it if the namespace and the key are the same 
-        await store.aput(_namespace(user_id), thread_id,  {"text": text, "timestamp": datetime.now(UTC).strftime("%Y-%m-%d")})
+        await store.aput(_namespace(user_id), thread_id,  {"text": text, "timestamp": datetime.now(UTC).timestamp()})
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("Memory save failed: %s", exc)

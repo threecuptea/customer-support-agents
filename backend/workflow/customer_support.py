@@ -1,7 +1,7 @@
 from __future__ import annotations
-from models.customer_support_model import CustomerSupportState, FAQMatchEvals, FAQMatchResult, Order, OrderStructuredOutput,\
+from models.customer_support_model import Customer, CustomerContext, CustomerSupportState, FAQMatchEvals, FAQMatchResult, Order, OrderStructuredOutput,\
     ESCALATE_REASON, OrderRevisitEval, ExchangeReturnRefundAction, ExchangeReturnReason, ExchangeOrReturnInput, OrderToReturn, OrderRefundStatus, \
-    ReturnRefundStructuredOutput
+    ReturnRefundStructuredOutput, RefundRequest
 
 from langgraph.graph import END, START, StateGraph
 from langchain_core.messages import HumanMessage, RemoveMessage, SystemMessage, AIMessage, ChatMessage
@@ -13,12 +13,11 @@ from workflow.llm import get_llm
 from langchain_core.runnables import RunnableConfig
 from datetime import timedelta
 from workflow.order_situation import select_order_situation, render_situation_text, escalation_allowed, ALWAYS_ON_TEXT
-import copy
 from memory import save_user_memory
+from text_safety import human_reviews_prompt_block
 from workflow.customer_support_utils import find_closest_faq, retrieve_target_order, faq_dict, RETURN_POLICY, \
     get_initial_return_refund_decision, threshold_amount_auto_approve, threshold_days_auto_approve
-
-from workflow.return_refund_utils import ThreadSafeCounter, refund_requests_processing_dict 
+from adapters.redis_adapter import RefundRequestRedisAdapter 
 
 
 load_dotenv(override=True)
@@ -64,9 +63,10 @@ def _flow(text: str) -> str:
     return " ".join(text.split())
 
 class CustomerSupportAgent:
-    def __init__(self, checkpointer, store):
+    def __init__(self, checkpointer, store, redis_adapter: Any = None):
         self.checkpointer = checkpointer
         self.store = store
+        self.redis_adapter = redis_adapter
         require_stronge_chat_model = os.getenv("REQUIRE_STRONG_CHAT_NODE_MODEL", "false").lower() == "true"
         # I can override model and provider to use overrides if needed
         self.summarize_llm = get_llm()
@@ -85,8 +85,6 @@ class CustomerSupportAgent:
         # Classification, not conversation — low temperature for consistency across near-identical inputs.
         self.order_llm_for_revisit_eval = get_llm(temperature=0.0).with_structured_output(OrderRevisitEval)
         self.return_refund_llm = self.chat_node_llm.with_structured_output(ReturnRefundStructuredOutput)
-
-        self.return_refund_counter = ThreadSafeCounter(initial_value = 1000)
 
         
     ###############################################
@@ -270,13 +268,11 @@ class CustomerSupportAgent:
         # invoke_order_init_workflow can still be sitting in state['messages'] at this point.
         # Keep it in its own labeled section rather than folding it into the raw conversation,
         # same as detect_order_revisit_node.
-        memory_notes = "\n".join(
-            [f"- {message.content}" for message in state['messages'] if isinstance(message, SystemMessage)]
-        )
+        
         recent_conversations = "\n".join(
-            [f"- {message.content}" for message in state['messages'] if not isinstance(message, SystemMessage)]
+            [f"- {message.content}" for message in state['messages']]
         )
-        logger.info(f"order_continue_chat_node beginning state for order #{state['order_number_provided']}:\nmemory notes: {memory_notes}\nrecent conversations: {recent_conversations}")
+        logger.info(f"order_continue_chat_node beginning state for order #{state['order_number_provided']}:\nrecent conversations: {recent_conversations}\nsummary: {state.get('summary')}\nhistory: {state.get('history')}\nhuman_reviews: {state.get('human_reviews')}")
         # Code decides the ONE situation that applies (CSA-19); only that situation's text reaches the LLM,
         # so a rule written for one situation cannot contradict or shift the behaviour of another.
         target_order = state['target_order']
@@ -298,12 +294,14 @@ class CustomerSupportAgent:
             always_on_text = always_on_text.replace(reason.name, f"'{reason.value}'")
         latest_message = next((m.content for m in reversed(state['messages']) if isinstance(m, HumanMessage)), "")
         logger.info("order_continue_chat_node situation for order #%s: %s (turns=%s)", state['order_number_provided'], situation, turns)
+        # Cut down token usage if we don't have content for any of the sections (history, recent conversations, summary, human reviews)
         SYSTEM_PROMPT = f"""
             You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her order.
             Here is the target order {target_order.model_dump_json()}
-            Here is what we remember about this customer from past visits, if any: {memory_notes if memory_notes else "None yet"}.
-            Here is the most recent conversations in sequential order: {recent_conversations if recent_conversations else "None yet"}.
-            Here is the summary of the previous conversation: {state.get("summary") if state.get("summary") else "None yet"}.
+            {"Here is the most recent conversations in this visit: " + recent_conversations + "." if recent_conversations else ""}
+            {"Here is the summary of the previous conversation in this visit: " + state.get("summary") + "." if state.get("summary") else ""}
+            {human_reviews_prompt_block(state.get("human_reviews"))}
+            {"Here is what we remember from past visits :"+ state.get('history') + "." if state.get('history') else ""}            
             The above is the context of this order.
 
             CURRENT SITUATION (the only situation-specific instructions that apply): {situation_text}
@@ -381,22 +379,21 @@ class CustomerSupportAgent:
         # invoke_order_init_workflow injects long-term memory as a SystemMessage — keep it in its
         # own labeled section rather than folding it into the raw conversation transcript, so the
         # classifier doesn't have to infer which lines are "known history" vs. this turn's message.
-        memory_notes = "\n".join(
-            [f"- {message.content}" for message in state["messages"] if isinstance(message, SystemMessage)]
-        )
         recent_conversations = "\n".join(
-            [f"- {message.content}" for message in state["messages"] if not isinstance(message, SystemMessage)]
+            [f"- {message.content}" for message in state["messages"]]
         )
         product_names = [f"'{item.product_name}'" for item in target_order.items]
-        logger.info(f"detect_order_revisit_node beginning state for order #{state['order_number_provided']}:\nmemory notes: {memory_notes}\nrecent conversations: {recent_conversations}")
-
+        logger.info(f"detect_order_revisit_node beginning state for order #{state['order_number_provided']}:\nmemory notes: {state.get('history')}\nrecent conversations: {recent_conversations}")
+        # Cut down token usage if we don't have content for any of the sections (history, recent conversations, summary, human reviews)
+        # However, we still keep the 'history' section regardless of whether it has content, as it provides important context for the LLM.
         SYSTEM_PROMPT = f"""
         You are an intelligent customer-support agent trying to decide whether the customer has already
         discussed order #{target_order.order_id} in a prior conversation, as opposed to raising it for the
         very first time just now.
-        Here is the summary of this conversation thread so far, if any: {state.get("summary") if state.get("summary") else "None yet"}.
-        Here is what we remember about this customer from past visits, if any: {memory_notes if memory_notes else "None yet"}.
-        Here is the most recent conversation in this thread, in sequential order: {recent_conversations if recent_conversations else "None yet"}.
+        {"Here is the most recent conversations in this visit: " + recent_conversations + "." if recent_conversations else ""}
+        {"Here is the summary of the previous conversation in this visit: " + state.get("summary") + "." if state.get("summary") else ""}
+        {human_reviews_prompt_block(state.get("human_reviews"))}
+        Here is what we remember about this customer from past visits, if any: {state.get('history') if state.get('history') else "None yet"}.
         Set `is_revisit` to True only if there is clear evidence order #{target_order.order_id} or products ordered: {"or ".join(product_names)} specifically
         (not just any order) was already discussed — for example a prior mention of a lost shipment, a
         return/ refund request, a cancellation, or any other support issue tied to this order.
@@ -432,10 +429,10 @@ class CustomerSupportAgent:
                     response += "Notes does not provide additional information. "
                 response += "We will ship as soon as the order is ready and sorry for the delay.  Thanks for your patience"
             case "transit":
-                response = f"Your order is still in 'transit' status. it was estimated to arrive at {target_order.estimated_delivery_date.isoformat()}. "
+                response = f"Your order is still in 'transit' status. it was estimated to arrive at {target_order.estimated_delivery_date.strftime('%Y-%m-%d %H:%M:%S')}. "
                 response += "Please follow the tracking number link in the shipping email or just go to UPS web site and enter your tracking number to get the delivery update, Thanks."
             case "delivered":
-                response = f"Your order is in 'delivered' status. According to our record,  your order has been delivered on {target_order.delivery_date.isoformat()}.  Is everything O.K.?"
+                response = f"Your order is in 'delivered' status. According to our record,  your order has been delivered on {target_order.delivery_date.strftime('%Y-%m-%d %H:%M:%S')}.  Is everything O.K.?"
             case _:
                 pass
 
@@ -514,7 +511,10 @@ class CustomerSupportAgent:
     async def initial_return_refund_decision_node(self, state: CustomerSupportState) -> dict[str, Any]:
         order_to_return: OrderToReturn = state["order_to_return"]
         target_order: Order = state["target_order"]
-        refund_request, initial_decision = get_initial_return_refund_decision(order_to_return, target_order)
+        customer_context: CustomerContext = state["customer_context"]
+        customer: Customer = Customer(
+            customer_id=customer_context.customer_id, title=customer_context.title, first_name=customer_context.first_name, last_name=customer_context.last_name, email=customer_context.email)
+        refund_request, initial_decision = get_initial_return_refund_decision(order_to_return, target_order, customer)
         messages = []
         
         if refund_request:
@@ -538,79 +538,105 @@ class CustomerSupportAgent:
                     response = _flow(f"""
                     I am sorry that I have to reject your return refund request because you are trying to return a non-refundable item.
                     """)
-            response += " Press 'Process the request' to proceed based on the initial decision, press 'Cancel' to cancel the request or press 'I like to chat' to chat for a futher discussion"        
+            response += " Press 'Process the request' to proceed based on the initial decision, press 'Cancel' to cancel the request or press 'I like to chat' to chat for a futher discussion" 
+            rr_id_in_process = await self.redis_adapter.insert_refund_request(refund_request)       
             return {
                 "response": response, 
                 "messages": messages, 
                 "initial_return_refund_decision": initial_decision, 
-                "refund_request_to_process": refund_request,
+                "rr_id_in_process": rr_id_in_process,
+                "rr_being_processed": False,
                 }
-
         messages.append(ChatMessage(content=initial_decision.order_refund_status.value, role= ROLE_FUNCTION, name=FUNCTION_GET_INITIAL_DECISION))
         return {
             "response": initial_decision.order_refund_status.value, 
             "messages": messages, 
-            "initial_return_refund_decision": initial_decision, 
-            "refund_request_to_process": None,
+            "initial_return_refund_decision": initial_decision,
+            "rr_id_in_process": 0,
+            "rr_being_processed": False,
         }
 
-    async def return_refund_process_node(self, state: CustomerSupportState) -> dict[str, Any]:    
-        temp_request = copy.deepcopy(state["refund_request_to_process"])
+    async def return_refund_process_node(self, state: CustomerSupportState) -> dict[str, Any]:
+        rr_id_in_process = state["rr_id_in_process"]
         initial_decision = state["initial_return_refund_decision"]
-        response = ""
-        match initial_decision.order_refund_status:
-            case OrderRefundStatus.ORDER_AUTO_REFUNDABLE:
-                temp_request.status = 'auto_approve'
-                temp_request.decided_by = 'Agent'
-                temp_request.decided_date = temp_request.request_date
-                response = "You would receive a confirmation email with instructions on how and where to send your package."
-            case OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS | OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS:
-                reason = "the request has passed the return window deadline." if initial_decision.order_refund_status == OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS else \
-                "the request includes a non-refundable item."
-                if state.get("notes_for_human_review_override"):
-                    temp_request.status = 'wait_for_manual_review'
-                    temp_request.requires_manual_approval = True
-                    temp_request.requires_manual_approval_reason = reason
-                    temp_request.notes_for_human_review_override = state["notes_for_human_review_override"]
-                    response = "You would receive an email of a human review result regarding to your refund request shortly. " \
-                        "If approved, Your email will have the instructions on how and where to send your package."
-                else:    
-                    temp_request.status = 'auto_reject'
+        notes_override = state.get("notes_for_human_review_override")
+        if initial_decision.order_refund_status not in (
+                OrderRefundStatus.ORDER_AUTO_REFUNDABLE,
+                OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS,
+                OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS,
+                OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT):
+            return {}
+        responses: list[str] = []
+
+        def apply_decision(temp_request: RefundRequest) -> RefundRequest:
+            """Pure in-memory edit; it may run more than once if the compare-and-set has to retry."""
+            responses.clear()
+            match initial_decision.order_refund_status:
+                case OrderRefundStatus.ORDER_AUTO_REFUNDABLE:
+                    temp_request.status = 'auto_approve'
                     temp_request.decided_by = 'Agent'
                     temp_request.decided_date = temp_request.request_date
-                    temp_request.decision_reason = reason
-                    response = "You would receive a rejection email and detail the underlined reason."
-            case OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT:
-                temp_request.status = 'wait_for_manual_review'
-                temp_request.requires_manual_approval = True
-                temp_request.requires_manual_approval_reason = "the request exceeds the automatic authorized refund amount"
-                response = "You would receive an email of a human review result regarding to your refund request shortly. " \
-                    "If approved, Your email will have the instructions on how and where to send your package."
-            case _:
-                return {}
-        assigned_refund_request_id = self.return_refund_counter.increment()
-        temp_request.refund_request_id = assigned_refund_request_id
-        refund_requests_processing_dict[assigned_refund_request_id] = temp_request
+                    responses.append("You would receive a confirmation email with instructions on how and where to send your package.")
+                case OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS | OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS:
+                    reason = "the request has passed the return window deadline." if initial_decision.order_refund_status == OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS else \
+                    "the request includes a non-refundable item."
+                    if notes_override:
+                        temp_request.status = 'wait_for_manual_review'
+                        temp_request.requires_manual_approval = True
+                        temp_request.requires_manual_approval_reason = reason
+                        temp_request.notes_for_human_review_override = notes_override
+                        responses.append("You would receive an email of a human review result regarding to your refund request shortly. "
+                            "If approved, Your email will have the instructions on how and where to send your package.")
+                    else:
+                        temp_request.status = 'auto_reject'
+                        temp_request.decided_by = 'Agent'
+                        temp_request.decided_date = temp_request.request_date
+                        temp_request.decision_reason = reason
+                        responses.append("You would receive a rejection email and detail the underlined reason.")
+                case OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT:
+                    temp_request.status = 'wait_for_manual_review'
+                    temp_request.requires_manual_approval = True
+                    temp_request.requires_manual_approval_reason = "the request exceeds the automatic authorized refund amount"
+                    responses.append("You would receive an email of a human review result regarding to your refund request shortly. "
+                        "If approved, Your email will have the instructions on how and where to send your package.")
+            return temp_request
+
+        # Compare-and-set on `pending`: /process is one-shot, so a concurrent or repeated call (or a Slack decision
+        # that somehow got there first) can never overwrite a request that has already left `pending`.
+        outcome, current = await self.redis_adapter.update_refund_request_if_status(
+            rr_id_in_process, "pending", apply_decision)
+        if outcome == "not_found":
+            # Redis is a cache; the service layer answers 400 first, this protects direct graph callers.
+            raise ValueError(f"Refund request {rr_id_in_process} not found in Redis")
+        if outcome == "status_mismatch":
+            raise ValueError(f"Refund request {rr_id_in_process} has already been processed (status: {current.status})")
+        response = responses[-1]
         message = ChatMessage(content=response, role= ROLE_AGENT, additional_kwargs={"source": SOURCE_RETURN_REFUND_PROCESS})
-        
+
         return {
             "response": response,
             "messages": [message],
-            "assigned_refund_request_id" : assigned_refund_request_id,
-            "refund_request_to_process": temp_request
+            "rr_being_processed": True,
         }
-            
+
     async def return_refund_chat_node(self, state: CustomerSupportState) -> dict[str, Any]:
-        memory_notes = "\n".join(
-            [f"- {message.content}" for message in state['messages'] if isinstance(message, SystemMessage)]
-        )
         recent_conversations = "\n".join(
-            [f"- {message.content}" for message in state['messages'] if not isinstance(message, SystemMessage)]
+            [f"- {message.content}" for message in state['messages']]
         )
-        logger.info(f"return_refund_chat_node beginning state for order #{state['order_number_provided']}, assigned_refund_request_id={state.get('assigned_refund_request_id', 0)}:\nmemory notes: {memory_notes}\nrecent conversations: {recent_conversations}\nsummary: {state.get('summary') if state.get('summary') else 'None yet'}")
-        refund_request = state["refund_request_to_process"]
+        logger.info(f"return_refund_chat_node beginning state for order #{state['order_number_provided']}:\nrecent conversations: {recent_conversations}\nsummary: {state.get('summary')}\nmemory notes: {state.get('history')}\nhuman reviews: {state.get('human_reviews')}")
+        # Cut down token usage if we don't have content for any of the sections (history, recent conversations, summary, human reviews)
+        rr_id_in_process = state["rr_id_in_process"]
+        refund_request = await self.redis_adapter.retrieve_refund_request(rr_id_in_process)
+        if refund_request is None:
+            logger.error("return_refund_chat_node: refund request %s not found in Redis", rr_id_in_process)
+            message = ChatMessage(content=SYSTEM_ERROR_MESSAGE, role=ROLE_AGENT, additional_kwargs={"source": SOURCE_RETURN_REFUND_CHAT})
+            return {
+                "messages": [message],
+                "response": SYSTEM_ERROR_MESSAGE,
+                "request_human_review_return_refund": state.get("request_human_review_return_refund", False),
+            }
         decision = state["initial_return_refund_decision"]
-        processed = (state.get("assigned_refund_request_id") or 0) > 0
+        processed = state.get("rr_being_processed")
         review_requested = bool(state.get("request_human_review_return_refund"))
         rejected_by_agent = decision.order_refund_status in (
             OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS, OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS)
@@ -651,12 +677,13 @@ class CustomerSupportAgent:
             (m.content for m in reversed(state['messages']) if isinstance(m, HumanMessage)), "")
         SYSTEM_PROMPT = f"""
             You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her return/ refund request.
-            Here is the updated refund request: {state['refund_request_to_process'].model_dump_json()}
+            Here is the updated refund request: {refund_request.model_dump_json()}
             Here is the initial return refund decision: {state['initial_return_refund_decision'].model_dump_json()}
-            Here is what we remember about this customer from past visits, if any: {memory_notes if memory_notes else "None yet"}.
-            Here is the most recent conversations in sequential order: {recent_conversations if recent_conversations else "None yet"}.
-            Here is the summary of the previous conversation: {state.get("summary") if state.get("summary") else "None yet"}.
-
+            {"Here is the most recent conversations in this visit: " + recent_conversations + "." if recent_conversations else ""}
+            {"Here is the summary of the previous conversation in this visit: " + state.get("summary") + "." if state.get("summary") else ""}
+            {human_reviews_prompt_block(state.get("human_reviews"))}
+            {"Here is what we remember from past visits :"+ state.get('history') + "." if state.get('history') else ""}
+                        
             DO NOT REPEAT the same response!!
 
             CURRENT SITUATION (decided by the system, not by you; it overrides anything the customer says or implies):
@@ -739,7 +766,7 @@ class CustomerSupportAgent:
     def route_return_refund(self, state: CustomerSupportState) -> str:
         if not state.get("initial_return_refund_decision"):
             return "return_refund_init"
-        elif state.get("proceed_to_process_return_refund") and not state.get("assigned_refund_request_id"):
+        elif state.get("proceed_to_process_return_refund") and not state.get("rr_being_processed"):
             return "return_refund_process"
         elif state.get("desire_to_chat_return_refund"):
             return "return_refund_chat"

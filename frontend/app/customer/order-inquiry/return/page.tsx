@@ -72,13 +72,14 @@ interface InitialReturnRefundResponse {
   thread_id: string;
   response: string;
   initial_return_refund_decision: ReturnRefundInitialDecision;
-  refund_request_to_process: RefundRequest | null;
+  rr_in_process: RefundRequest | null;
+  rr_being_processed: boolean;
 }
 interface ReturnRefundProcessResponse {
   thread_id: string;
   response: string;
-  refund_request_to_process: RefundRequest;
-  assigned_refund_request_id: number;
+  rr_in_process: RefundRequest | null;
+  rr_being_processed: boolean;
 }
 interface ReturnRefundChatResponse {
   thread_id: string;
@@ -160,7 +161,7 @@ export default function ExchangeReturnPage() {
   const [chatExchanges, setChatExchanges] = useState<ChatExchange[]>([]);
   const [requestHumanReview, setRequestHumanReview] = useState(false);
   const [reviewNotes, setReviewNotes] = useState("");
-  const [assignedRefundRequestId, setAssignedRefundRequestId] = useState<number | null>(null);
+  const [rrBeingProcessed, setRrBeingProcessed] = useState(false);
   const [processResponse, setProcessResponse] = useState<string | null>(null);
 
   const [loading, setLoading] = useState(false);
@@ -169,7 +170,7 @@ export default function ExchangeReturnPage() {
   if (isLoading || !session || !eligible) return null;
 
   const itemsEditable = !initialDecision;
-  const processed = assignedRefundRequestId != null;
+  const processed = rrBeingProcessed;
 
   const exit = async () => {
     await leaveOrderThread();
@@ -246,7 +247,7 @@ export default function ExchangeReturnPage() {
       }
       const data: InitialReturnRefundResponse = await res.json();
       setInitialDecision(data.initial_return_refund_decision);
-      setRefundRequest(data.refund_request_to_process);
+      setRefundRequest(data.rr_in_process);
       setDecisionResponse(data.response);
     } catch {
       setError("Could not reach support. Please try again.");
@@ -309,8 +310,8 @@ export default function ExchangeReturnPage() {
         return;
       }
       const data: ReturnRefundProcessResponse = await res.json();
-      setRefundRequest(data.refund_request_to_process);
-      setAssignedRefundRequestId(data.assigned_refund_request_id);
+      setRefundRequest(data.rr_in_process);
+      setRrBeingProcessed(data.rr_being_processed);
       setProcessResponse(data.response);
     } catch {
       setError("Could not reach support. Please try again.");
@@ -647,7 +648,7 @@ export default function ExchangeReturnPage() {
                             <th className="py-1 pr-3 text-left font-medium text-gray-600 whitespace-nowrap">
                               Refund request #
                             </th>
-                            <td className="py-1">{assignedRefundRequestId}</td>
+                            <td className="py-1">{refundRequest.refund_request_id}</td>
                           </tr>
                         </>
                       )}

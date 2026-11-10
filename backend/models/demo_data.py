@@ -23,7 +23,8 @@ customer_order_status_map = {
     "sonya_ling1947@yahoo.com": [
         OrderRefundStatus.ORDER_IN_TRANSIT,
         OrderRefundStatus.ORDER_AUTO_REFUNDABLE],
-    "abby.phillip@cnn.com": [OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS],    
+    "abby.phillip@cnn.com": [OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS], 
+    "memory.testing@cnn.com": [OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT],   
 }
 
 
@@ -359,4 +360,32 @@ demo_customers = {
             ]
         }]  
     },
+    # Use this email only in group memory unit tests
+    "memory.testing@cnn.com": {
+            "customer_id": 32108,
+            "first_name": "Memory",
+            "last_name": "Testing",
+            "title": "Mr.",
+            "email": "memory.testing@cnn.com",
+            "latest_orders":[{
+                "order_id": 123466,
+                "order_date": datetime(2026, 7, 25, 21, 10, 0, tzinfo= _zoneinfo),
+                "total_amount_incl_tax": 607.73,
+                "tax_applied_rate": 0.095,
+                "status": "delivered",
+                "ship_date": datetime(2026, 7, 28, 19, 45, 0, tzinfo= _zoneinfo),
+                "estimated_delivery_date": datetime(2026, 8, 1, 14, 30, 0, tzinfo= _zoneinfo),
+                "tracking_number": "1Z9999998133999999",
+                "items": [{
+                    "product_id": "PRD-1100",
+                    "product_name": "12 pieces professional-grade Cookingware",
+                    "supplier_name": "Costal Trading",
+                    "unit_price": 555.00,
+                    "number_units": 1,
+                    "nonrefundable_item": False,
+                    
+                    },
+                ]
+            }]  
+        },
 }

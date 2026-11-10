@@ -1,12 +1,16 @@
 from __future__ import annotations
+from typing import Any
 
 from langchain_core.tools import tool
 from rapidfuzz import process, fuzz
-from models.customer_support_model import CustomerContext, Order, RefundRequest, ReturnRefundInitialDecision, FAQMatchResult, OrderToReturn, \
+from models.customer_support_model import Customer, CustomerContext, Order, RefundRequest, ReturnRefundInitialDecision, FAQMatchResult, OrderToReturn, \
     ReturnedOrderItem, ReturnedOrder, OrderRefundStatus
 from dotenv import load_dotenv
 import os
 from datetime import datetime, timedelta
+from langgraph.store.base import BaseStore
+from memory import load_user_memory, is_hitl_key
+
 
 load_dotenv(override= True)
 
@@ -169,12 +173,13 @@ def retrieve_target_order(context: CustomerContext, order_number: int) -> Order 
     return None
 
 
-def _populateRefundRequest(order_to_return: OrderToReturn, original_order: Order) -> RefundRequest:
+def _populateRefundRequest(order_to_return: OrderToReturn, original_order: Order, customer: Customer) -> RefundRequest:
     """
     Populate a RefundRequest object from an OrderToReturn object based upon the original Order and OrderItem
     Args:
         order_to_return: a simplified order of returned item with product_id and qty
         original_order: the original Order and OrderItem as references
+        customer: the Customer associated with the refund request
     Returns:
         a RefundRequest referencing a ReturnedOrder and list of ReturnedOrderItem
     Please notice that _check_if_order_to_return_in_valid_state in the customer_support_service.py 
@@ -203,7 +208,8 @@ def _populateRefundRequest(order_to_return: OrderToReturn, original_order: Order
         items = items)
     return RefundRequest(
         request_date= datetime.now(tz= original_order.order_date.tzinfo), 
-        returned_order= returned_order)
+        returned_order= returned_order,
+        customer= customer)
                
 def _calculate_amount_refund_incl_tax(refund_request: RefundRequest) -> float:
     """Calculate total refund amount including tax base upon `ReturnedOrder` and `ReturnedOrderItem` associated 
@@ -278,7 +284,7 @@ def check_if_order_to_return_in_valid_state(return_order: OrderToReturn, origina
             raise ValueError(f"The return {item_return.qty} units of {item_return.product_id} is {NOT_A_VALID_RETURN_QUANTITY}: {original_order.order_id}.")
     return True    
 
-def get_initial_return_refund_decision(return_order: OrderToReturn, original_order: Order) -> tuple[RefundRequest, ReturnRefundInitialDecision]:
+def get_initial_return_refund_decision(return_order: OrderToReturn, original_order: Order, customer: Customer) -> tuple[RefundRequest, ReturnRefundInitialDecision]:
     """ Get ReturnRefundDecision with OrderRefundStatus signals how we should handle return refund
         It goes through the following steps:
             check_if_order_to_return_in_valid_state:  to pre-check and flag/ exclude all abnormal cases
@@ -288,6 +294,8 @@ def get_initial_return_refund_decision(return_order: OrderToReturn, original_ord
     Args:
         return_order: OrderToReturn with items of product_id and quantity to return
         original_order: the referenced original Order
+        customer: the customer making the return/ refund request
+        
     Returns:
         RefundRequest so that the customer will know total amount will be refunded.
         ReturnRefundDecision with OrderRefundStatus
@@ -297,8 +305,35 @@ def get_initial_return_refund_decision(return_order: OrderToReturn, original_ord
     except ValueError as verr:
         # It should not come here. The service layer has validate before invoke the graph
         return (None, ReturnRefundInitialDecision(order_refund_status= OrderRefundStatus.ORDER_INVALID_REFUNDABLE_STATE))
-    refund_request: RefundRequest = _populateRefundRequest(return_order, original_order)
+    refund_request: RefundRequest = _populateRefundRequest(return_order, original_order, customer)
     refund_request.returned_order.estimated_amount_refund_incl_tax = _calculate_amount_refund_incl_tax(refund_request)
     
     initial_decision: ReturnRefundInitialDecision = _get_initial_return_refund_decision(refund_request)
     return (refund_request, initial_decision)
+
+
+async def group_memory(store: BaseStore, user_id: Any, limit: int = 5, thread_id: str | None = None, include_history: bool = True) -> dict[str, str]:
+    memory_dict = await load_user_memory(store, user_id, limit)
+    dict_returned = {}
+    # Should we group 'hitl-<refund_request_id>' keys into history or human_reviews?  I decide to group them into human review
+    # (they carry no thread id). The value does include refund request id as well as origin order id for reference
+    # It is possible that the customer come back to check the status of a previous refund request after logout
+    if memory_dict:
+        human_reviews = "\n".join(f"- {v}" for k, v in memory_dict.items() if is_hitl_key(k))
+        if human_reviews:
+            dict_returned["human_reviews"] = human_reviews
+        if thread_id:
+            if include_history:
+                history = "\n".join(f"- {v}" for k, v in memory_dict.items() if not k.startswith(thread_id) and not is_hitl_key(k))
+                if history:
+                    dict_returned["history"] = history
+        else:
+            if include_history:
+                history = "\n".join(f"- {v}" for k, v in memory_dict.items() if not is_hitl_key(k))
+                if history:
+                    dict_returned["history"] = history
+            
+    return dict_returned
+    
+
+

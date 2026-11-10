@@ -1,6 +1,6 @@
 import asyncio
 from fastapi.testclient import TestClient
-from services.demo_data import get_demo_customer
+from models.demo_data import get_demo_customer
     
 import pytest
 
@@ -9,14 +9,14 @@ from models.customer_support_model import CustomerContext, Order, FAQMatchEvals,
 from workflow.customer_support import PREFIX_LOST_SHIPMENT, CustomerSupportAgent, ESCALATE_MESSAGE, FUNCTION_FAQ_FUZZY_MATCH, SOURCE_FAQ_FUZZY_MATCH, SOURCE_FAQ_LLM_MATCH, \
     SOURCE_FAQ_LLM_EVALS, ROLE_FUNCTION, ROLE_AGENT, FAQ_MATCH_THRESHOLD, SYSTEM_ERROR_MESSAGE, SOURCE_ORDER_RETRIEVAL, SOURCE_ORDER_INQUIRY, PREFIX_ANSWER_QUESTION
     
-from langchain_core.messages import HumanMessage, ChatMessage, AIMessage
+from langchain_core.messages import HumanMessage, ChatMessage, AIMessage, RemoveMessage
 import uuid
 
 shared_thread_id = str(uuid.uuid4())
 shared_order_id = 12462
 
 
-@pytest.fixture()
+@pytest.fixture(scope="class")
 def auth_client():
     # `with` triggers the FastAPI lifespan so app.state.support_graph is built.
     with TestClient(app) as test_client:
@@ -24,7 +24,7 @@ def auth_client():
         customer_context = CustomerContext(**resp.json()[1])
         yield test_client, customer_context
 
-@pytest.fixture()
+@pytest.fixture(scope="class")
 def test_customer_context():
     return CustomerContext(**get_demo_customer("anderson.cooper@cnn.com"))
 
@@ -382,6 +382,8 @@ def test_api_invoke_order_continue_workflow_error(auth_client):
 def test_api_order_init_resets_order_turns_and_prior_topic(auth_client):
     client, customer_context = auth_client
     order_id = customer_context.latest_orders[0].order_id
+    # model_dump_json() returns a serialized string, 
+    # whereas model_dump(mode="json") returns a native Python dictionary containing only JSON-serializable
     payload = {"customer_context": customer_context.model_dump(mode="json"), "order_number_provided": order_id}
     thread_id = client.post("/api/support/order/init", json=payload).json()["thread_id"]
     client.post("/api/support/order/continue", json={"thread_id": thread_id, "user_conversation": "hello"})
@@ -506,5 +508,43 @@ def test_escalate_situation_for_order_continue_chat_with_fake_llm(test_customer_
     assert result["order_turns"] == 2
     assert ESCALATE_REASON.HELP_LOST_SHIPMENT in result["escalation_reason"]
     assert result["order_issue_escalated"] is True
+
+
+def test_summarize_node_with_fake_llm(test_customer_context):
+    messages = [HumanMessage(content="Order inquiry: 123463", id='1')]
+    messages.append(ChatMessage(content="Your order is in 'delivered' status. Is everything O.K.?", role= ROLE_AGENT, id='2'))
+    messages.append(HumanMessage(content="I have been looking around and I did not see the item delivered.", id='3'))
+    messages.append(AIMessage(content= "I suggest you to check if there is delivery photo from the UPS tracking link", additional_kwargs={
+                "source":SOURCE_ORDER_INQUIRY}, id='4'))
+    messages.append(HumanMessage(content="I checked the delivery photo and it shows the item was left at my door.", id='5'))
+    messages.append(AIMessage(content= "I see. Did you check the security camera footage ?", additional_kwargs={
+                "source":SOURCE_ORDER_INQUIRY}, id='6'))
+    messages.append(HumanMessage(content="I will check the security camera footage next", id='7'))
+
+    state = {
+        "messages": messages,
+        "customer_context": test_customer_context,
+    }
+    agent = CustomerSupportAgent(checkpointer=None, store=None)
+    response = "The customer reports that a lost shipment occurred despite the delivery photo showing it was left at their door and will check the security camera footage next."
+    class _FakeSummarizeLLM:
+            async def ainvoke(self, messages):
+                return AIMessage(content=response)
+            
+    agent.summarize_llm = _FakeSummarizeLLM()
+    config = {"configurable": {"thread_id": uuid.uuid4()}}
+
+    result = asyncio.run(agent.summarize_node(state, config=config))
+    assert "summary" in result
+    assert result["summary"] == response
+    assert "messages" in result
+    assert len(result["messages"]) == len(messages) - 2
+    for i, message in enumerate(result["messages"], start=1):
+        # RemoveMessage is a special message modifier used to delete specific messages from your graph's history permanently.
+        # MessagesState or the add_messages reducer are designed to append new updates, you cannot simply use standard Python list operations (like .pop() or slicing) on state["messages"] to delete history.
+        # The internal reducer intercepts these objects and handles the deletion and 5 messages will be removed from the history and leave 2.
+        assert isinstance(message, RemoveMessage)
+        assert message.id == str(i) # It coerces the integer id to a str in BaseMessage
+
 
     

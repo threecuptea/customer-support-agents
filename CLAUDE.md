@@ -66,7 +66,7 @@ I decide to build `customer-support-agents` in DEMO_MODE because return refund i
 
 ### Request flow summary
 
-The main workflow will create customer-support AI agents that help general FAQs, order inquiry and more importantly, automate refund request process.  However, human-in-the-loop approve/ reject/ flag workflow will get involved when requests exceeds certain thresholds: ex. refund amount > 500 (configurable) or disputable or non-refundable return/ refund request (escalated to human approval). 
+The main workflow will create customer-support AI agents that help general FAQs, order inquiry and more importantly, automate refund request process.  However, human-in-the-loop approve/ reject/ flag workflow will get involved when requests exceeds certain thresholds: ex. refund amount > 500 (configurable) or disputable or non-refundable return/ refund request (escalated to human approval).
 
 I plan to use Slack Bot interactivity to implement the approve/ reject/ flag workflow for return/ refund requests. I have already got n8n app (AI workflow automation) to integrate successfully with Slack Bot interactivity for the same workflow.  See [Slack Bot Interactivity Screenshot for the the approve/ reject/ flag workflow of a refund request request ](n8n-slack-interactivity/slack-screenshot-screenshot-refund-request-approval.png) and have configured `customer-support-dev` app mimicing `n8n-integration`'s and will code the main workflow soon.  
 
@@ -83,18 +83,7 @@ The return/ refund workflow here will be
 2. calculate total refund amount including tax
 3. figure out if return refund is eligible: orders exceeding the return window or try to return used or perishable items are non-refundable.
 
-Only auto refundable orders and human refundable orders are allowed to proceed and added to the return refund queue. For auto refundable orders, CSA will mark refund status `auto_approve` and send the confirmation letter (configurable) along with shipping labels if provided.  Refund requests requiring human approval will go to human_review node.  We will issue LangGraph `interrupt` statment and LangGraph will suspend the operation of current thread.  UI will tell the user: Customer support representative will review the refund request in Slack and will respond shortly.  The message should be in the response as usually.
-
-HITL `interrupt` will trigger sending customized Slack Interactivity message to Slack and also schedule a TTL (configured to 5 minutes) task and cache the task (key: thread_id, value: task) and  When huamn CSR press Approve or Reject or Flag button in Slack with optional reason, slack will post the response info along with `thread_id` and `refund_request_id` back as designed to our API webhook (The webhook in local environment will be exposed as a public URL via `ngrok` reverse proxy) which will 
-1. send ackowledgement to Slack
-2. update the refund request with Slack interactivity response
-3. call a fuction TBD to verify with thread-task cache if the TTL has been up, if not, cancel the task, clear the cache and calling `api/support/return/decide` 
-
-The TTL scheduled task will call `api/support/return/decide` if it is up.
-
-`api/support/return/decide` will issue Command(resume=xxx).  LangGraph will resume at the checkpoint following the `interrupt`.  The flow
-will check the refund request status to update the final result (HITL Slack interactivity response come in on time or TTL timeout on HITL and the response is not coming yet) of the state.
-
+Only auto refundable orders and human refundable orders are allowed to proceed and added to the return refund queue. For auto refundable orders, CSA will mark refund status `auto_approve` and send the confirmation letter (configurable) along with shipping labels if provided.  
 The above screen is for customers. There should be a separate screen for customer-support team.  From visibility perspective, `customer-support-agents`  is a small `multi-tenant` app.  It's recommended to use domain names(s) to configure customer-support team in production environment. 
 
 For `customer-support` team,  they cannot see order/ return inquiry screen.  However, they can see return/ refund requests report screen.  The initial phase will include  `Ask AI to draft customized customer-support letter` task. That will reference GET api/approval (codes are in `frontend/app/approval/page.tsx`).  Once the query/ task is filled in and submited, it will trigger POST  `api/approval/start`. Then, it will trigger `api/approval/decide` once the initiator choose approve/ edit/ request change with a reason. This means to demonstrate human approval gate.  Later, we will include return/ refund inquiry/ report by date range and status (auto-approval, manual approval, reject etc.).  
@@ -109,7 +98,7 @@ When human-in-the-loop step is needed, issue `interrupt` with key-value dictiona
 The customer will receive a confirmation email instead.  It's asynchronous and non-blocking in terms of system design.  It's blocking from the business perspective.  A return/ refund request won't move forward until a CSR review it.
 
 **Why do I decide not to use Langgraph interrupt - Command resume in return/ refund processing?**
-Once a thread is in `interrupted` state, we need to invoke with Command/ resume in order for the graph to operate normally.  If the app accidentally invoke the graph without Command/ resume, Langraph will issue a fresh `interrupt`. Yes, it will `re-interrupt`.  That might lead to a unknown consequence. Customer-support-agent is an interactive app with multiple endpoints.  We shouldn't block the customer from using the app after the interrupt. Then, we have to check if the thread is in `interrupted` state and invoke with Command/ resume for all endoints if it is.  Doing so will unblock the graph and defeat the purpose of `interrupted` which is blocking!!
+Once a thread is in `interrupted` state, we need to invoke with Command/ resume in order for the graph to operate normally.  If the app accidentally invoke the graph without Command/ resume, Langraph will issue a fresh `interrupt`. Yes, it will `re-interrupt`.  Customer-support-agent is an interactive app with multiple endpoints.  We shouldn't block the customer from using the app after the interrupt. Then, we have to check if the thread is in `interrupted` state and invoke with Command/ resume for all endoints if it is.  Doing so will unblock the graph and defeat the purpose of `interrupted` which is blocking!!
 
 Langgraph interrupt - Command resume framework work well if the person to request LLM's action is also the person to review it like CSR asking LLM tp draft an email.  That works just like chatting. However, Langgraph interrupt - Command will affect the customer/user interaction in the manual approve/ reject/ flag return/ refund business worflow and does not reach its goal.  That's my concern.
 
@@ -411,6 +400,154 @@ See README.md for the details. I might add memory sections and eleborate the sum
     - **Identity binding (done, CSA-21):** `/api/auth` now also stores `request.session["email"]` (only on success). New `backend/services/ownership.py`: `check_context_owner` (403 if a request body's `customer_context.email` differs from the session email, case-insensitive) is called in `/support/general` and `/support/order/init`; `check_thread_owner` (403 if an existing LangGraph thread's checkpointed `customer_context.email` differs; a thread with no state yet is not owned) is called at the top of every `/support/*` service function that takes or generates a `thread_id`, including `/exit`. No session email gives 401. Tests in `tests/test_auth.py` (`test_customer_cannot_use_another_customers_context`, `test_customer_cannot_reuse_another_customers_thread`). Any test posting a `customer_context` to a protected endpoint must now sign in as THAT customer (the old `PSEUDO_CUSTOMER_CONTEXT` general tests were switched to the `auth_client` context). When adding a new `/support/*` endpoint, call the matching `check_*_owner` helper in its service function, not just `RoleChecker`.
     - **Manual verification (2026-10-19, user):** deleting the `session` cookie in DevTools, then navigating, returns to login only on the *next API call* (e.g. FAQ -> Order inquiry still renders; Continue then redirects). Expected: screen changes are client-side and render from `csa_session`, and the 401/403 handler reacts to API responses only. No data is exposed in between (the server checks the role on every call). Accepted as-is. If an immediate kick-out is ever wanted: add an open `GET /api/auth/me` (200 with a role, else 401) and call it from `useRequireRole` on mount. Also verified: unknown-email login then `/api/support/general` via Swagger returns 401.
 
+  - CSA-22: (Backend)
+    - Integrate with Slack interactivity in the refund request manual (human) review process. For those refund requests that require manual approval/ review, we will send refund request details along with Approve/ Reject/ Flag buttons and an optional reason input box to the Slack channel `customer-support-review-dev`. Customer support (human) representative's response will be posted back to a webhook (endpoint `/webhook/slack/interactive`, file `/backend/slack_webhook.py`) hosted by our application. [View the screenshot of Slack interactivity payload](screenshot_slack_interactive_payload.png) and [View the screenshot of replaced text message after the decision was made](screenshot_post_interactive_text.png)
+    - Once `slack_webhook` receives a Slack interactivity payload of `block_actions` type, it will do the followings after verifying signature and form urldecoded:
+      - Return {'status': 'ok'}. Slack requires return a response within 3 seconds to avoid timeout errors. Then spawn three background task:
+      - Send an interactive acknowledge to Slack to summarize what we received.
+      - Update the refund request base upon the interactivity payload received.
+      - log the result into long-terms memory with a separate thread_id: <workflow_thread_id>-<hitl>-<refund_request_id> to avoid the collision with workflow thread.
+    - `slack_webhook` can receive multiple interactivity payloads. How do we know what refund request id, the original order id, amount, customer name, thread_id that we should send an interactive acknowledge, update refund request or log the result to the correct thread. The answer is to plan ahead. I found a field in Slack blocks message that I can encode those information and expect Slack will return that field back in its interactivity payload reponse.  I encoded them in the `block_id` field of `actions` type. The Python module sending Slack interactive blocks message and interactive acknowledge text message are in `/backend/adapters/slack_adapter.py`
+    - To integrate `customer-support-agents` with Slack, I have to configure a new application `customer-support-dev` in SlackAPI console.  That will give me some basic innformation, including `Signing Secret` used in `slack_webhook` to verify `X-Slack-Signature` headers. Need to configure `OAuth & Permissions` that a Slack interactivity require. **IMPORTANT**: `Bot User OAuth Token` is required to bind to a slack_sdk WebClient.  In `.env`, I configure SLACK_BOT_TOKEN, SLACK_CHANNEL_ID_REVIEW_DEV and SLACK_SIGNING_SECRET: the former two for the sending end and the last for receiving end. 
+    - My n8n-slack experience helps me integrate `customer-support-agents` with Slack.  However, n8n automation takes care of the nuts and bolts. Also there are multiple SDKs to integrate with Slack blocks message in Python. Be prepare for some surprise, google and tackle new issues on the way. 
+    - One surprise to me is where to send the interactive acknowledge.  I assume that I can send it using slack_sdk WebClient as well but I got an unauth error. Slack dynamically generate a `response_url` in the interactive payload message for each Slack interaction. I need to send the interactive acknowledge to that `response_url`. slack_sdk WebClient is tied to the last installed incoming webhook URL associated with the `Bot User OAuth Token`. The last installed incoming webhook URL is static.
+    - There are two ways to integrate with Slack: WebSocket and HTTP. Before using WebSocket, please do some research if interactivity works in Socket Mode.  In Socket Mode screen, `Interactivity and Shortcut` choice will be disabled if Socket Mode is enabled.  However, I forked a repo in [Slack interactivity in Socket Mode example](https://github.com/threecuptea/slack-n8n-integration-hub). Slack interactivity work in Socket Mode. Socket Mode is using `ws` or `wss` portocol. I elaborate their advantages and disadvantage as the followings:
+      - Data transports in plain text in `ws`.  On the other side, Slack HTTP is using Form URL encoding.  `wss` definitively is needed in the production to transport data in a secure manner.
+      - It is easy to scale out HTTP servers in the production. A load balancer can sit in the front of HTTP servers. Scale out `ws` or `wss` is not straight forward. 
+      - Web socket maintain a persistent two-way connection. It's very convenient to integrate with Slack in Socket Mode in dev environment.  To integrate with Slack in HTTP in dev environment, I have to expose my local URL to the public using `ngrok`.  **IMPORTANT:** Configure the public webhook full path as the request URL in the `Interactivity & Shortcut` screen. `customer-support-agents` is still under construction. If I bring down `slack_webhook` temporarily, the previous dynamic Slack interaction might be gone. This won't be a problem in the production.  The load balancer URL will be configured as the Request URL in the `Interactivity & Shortcut` screen, rolling upgrade of HTTP servers won't affect the connectivity.
+      - n8n out-of-box only support integrating with Slack interactivity. That's why I am more comfortable with integration with Slack in HTTP.
+    - Choosing between WebSocket and HTTP integration with Slack interactivity is not the only architectual decision I need to make. Should I make slack_webhook another FastAPI app or a router as part of main:app.  I made a decision to have slack_webhook as a separate FastAPI app (endpoint `/webhook/slack/interactive`) and start it at a different port for the following reason 
+      - They serve very different purposes. main:app provides all customer-support-agents APIs and slack_webhook only provides a webhook to the slack app.
+      - I want slack_webhook isolated.  I don't want customer-support-agents APIs being affected if slack_webhook went down for some reasons
+      - slack_webhook in dev is exposed as a public URL and I like the security risk as limited as possible
+    - The followings are how I start up:
+    ```bash
+    backend> uv run uvicorn --timeout-keep-alive 75 main:app --reload
+    frontend> npm run dev
+    backend> uv run uvicorn --port 8080 slack_webhook:app --reload
+    ngrok http 8080 --url https://xxxxxxxxxxxxx.ngrok-free.dev
+    ```
+    - The decision that I set up slack_webhook as a separate FastAPI app has an unexpected impact. main:app and slack_webhook:app live in separate memory spaces.  Therefore, RefundRequest that I put in `refund_requests_processing_dict` via customer_support workflow is invisible to slack_webhook:app.  I have to resort to an external persistent store or a cache to communicate between main:app and slack_webhook:app.  I chose Redis over persistent stores like Postgres:
+      - I will simply serialize Pydantic RefundRequest BaseModel into Redis cache as a value and deserialized it back to parse and or modify it.  I am NOT using sophisticated RDBM modeling or referential intetrity.
+      - I am using demo data to dynamically adjust orders to meet refund request criteria. I also need to periodically clean up refund requests as a temporary storage for demo purpose. It is pretty easy to use redis-cli to retrieve the data to verify or clean up data.  
+      - Redis is well adopted in industries.  I like to gain some knowledge.  Can I easily implement a secondary index in Redis etc.? 
+    - I implement Redis codes in `adapters/redis_adapter.py`. The followings are some code snippets:
+    ```python
+    async def insert_refund_request(self, value: RefundRequest) -> int:
+        new_value = await self.redis_client.incr('rr')
+        value.refund_request_id = new_value  # Assign the new key to the refund request
+        await self.redis_client.set(f"rr:{new_value}", value.model_dump_json())
+        # add order key pointing to the refund request key. One order can have multiple refund requests.
+        await self.redis_client.rpush(f"rr:by_order:{value.returned_order.origin_order_id}", f"rr:{new_value}")
+        return new_value  # Return the new key for the retrieval of the refund request later.
+
+    async def retrieve_refund_request(self, refund_request_id: int) -> RefundRequest | None:    
+        refund_request_json = await self.redis_client.get(f"rr:{refund_request_id}")
+        if not refund_request_json:
+            return None
+        return RefundRequest.model_validate_json(refund_request_json)
+
+    async def retrieve_refund_requests_by_order(self, origin_order_id: int) -> list[RefundRequest]:
+        refund_request_keys = await self.redis_client.lrange(f"rr:by_order:{origin_order_id}", 0, -1)
+        refund_requests = []
+        for refund_request_key in refund_request_keys:
+            refund_request_json = await self.redis_client.get(refund_request_key)
+            if refund_request_json:
+                refund_requests.append(RefundRequest.model_validate_json(refund_request_json))
+        return refund_requests
+   
+    ```
+    - Implement the secondary index is as easy as creating 1:m between the seconday key and the primary keys. An order can have multiple refund request.  Yes, I create additional endpoints for retrieving refund request as well as retrieving refund requests by order.
+    - I made one architectural mistake previously. Both `refund_request_to_process` and `refund_requests_processing_dict` have refund request. They can be out of sync. Going foward, I like Redis to be the **source of truth** for RefundRequest and the only source of truth.  I don’t want `refund_request_to_process` around in CustomerSupportState since  `refund_request_to_process` can be subject to be stale. The operation will be very different: 
+      - `initial_return_refund_decision_node` not only returns the response but also store RefundRequest with a ‘pening’ status in Redis. Yes, RefundRequest will have `id` after that.   I stores `rr_id_in_process` in CustomerSupportState.    
+      - To replace `refund_request_to_process` in CustomerSupportState, and `return_refund_chat_node` have to retrieve a refund request using `rr_id_in_process` directly from Redis. I retrieve the refund request from Redis to return the updated refund request to UI for `/return_refund/init` and `/return_refund/process` API calls
+      - From UI's perspective, a refund request in reponse always have an id, `assigned_refund_request_id` is not meaningful. (`assigned_refund_request_id` > 0) signal that the current refund request has been processed (with the status `auto_approve`, `auto_reject`  or `wait_for_manual_review`).  A refund request has been `processed` as long as its status is no longer `pending`.
+      - I can remove `assigned_refund_request_id` from CustomerSupportState. However, I cannot retire the check if the current refund_request has been processed.  We use it in workflow routing: `route_return_refund` in `worflow/customer_support.py`.  I replace (`assigned_refund_request_id` > 0) check with `rr_being_processed` in CustomerSupportState
+    - The end result is the change on `InitialReturnRefundResponse` and `ReturnRefundProcessResponse` interfaces.
+    ```python
+    # before
+    class InitialReturnRefundResponse(GenericResponse):
+        initial_return_refund_decision: ReturnRefundInitialDecision
+        refund_request_to_process: RefundRequest | None = None
+    # after
+    class InitialReturnRefundResponse(GenericResponse):
+        initial_return_refund_decision: ReturnRefundInitialDecision
+        rr_in_process: RefundRequest | None = None
+        rr_being_processed: bool = False
+    ```
+    and 
+    ```python
+    # before
+    class ReturnRefundProcessResponse(GenericResponse):
+        refund_request_to_process: RefundRequest
+        assigned_refund_request_id: Annotated[int, Field(gt=0)]   
+    # after
+    class ReturnRefundProcessResponse(GenericResponse):
+      rr_in_process: RefundRequest | None = None
+      rr_being_processed: bool = False
+    ```
+    I keep the content of both version in transition before UI replace at its end.
+    - I made lots of change on internl codes. Fixes on test codes prove to be the toughest not only due to the above changes but also the complications  derived from newly added async functions.
+      - Re-organize LLM test harness so that `make_refund_request` dynamically feeds `retrieve_refund_request` function of `_FakeRedisAdapter` wired into `build_agent` instead of feeding static `refund_request_to_process` of CustomerSupportState.
+      - I like to prove that Redis have a refund request inserted or updated using  `asyncio.run(redis_adapter.retrieve_refund_request(...))` in `test_customer_support_return.py` but got a `RuntimeError: Future <Future pending> attached to a different loop` because a event loop has started in the `lifespan` function of `main:app` due to `await app.state.redis_adapter.connect()`.  I tried to use async unit test to avoid using `asyncio.run` to start an event loop and got a fixture error when creating an async test client. I ends up using `sync redis client get` to retrieve the refund request.
+      - In `test_slack_webhook.py`, `asyncio.run(load_user_memory(client.app.state.store, ...))` would return nothing even though human review summary have been `aput` via `save_user_memory` function.  I have to use BaseStore's sync get to prove. 
+      - It is futile to test `group_memory` directly. I need to use API calls plus getting `history`, `summary` and `human_reviews` from state snapshot to verify `group_memory` work as expected.  `async.run(group_memory(....))`  in `test_group_memory` would get `connect error`???
+      - I have tested a lot of async functions before: `asyncio.run(agent.general_faq_fuzz_match_node` and `asyncio.run(graph.aget_state(config))` etc.  I like to know why I will get spamming error or return nothing on `async.run(...)` on some co-routine. 
+    - Another improvement is to remove the overlapping of memory.  Currently, I pass memory (long-terms memory) as a SystemMessage. `summarize_node` will mix conversations from previous visits when LLM summarize messages from CustomerSupportState. That's not idealist. I group memory and replace SystemMessage with two new variables in CustomerSupportState and pass them in `graph.ainvoke(state)` 
+    ```python
+    async def group_memory(store: BaseStore, user_id: Any, limit: int = 5, thread_id: str | None = None, include_history: bool = True) -> dict[str, str]:
+    memory_dict = await load_user_memory(store, user_id, limit)
+    dict_returned = {}
+    if memory_dict:
+        human_reviews = "\n".join(f"- {v}" for k, v in memory_dict.items() if "-hitl-" in k)
+        if human_reviews:
+            dict_returned["human_reviews"] = human_reviews
+        if thread_id:
+            if include_history:
+                history = "\n".join(f"- {v}" for k, v in memory_dict.items() if not k.startswith(thread_id) and "-hitl-" not in k)
+                if history:
+                    dict_returned["history"] = history
+        else:
+            if include_history:
+                history = "\n".join(f"- {v}" for k, v in memory_dict.items() if "-hitl-" not in k)
+                if history:
+                    dict_returned["history"] = history     
+    return dict_returned
+    ```
+    also I reduce the SYSTEM_PROMPT when any of `recent_conversation`, `summary`, `memory_notes`, and `human_reviews` has no content.
+    before
+    ```python
+    SYSTEM_PROMPT = f"""
+    Here is what we remember about this customer from past visits, if any: {memory_notes if memory_notes else "None yet"}.
+    Here is the most recent conversations in sequential order: {recent_conversations if recent_conversations else "None yet"}.
+    Here is the summary of the previous conversation: {state.get("summary") if state.get("summary") else "None yet"}.
+     :
+    """
+    ```
+    after
+    ```python
+    SYSTEM_PROMPT = f"""
+    {"Here is the most recent conversations in this visit: " + recent_conversations + "." if recent_conversations else ""}
+    {"Here is the summary of the previous conversation in this visit: " + state.get("summary") + "." if state.get("summary") else ""}
+    {"Here is the feedback from human review(s) in this visit: " + state.get("human_reviews") + "." if state.get("human_reviews") else ""}
+    {"Here is what we remember from past visits :"+ state.get('history') + "." if state.get('history') else ""} 
+    ``` 
+
+  - **CSA-22 UI integration (done with Claude):** the transition fields are retired. `InitialReturnRefundResponse` is now `GenericResponse` + `initial_return_refund_decision` + `rr_in_process: RefundRequest | None` + `rr_being_processed: bool`; `ReturnRefundProcessResponse` is `GenericResponse` + `rr_in_process: RefundRequest | None` + `rr_being_processed: bool`. `refund_request_to_process` and `assigned_refund_request_id` no longer exist anywhere in code (only in older notes of this file and in a README snippet). `frontend/app/customer/order-inquiry/return/page.tsx`: `processed` is the `rr_being_processed` flag from the `/process` response (it replaced `assignedRefundRequestId != null`), and the "Refund request #" row shows `refundRequest.refund_request_id`. The frontend tests mock `fetch`, so `tests/test_customer_support_return.py` asserts the retired keys are absent from the real `/init` and `/process` responses (the contract can't silently drift back).
+
+  - **Post CSA-22 code-review fixes (two review agents, findings verified, all seven high-priority ones fixed):**
+    - **Test-only webhook route removed.** `POST /webhook/slack/interactive/test` skipped signature verification. `include_in_schema=False` only hides a route from `/docs`; it stays live, and `slack_webhook:app` is the app exposed through ngrok, so anyone could approve/reject refund requests (ids are sequential). Deleted. `tests/test_slack_webhook.py` now posts to the REAL endpoint with a correctly signed request: urlencoded body `payload=<json>`, `X-Slack-Request-Timestamp`, and `X-Slack-Signature` from the app's own `signature_verifier.generate_signature(timestamp=..., body=...)` (HMAC-SHA256 over `v0:<ts>:<body>`). Helpers: `signed_post`, `make_payload` (re-points the captured `TEST_PAYLOAD` at a seeded refund request), `seed_refund_request`. The `acks` fixture replaces `send_interactive_acknowledgement` and `replace_original_message` with recorders (`acks.replaces`) so no test touches hooks.slack.com. Tests cover wrong/empty/missing/stale signature (401), malformed payloads (400), double press, only-`wait_for_manual_review`-can-be-decided, order-id mismatch, reason cap, empty reason, and a concurrency race.
+    - **Webhook flow (`slack_webhook.py`).** One background task `handle_review_response`: update Redis FIRST, then tell Slack (`BackgroundTasks` stops at the first exception, so a failing acknowledgement used to cancel the refund update). `process_review_response` validates strictly (`InvalidReviewPayload` -> 400, not 500, so Slack doesn't retry): action must be `approve`/`reject`/`flag`, `block_id` parts must parse, `ts` must be numeric. The reason is stripped and capped at `MAX_REASON_CHARS` (the Slack input also has `max_length`). The `block_id` is only a pointer: the order id in it must match the stored request. `slack_adapter.send_interactive_acknowledgement` is best effort (logs, never raises) and only posts to `https://hooks.slack.com/` (SSRF guard on `response_url`).
+    - **State guard + atomic update (`adapters/redis_adapter.py::update_refund_request_if_status`).** WATCH/MULTI/EXEC compare-and-set: applies the update only if the stored status is still `wait_for_manual_review`; returns `("updated"|"not_found"|"status_mismatch", request)`; retries on `WatchError`. A double press, a second reviewer or a Slack retry can no longer flip a decided request or overwrite `decided_by`/`decided_date`. A late press gets a "No change made" message (`build_not_applied_text`). Bug found on the way: an empty reason was stored as `""`, which failed `decision_reason`'s `min_length=1` on every later read; it is stored as `None` now. [View Redis optimistic-locking-pattern: Watch/ Multi/ Exec flow](screenshot_redis_optimistic_locking.png)
+    - **Slack message after a decision.** On `updated` (and on `status_mismatch`, to clean stale buttons) the original review message is replaced via the interaction's `response_url` with `replace_original: true` (`replace_original_message`, `build_decided_blocks_payload`): same request details, NO reason box and NO buttons, an outcome line (`✅ Approved` / `❌ Rejected` / `🚩 Flagged` by X on date, plus the reason) and a trailing `divider` block, so reviewed requests stand out from pending ones in a busy channel. No separate acknowledgement for a successful decision (redundant); "No change made" is kept for ignored presses. A `response_url` allows 5 uses in 30 minutes; one press uses at most 2. If the replace fails (e.g. expired URL) it is only logged; the Redis update is unaffected. `build_acknowledgement_text` is now unused.
+    - **Ownership on the refund-request GETs.** `GET /api/support/return_refund/{id}` and `/by_order/{order_id}` only checked the role, so any signed-in customer could read another's request by walking the sequential ids. Now `owns_refund_request` (`services/ownership.py`, compares `rr.customer.email` with the session email). A request that belongs to someone else returns `null` (and is dropped from the by-order list), indistinguishable from a missing id, so ids can't be enumerated (a deliberate choice instead of 403).
+    - **Redis entry gone -> 400, not 500.** The LangGraph checkpoint (sqlite) outlives Redis (a cache that is cleaned/restarted). `_require_refund_request_in_redis` makes `/return_refund/process` and `/return_refund/chat` answer 400 when the thread's `rr_id_in_process` is no longer in Redis; `return_refund_process_node` raises and `return_refund_chat_node` returns `SYSTEM_ERROR_MESSAGE` for direct graph callers.
+    - **Tests no longer touch the dev Redis.** The fixtures called `flushdb()` on the same DB as the dev server (wiping real refund requests, the `rr` counter and the `rr:by_order:*` lists; a reset counter could even reuse an id an old checkpoint still points at). Now `tests/conftest.py` derives the test URL from your `REDIS_URL` (same host/password) with DB number `TEST_REDIS_DB` (default 15) and refuses 0. An autouse class-scoped fixture re-sets `os.environ["REDIS_URL"]` before every test (some modules call `load_dotenv(override=True)` on import, even lazily, and would reset it; autouse fixtures run before the class-scoped `client` that starts the lifespan). One shared `redis_client` fixture in `conftest.py` asserts it is on the test DB before any `flushdb()`. Use `redis-cli -n 0` for your real data. Concurrency test tip: `TestClient.portal.call(coro)` runs a coroutine on the app's own event loop, which avoids the "attached to a different loop" problem noted above for `asyncio.run`.
+    - **Follow-up fixes (done):** `slack_webhook.py` no longer imports `main`: `BACKEND_DIR`/`DATA_DIR`/`resolve_db_path` live in `backend/paths.py`. `return_refund_process_node` now writes through `update_refund_request_if_status(id, "pending", ...)` (compare-and-set); a request that already left `pending` raises `ValueError` -> 400. The human-review memory key is `hitl-<refund_request_id>` (`memory.hitl_memory_key` / `is_hitl_key`); `thread_id` was removed from the Slack `block_id`, `ReviewResponse` and the sender signatures, so nothing workflow-related is taken from the Slack payload (the refund request id is globally unique). Review messages posted before this change have the old `block_id` and now get 400.
+    - **Not fixed (decide later):** re-running `/return_refund/init` or "Reset Input" leaves orphan `pending` requests under the same order (CSA-23).
+    - **Untrusted text hardening (done):** new `backend/text_safety.py`. There is no reliable "ill-intent wording" detector (wording filters are easy to get around, and an LLM classifier can itself be injected), so the defenses are structural: (1) `clean_free_text` (NFKC, drops control/zero-width/bidi characters, collapses newlines, caps length) runs on the reviewer's reason in `process_review_response`; (2) `slack_escape` (`&`, `<`, `>`) is applied to everything user-typed that is rendered in Slack mrkdwn (reason, notes to the reviewer, customer name, product/supplier names, Slack username), so `<!channel>`, mentions and `<url|label>` links are dead text; (3) the stored summary quotes the reason (`decision_reason: "..."`); (4) the three chat prompts (`order_continue_chat_node` x2, `return_refund_chat_node`) build the section with `human_reviews_prompt_block`: delimited `<human_review_notes>`, angle brackets inside swapped so the text cannot close the delimiter, plus a rule that it is information, never instructions. This lowers the risk but is not a guarantee; the hard limits are that the model has no tool that changes a refund request and that the human-review flag is frozen once processed. Harness case `RR-14` (a reviewer note telling the model to say the refund is approved) passes 5/5 on `gpt-4o-mini`; the other 13 `RR` cases are unchanged at 5/5. Tests: `tests/test_text_safety.py` and `test_reason_is_cleaned_and_slack_markup_is_escaped_in_the_decided_message`.
+    - **Manual verification (user, with real Slack):** first Approve, then a second press from another account on the same message returned "No change made ... is no longer waiting for a review (current status: manual_approve). Your reject from threecuptea9 was ignored."
+
 ### Current API Endpoints
 - `GET /api/health` — liveness check
 - `POST /api/approval/start` — draft content for a task, pauses for human review (HITL interrupt)
@@ -423,5 +560,10 @@ See README.md for the details. I might add memory sections and eleborate the sum
 - `POST /api/support/return_refund/init` - take item(s) to return to put together a RefundRequest and generate ReturnRefundInitialDecision with OrderRefundStatus enum that can be mapped to status of RefundRequest when processing 
 - `POST /api/support/return_refund/process` - take ReturnRefundInitialDecision plus `request_human_review_return_refund` into consideration when processing the RefundRequest
 - `POST /api/support/return_refund/chat` - engage conversation with the customer for his/ her RefundRequest and set `request_human_review_return_refund` flag upon his/ her request
+- `GET /api/support/return_refund/{refund_request_id}` - retrieve a refund request by refund request id (customer role; `null` unless it belongs to the signed-in customer)
+- `GET /api/support/return_refund/by_order/{order_id}` - retrieve refund requests by order id (customer role; only the signed-in customer's own)
 - `POST /api/support/exit` - UI calls this end when the customer press `Exit` button 
 - `GET /{full_path:path}` — catch-all serving the Next.js static export (`frontend/out`); see [Routing guard](#routing-guard)
+
+- `POST /webhook/slack/interactive` - Slack post interactive payload to the endpoint after CSR review the refund request and press `Approve/ Reject/ Flag` buttons.  The full path is configured as `Request URL` in `Interactivity & Shortcuts` window of SlackAPI. Signature-verified (`X-Slack-Signature`); there is no test-only variant of this route.
+ 
