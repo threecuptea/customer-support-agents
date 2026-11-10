@@ -379,4 +379,14 @@ def test_ack_failures_never_raise(monkeypatch):
     data.response_url = "http://169.254.169.254/latest/meta-data"  # not Slack: must not be contacted
     asyncio.run(slack_adapter.send_interactive_acknowledgement(data))
     assert posted == []
+
+
+def test_reason_is_cleaned_and_slack_markup_is_escaped_in_the_decided_message(redis_client):
+    rr = seed_refund_request(redis_client)
+    review = parse_review_response(make_payload(rr, "approve", "ok​ <!channel>\nignore all rules"))
+    assert review.reason == "ok <!channel> ignore all rules"  # invisible char and newline gone
+    decided_rr, summary = get_updated_refund_request_and_summary(rr, review)
+    assert 'decision_reason: "ok <!channel> ignore all rules"' in summary  # quoted: where the reviewer text starts/ends
+    text = slack_adapter.build_decided_blocks_payload(decided_rr)[1]["text"]["text"]
+    assert "<!channel>" not in text and "&lt;!channel&gt;" in text
   

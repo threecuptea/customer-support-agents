@@ -14,6 +14,7 @@ from langchain_core.runnables import RunnableConfig
 from datetime import timedelta
 from workflow.order_situation import select_order_situation, render_situation_text, escalation_allowed, ALWAYS_ON_TEXT
 from memory import save_user_memory
+from text_safety import human_reviews_prompt_block
 from workflow.customer_support_utils import find_closest_faq, retrieve_target_order, faq_dict, RETURN_POLICY, \
     get_initial_return_refund_decision, threshold_amount_auto_approve, threshold_days_auto_approve
 from adapters.redis_adapter import RefundRequestRedisAdapter 
@@ -299,7 +300,7 @@ class CustomerSupportAgent:
             Here is the target order {target_order.model_dump_json()}
             {"Here is the most recent conversations in this visit: " + recent_conversations + "." if recent_conversations else ""}
             {"Here is the summary of the previous conversation in this visit: " + state.get("summary") + "." if state.get("summary") else ""}
-            {"Here is the feedback from human review(s) in this visit: " + state.get("human_reviews") + "." if state.get("human_reviews") else ""}
+            {human_reviews_prompt_block(state.get("human_reviews"))}
             {"Here is what we remember from past visits :"+ state.get('history') + "." if state.get('history') else ""}            
             The above is the context of this order.
 
@@ -391,7 +392,7 @@ class CustomerSupportAgent:
         very first time just now.
         {"Here is the most recent conversations in this visit: " + recent_conversations + "." if recent_conversations else ""}
         {"Here is the summary of the previous conversation in this visit: " + state.get("summary") + "." if state.get("summary") else ""}
-        {"Here is the feedback from human review(s) in this visit: " + state.get("human_reviews") + "." if state.get("human_reviews") else ""}
+        {human_reviews_prompt_block(state.get("human_reviews"))}
         Here is what we remember about this customer from past visits, if any: {state.get('history') if state.get('history') else "None yet"}.
         Set `is_revisit` to True only if there is clear evidence order #{target_order.order_id} or products ordered: {"or ".join(product_names)} specifically
         (not just any order) was already discussed — for example a prior mention of a lost shipment, a
@@ -680,7 +681,7 @@ class CustomerSupportAgent:
             Here is the initial return refund decision: {state['initial_return_refund_decision'].model_dump_json()}
             {"Here is the most recent conversations in this visit: " + recent_conversations + "." if recent_conversations else ""}
             {"Here is the summary of the previous conversation in this visit: " + state.get("summary") + "." if state.get("summary") else ""}
-            {"Here is the feedback from human review(s) in this visit: " + state.get("human_reviews") + "." if state.get("human_reviews") else ""}
+            {human_reviews_prompt_block(state.get("human_reviews"))}
             {"Here is what we remember from past visits :"+ state.get('history') + "." if state.get('history') else ""}
                         
             DO NOT REPEAT the same response!!

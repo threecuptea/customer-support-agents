@@ -7,6 +7,7 @@ from models.slack_model import ReviewResponse
 from models.customer_support_model import RefundRequest, MAX_REASON_CHARS
 import httpx
 from dotenv import load_dotenv
+from text_safety import slack_escape
 
 SLACK_RESPONSE_URL_PREFIX = "https://hooks.slack.com/"
 
@@ -22,17 +23,17 @@ slack_client = WebClient(token=SLACK_BOT_TOKEN)
 
 
 def _customer_name(refund_request: RefundRequest) -> str:
-    return f"{refund_request.customer.title} {refund_request.customer.first_name} {refund_request.customer.last_name}"
+    return slack_escape(f"{refund_request.customer.title} {refund_request.customer.first_name} {refund_request.customer.last_name}")
 
 
 def _details_text(refund_request: RefundRequest, heading: str) -> str:
     """The request details shown in the review message, shared by the pending and the decided versions."""
-    notes_to_the_reviewer = f"*Notes to the reviewer:* {refund_request.notes_for_human_review_override}\n" if refund_request.notes_for_human_review_override else ""
+    notes_to_the_reviewer = f"*Notes to the reviewer:* {slack_escape(refund_request.notes_for_human_review_override)}\n" if refund_request.notes_for_human_review_override else ""
     return (f"{heading}\n\n"
             f"*Refund request id:* {refund_request.refund_request_id}\n*Original order number:* {refund_request.returned_order.origin_order_id}\n"
             f"*Refund amount:* ${refund_request.returned_order.estimated_amount_refund_incl_tax}\n*Customer name:* {_customer_name(refund_request)}\n*Delivery date:* {refund_request.returned_order.original_delivery_date.strftime('%Y-%m-%d')}\n"
             f"{notes_to_the_reviewer}"
-            f"*Return items:*\n" + "\n".join([f"    {item.product_name}, {item.supplier_name}, {item.number_units}, {'NR' if item.nonrefundable_item else ''}" for item in refund_request.returned_order.items]))
+            f"*Return items:*\n" + "\n".join([f"    {slack_escape(item.product_name)}, {slack_escape(item.supplier_name)}, {item.number_units}, {'NR' if item.nonrefundable_item else ''}" for item in refund_request.returned_order.items]))
 
 
 # status -> (emoji, label) for the decided message; anything else falls back to the raw status.
@@ -50,9 +51,9 @@ def build_decided_blocks_payload(refund_request: RefundRequest) -> list[dict]:
     glance which requests still have buttons (need attention) and which are done."""
     emoji, label = _DECIDED_LABELS.get(refund_request.status, ("ℹ️", f"Status: {refund_request.status}"))
     decided_date = refund_request.decided_date.strftime('%Y-%m-%d %H:%M:%S') if refund_request.decided_date else "—"
-    outcome = f"{emoji} *{label}* by *{refund_request.decided_by or 'unknown'}* on {decided_date}"
+    outcome = f"{emoji} *{label}* by *{slack_escape(refund_request.decided_by) or 'unknown'}* on {decided_date}"
     if refund_request.decision_reason:
-        outcome += f"\n*Reason:* {refund_request.decision_reason}"
+        outcome += f"\n*Reason:* {slack_escape(refund_request.decision_reason)}"
     return [
         {"type": "section", "text": {"type": "mrkdwn", "text": _details_text(refund_request, "*Return for refund request (reviewed)*")}},
         {"type": "section", "text": {"type": "mrkdwn", "text": outcome}},
@@ -195,9 +196,9 @@ def build_not_applied_text(data: ReviewResponse, outcome: str, current_status: s
     head = f"The request id: *{data.refund_request_id}* (origin order id: *{data.origin_order_id}*)"
     if outcome == "status_mismatch":
         text = (f"ℹ️ *No change made.* {head} is no longer waiting for a review "
-                f"(current status: *{current_status}*). Your *{data.action}* from *{data.decided_by}* was ignored.\n")
+                f"(current status: *{current_status}*). Your *{data.action}* from *{slack_escape(data.decided_by)}* was ignored.\n")
     elif outcome == "not_found":
-        text = f"⚠️ *No change made.* {head} was not found. Your *{data.action}* from *{data.decided_by}* was ignored.\n"
+        text = f"⚠️ *No change made.* {head} was not found. Your *{data.action}* from *{slack_escape(data.decided_by)}* was ignored.\n"
     elif outcome == "order_mismatch":
         text = f"⚠️ *No change made.* {head} does not match the stored request. Your *{data.action}* was ignored.\n"
     else:

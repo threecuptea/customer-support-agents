@@ -21,6 +21,7 @@ from adapters.redis_adapter import RefundRequestRedisAdapter
 from paths import DATA_DIR, resolve_db_path as _resolve_db_path
 from langgraph.store.memory import InMemoryStore
 from memory import save_user_memory, hitl_memory_key
+from text_safety import clean_free_text
 
 load_dotenv(override=True)
 
@@ -143,7 +144,7 @@ def parse_review_response(data: dict[str, Any]) -> ReviewResponse:
     response_url = data.get("response_url", "")
     decided_by = data.get("user", {}).get("name")
     reason = data.get("state", {}).get("values", {}).get("reason_input", {}).get("reason_value", {}).get("value") # this is optional
-    reason = (reason or "").strip()[:MAX_REASON_CHARS]  # RefundRequest.decision_reason is capped; never trust the length
+    reason = clean_free_text(reason, MAX_REASON_CHARS)  # capped (RefundRequest.decision_reason), no control/invisible chars, one line
 
     return ReviewResponse(
         response_url=response_url,
@@ -167,7 +168,7 @@ def get_updated_refund_request_and_summary(refund_request: RefundRequest, review
     
     summary= (f"Updating the refund request of ID: {refund_request.refund_request_id}, origin_order_id: {review_response.origin_order_id}, customer: {review_response.customer_name} with "
                             f"status: {refund_request.status}, "
-                            f"decision_reason: {refund_request.decision_reason or 'none given'}, "
+                            f"decision_reason: {(chr(34) + refund_request.decision_reason + chr(34)) if refund_request.decision_reason else 'none given'}, "
                             f"decided_by: {refund_request.decided_by}, "
                             f"decided_date: {refund_request.decided_date.strftime('%Y-%m-%d %H:%M:%S')}")
     return refund_request, summary
