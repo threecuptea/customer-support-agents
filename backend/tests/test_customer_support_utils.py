@@ -122,7 +122,7 @@ def test_group_memory(client):
     assert not snapshot.values.get("human_reviews")
     # Simulate slack webhook postback
     text = "on 2026-11-05 19:24:05 UTC Updating the refund request of ID: 1 with status: manual_approve, decision_reason: It looks like a normal transaction., decided_by: threecuptea"
-    client.app.state.support_graph.store.put(("users", str(32108)), f"{thread_id}-hitl-1",  {"text": text, "timestamp": datetime.now(UTC).timestamp()})
+    client.app.state.support_graph.store.put(("users", str(32108)), "hitl-1",  {"text": text, "timestamp": datetime.now(UTC).timestamp()})
 
     resp = client.post(
             "/api/support/return_refund/chat",

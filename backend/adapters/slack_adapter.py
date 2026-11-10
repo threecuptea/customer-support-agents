@@ -60,12 +60,11 @@ def build_decided_blocks_payload(refund_request: RefundRequest) -> list[dict]:
     ]
 
 
-def build_interactive_blocks_payload(thread_id: str, refund_request: RefundRequest) -> list[any]:
+def build_interactive_blocks_payload(refund_request: RefundRequest) -> list[any]:
     """
     Format a Slack interactive message for a refund request review.
 
     Args:
-        thread_id (str): The Slack thread ID to which the message should be sent.
         refund_request (RefundRequest): The refund request to be reviewed.
 
     Returns:
@@ -101,7 +100,7 @@ def build_interactive_blocks_payload(thread_id: str, refund_request: RefundReque
             },
             {
                 "type": "actions",
-                "block_id": f"{thread_id}|{refund_request.refund_request_id}|{refund_request.returned_order.origin_order_id}|{refund_request.returned_order.estimated_amount_refund_incl_tax}|{customer_name}",
+                "block_id": f"{refund_request.refund_request_id}|{refund_request.returned_order.origin_order_id}|{refund_request.returned_order.estimated_amount_refund_incl_tax}|{customer_name}",
                 "elements": [
                     {
                         "type": "button",
@@ -137,13 +136,13 @@ def build_interactive_blocks_payload(thread_id: str, refund_request: RefundReque
         ]
 
 
-async def send_interactive_blocks_payload(thread_id: str, refund_request: RefundRequest) -> None:
+async def send_interactive_blocks_payload(refund_request: RefundRequest) -> None:
     """Send an interactive blocks message to Slack for a return/ refund request review.
 
     Args:
         refund_request (RefundRequest): The refund request to be reviewed.
     """
-    blocks = build_interactive_blocks_payload(thread_id, refund_request)
+    blocks = build_interactive_blocks_payload(refund_request)
     logger.debug(f"Prepared interactive blocks payload: {blocks}")
     try:
         response = slack_client.chat_postMessage(

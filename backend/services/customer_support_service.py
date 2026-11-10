@@ -250,7 +250,7 @@ async def invoke_return_refund_process_workflow(request_to_process: ReturnRefund
         turn_off_slack_integration_for_test = request_to_process.turn_off_slack_integration_for_test
         if rr_in_process and rr_in_process.status == "wait_for_manual_review" and integrate_slack and not turn_off_slack_integration_for_test:
             from adapters.slack_adapter import send_interactive_blocks_payload
-            await send_interactive_blocks_payload(thread_id, rr_in_process)
+            await send_interactive_blocks_payload(rr_in_process)
         # rr_in_process is a snapshot: it can change after a CSR presses Approve/Reject/Flag in Slack
         # while the status is wait_for_manual_review.
         return ReturnRefundProcessResponse(

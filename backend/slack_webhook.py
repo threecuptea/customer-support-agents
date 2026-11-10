@@ -18,9 +18,9 @@ import logging
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 from adapters.redis_adapter import RefundRequestRedisAdapter
-from main import DATA_DIR, _resolve_db_path
+from paths import DATA_DIR, resolve_db_path as _resolve_db_path
 from langgraph.store.memory import InMemoryStore
-from memory import save_user_memory
+from memory import save_user_memory, hitl_memory_key
 
 load_dotenv(override=True)
 
@@ -99,9 +99,12 @@ async def human_review_postback(request: Request, background_tasks: BackgroundTa
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No human review action or action value found")
     
     try:
-        review_response = process_review_response(data)
+        review_response = parse_review_response(data)
     except InvalidReviewPayload as exc:
-        # Malformed/forged payload: answer 400 instead of crashing with a 500 (Slack would retry a 500).
+        # Malformed/forged payload: answer 400 (bad request) instead of crashing with a 500 (Slack would retry a 500).
+        # HTTP 400 is a client-side error.  Slack know that the client sent a malformed request and client need to correct and re-send
+        # Slack will not retry the request when receiving a 400 response.
+        # HTTP 500 is a server-side error.  Slack will retry the request when receiving a 500 response.
         logger.warning("Rejected malformed Slack interactive payload: %s", exc)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid review payload")
     # One background task, in a fixed order: update the refund request FIRST, acknowledge SECOND.
@@ -120,7 +123,7 @@ class InvalidReviewPayload(ValueError):
 ALLOWED_ACTIONS = ("approve", "reject", "flag")
 
 
-def process_review_response(data: dict[str, Any]) -> ReviewResponse:
+def parse_review_response(data: dict[str, Any]) -> ReviewResponse:
     """Decode the Slack interactive payload. Raises InvalidReviewPayload for anything malformed."""
     try:
         action_obj = data["actions"][0]
@@ -128,16 +131,15 @@ def process_review_response(data: dict[str, Any]) -> ReviewResponse:
         if action not in ALLOWED_ACTIONS:
             raise InvalidReviewPayload(f"unknown action: {action!r}")
         combo = action_obj["block_id"].split("|")
-        thread_id = combo[0]
-        refund_request_id = int(combo[1])
-        origin_order_id = int(combo[2])
-        estimated_amount_refund_incl_tax = float(combo[3])
-        customer_name = "|".join(combo[4:])  # the name is last, so a '|' inside it is preserved
+        refund_request_id = int(combo[0])
+        origin_order_id = int(combo[1])
+        estimated_amount_refund_incl_tax = float(combo[2])
+        customer_name = "|".join(combo[3:])  # the name is last, so a '|' inside it is preserved
         decided_ts = float(data["message"]["ts"])
     except (KeyError, IndexError, ValueError, TypeError, AttributeError) as exc:
         raise InvalidReviewPayload(f"malformed payload: {exc!r}") from exc
-    if not thread_id or refund_request_id <= 0:
-        raise InvalidReviewPayload("missing thread id or refund request id")
+    if refund_request_id <= 0:
+        raise InvalidReviewPayload("missing refund request id")
     response_url = data.get("response_url", "")
     decided_by = data.get("user", {}).get("name")
     reason = data.get("state", {}).get("values", {}).get("reason_input", {}).get("reason_value", {}).get("value") # this is optional
@@ -145,7 +147,6 @@ def process_review_response(data: dict[str, Any]) -> ReviewResponse:
 
     return ReviewResponse(
         response_url=response_url,
-        thread_id=thread_id,
         refund_request_id=refund_request_id,
         origin_order_id=origin_order_id,
         estimated_amount_refund_incl_tax=estimated_amount_refund_incl_tax,
@@ -172,9 +173,11 @@ def get_updated_refund_request_and_summary(refund_request: RefundRequest, review
     return refund_request, summary
 
 async def log_review_updated_summary_into_memory(customer_id: str, review_response: ReviewResponse, summary: str) -> None:
-    logger.info("log human review updated summary into memory for customer_id: %s, thread_id: %s", customer_id, f"{review_response.thread_id}-hitl-{review_response.refund_request_id}")
-    # Have a different thread to avoid collision with workflow save_user_memory.  There can be multiple refund requests being processed in the same thread
-    await save_user_memory(app.state.store, customer_id, f"{review_response.thread_id}-hitl-{review_response.refund_request_id}", summary)
+    key = hitl_memory_key(review_response.refund_request_id)
+    logger.info("log human review updated summary into memory for customer_id: %s, key: %s", customer_id, key)
+    # A key of its own (hitl-<refund_request_id>, unique per refund request) avoids collision with the workflow's per-thread
+    # save_user_memory keys; nothing from the Slack payload but the (validated) refund request id goes into it.
+    await save_user_memory(app.state.store, customer_id, key, summary)
 
 
 async def post_process_review_response(review_response: ReviewResponse) -> tuple[str, RefundRequest | None]:

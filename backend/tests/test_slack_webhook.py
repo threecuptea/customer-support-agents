@@ -9,9 +9,9 @@ from fastapi.testclient import TestClient
 from dotenv import load_dotenv
 import pytest
 import slack_webhook
-from slack_webhook import app, process_review_response, get_updated_refund_request_and_summary, InvalidReviewPayload, signature_verifier
+from memory import hitl_memory_key
+from slack_webhook import app, parse_review_response, get_updated_refund_request_and_summary, InvalidReviewPayload, signature_verifier
 from adapters import slack_adapter
-from models.slack_model import ReviewResponse
 from models.customer_support_model import CustomerContext, Customer, ItemToReturn, OrderToReturn, RefundRequest, MAX_REASON_CHARS
 from workflow.customer_support_utils import get_initial_return_refund_decision
 from models.demo_data import get_demo_customer
@@ -22,7 +22,7 @@ load_dotenv()
 
 test_request_id = 9999
 shared_thread_id = str(uuid.uuid4())
-TEST_PAYLOAD = {'type': 'block_actions', 'user': {'id': 'U0BGP48TASV', 'username': 'threecuptea', 'name': 'threecuptea', 'team_id': 'T0BHFGFMTJL'}, 'api_app_id': 'A0BJ6CVPD5G', 'token': '5L436A90IncHzTU0swTWOPMS', 'container': {'type': 'message', 'message_ts': '1793835696.919579', 'channel_id': 'C0BGQUCRKV2', 'is_ephemeral': False}, 'trigger_id': '12510419155986.11593559741632.31ccd3c0cfcf08ee87d79ecf6bc813f1', 'team': {'id': 'T0BHFGFMTJL', 'domain': 'threecupteacom'}, 'enterprise': None, 'is_enterprise_install': False, 'channel': {'id': 'C0BGQUCRKV2', 'name': 'customer-support-review-dev'}, 'message': {'user': 'U0BJ8CRSTPB', 'type': 'message', 'ts': '1793835696.919579', 'bot_id': 'B0BJ07TG75H', 'app_id': 'A0BJ6CVPD5G', 'text': "CSR's review is required for the following return for refund request", 'team': 'T0BHFGFMTJL', 'blocks': [{'type': 'section', 'block_id': 'iZLgH', 'text': {'type': 'mrkdwn', 'text': "*CSR's review is required for the following return for refund request*\n\n*Refund request id:* 9999\n*Original order number:* 123458\n*Refund amount:* $569.74\n*Customer name:* Ms. Pamela Brown\n*Delivery date:* 2026-10-10\n*Return items:*\n    Cannondale Trail 3 Mountain Bike, REI, 1, ", 'verbatim': False}}, {'type': 'input', 'block_id': 'reason_input', 'label': {'type': 'plain_text', 'text': 'Reason (Optional):', 'emoji': True}, 'optional': True, 'dispatch_action': False, 'element': {'type': 'plain_text_input', 'action_id': 'reason_value', 'placeholder': {'type': 'plain_text', 'text': 'Elaborate the reason for your decision if needed...', 'emoji': True}, 'multiline': False, 'dispatch_action_config': {'trigger_actions_on': ['on_enter_pressed']}}}, {'type': 'actions', 'block_id': '06d216ee-9171-4a6a-b88a-2c638bd29969|9999|123458|569.74|Ms. Pamela Brown', 'elements': [{'type': 'button', 'action_id': 'approve_action', 'text': {'type': 'plain_text', 'text': ':white_check_mark: Approve', 'emoji': True}, 'style': 'primary', 'value': 'approve'}, {'type': 'button', 'action_id': 'reject_action', 'text': {'type': 'plain_text', 'text': ':x: Reject', 'emoji': True}, 'style': 'danger', 'value': 'reject'}, {'type': 'button', 'action_id': 'flag_action', 'text': {'type': 'plain_text', 'text': ':warning: Flag', 'emoji': True}, 'value': 'flag'}]}]}, 'state': {'values': {'reason_input': {'reason_value': {'type': 'plain_text_input', 'value': 'It looks like a normal return for refund request'}}}}, 'response_url': 'https://hooks.slack.com/actions/T0BHFGFMTJL/12508636977350/N9BhFjdHdoNzt5qaUOG7fbWo', 'actions': [{'type': 'button', 'block_id': '06d216ee-9171-4a6a-b88a-2c638bd29969|9999|123458|569.74|Ms. Pamela Brown', 'action_id': 'approve_action', 'text': {'type': 'plain_text', 'text': ':white_check_mark: Approve', 'emoji': True}, 'value': 'approve', 'style': 'primary', 'action_ts': '1793835785.140390'}]}
+TEST_PAYLOAD = {'type': 'block_actions', 'user': {'id': 'U0BGP48TASV', 'username': 'threecuptea', 'name': 'threecuptea', 'team_id': 'T0BHFGFMTJL'}, 'api_app_id': 'A0BJ6CVPD5G', 'token': '5L436A90IncHzTU0swTWOPMS', 'container': {'type': 'message', 'message_ts': '1793835696.919579', 'channel_id': 'C0BGQUCRKV2', 'is_ephemeral': False}, 'trigger_id': '12510419155986.11593559741632.31ccd3c0cfcf08ee87d79ecf6bc813f1', 'team': {'id': 'T0BHFGFMTJL', 'domain': 'threecupteacom'}, 'enterprise': None, 'is_enterprise_install': False, 'channel': {'id': 'C0BGQUCRKV2', 'name': 'customer-support-review-dev'}, 'message': {'user': 'U0BJ8CRSTPB', 'type': 'message', 'ts': '1793835696.919579', 'bot_id': 'B0BJ07TG75H', 'app_id': 'A0BJ6CVPD5G', 'text': "CSR's review is required for the following return for refund request", 'team': 'T0BHFGFMTJL', 'blocks': [{'type': 'section', 'block_id': 'iZLgH', 'text': {'type': 'mrkdwn', 'text': "*CSR's review is required for the following return for refund request*\n\n*Refund request id:* 9999\n*Original order number:* 123458\n*Refund amount:* $569.74\n*Customer name:* Ms. Pamela Brown\n*Delivery date:* 2026-10-10\n*Return items:*\n    Cannondale Trail 3 Mountain Bike, REI, 1, ", 'verbatim': False}}, {'type': 'input', 'block_id': 'reason_input', 'label': {'type': 'plain_text', 'text': 'Reason (Optional):', 'emoji': True}, 'optional': True, 'dispatch_action': False, 'element': {'type': 'plain_text_input', 'action_id': 'reason_value', 'placeholder': {'type': 'plain_text', 'text': 'Elaborate the reason for your decision if needed...', 'emoji': True}, 'multiline': False, 'dispatch_action_config': {'trigger_actions_on': ['on_enter_pressed']}}}, {'type': 'actions', 'block_id': '9999|123458|569.74|Ms. Pamela Brown', 'elements': [{'type': 'button', 'action_id': 'approve_action', 'text': {'type': 'plain_text', 'text': ':white_check_mark: Approve', 'emoji': True}, 'style': 'primary', 'value': 'approve'}, {'type': 'button', 'action_id': 'reject_action', 'text': {'type': 'plain_text', 'text': ':x: Reject', 'emoji': True}, 'style': 'danger', 'value': 'reject'}, {'type': 'button', 'action_id': 'flag_action', 'text': {'type': 'plain_text', 'text': ':warning: Flag', 'emoji': True}, 'value': 'flag'}]}]}, 'state': {'values': {'reason_input': {'reason_value': {'type': 'plain_text_input', 'value': 'It looks like a normal return for refund request'}}}}, 'response_url': 'https://hooks.slack.com/actions/T0BHFGFMTJL/12508636977350/N9BhFjdHdoNzt5qaUOG7fbWo', 'actions': [{'type': 'button', 'block_id': '9999|123458|569.74|Ms. Pamela Brown', 'action_id': 'approve_action', 'text': {'type': 'plain_text', 'text': ':white_check_mark: Approve', 'emoji': True}, 'value': 'approve', 'style': 'primary', 'action_ts': '1793835785.140390'}]}
 
 
 @pytest.fixture(scope="class")
@@ -77,10 +77,10 @@ def seed_refund_request(redis_client, status="wait_for_manual_review", request_i
 
 
 def make_payload(rr: RefundRequest, action="approve", reason="It looks like a normal return for refund request", *, order_id=None) -> dict:
-    """The captured Slack payload, re-pointed at `rr` (block_id carries thread|rr id|order id|amount|name)."""
+    """The captured Slack payload, re-pointed at `rr` (block_id carries rr id|order id|amount|name)."""
     payload = copy.deepcopy(TEST_PAYLOAD)
     order_id = order_id if order_id is not None else rr.returned_order.origin_order_id
-    block_id = f"{shared_thread_id}|{rr.refund_request_id}|{order_id}|{rr.returned_order.estimated_amount_refund_incl_tax}|{CUSTOMER_NAME}"
+    block_id = f"{rr.refund_request_id}|{order_id}|{rr.returned_order.estimated_amount_refund_incl_tax}|{CUSTOMER_NAME}"
     payload["actions"][0]["block_id"] = block_id
     payload["actions"][0]["value"] = action
     payload["state"]["values"]["reason_input"]["reason_value"]["value"] = reason
@@ -111,8 +111,7 @@ def stored(redis_client, request_id=test_request_id) -> RefundRequest:
 
 
 def test_process_review_response():
-    review_response = process_review_response(TEST_PAYLOAD)
-    assert review_response.thread_id == "06d216ee-9171-4a6a-b88a-2c638bd29969"
+    review_response = parse_review_response(TEST_PAYLOAD)
     assert review_response.action == "approve"  
     assert review_response.refund_request_id == 9999
     assert review_response.origin_order_id == 123458
@@ -136,7 +135,7 @@ def test_slack_webhook_interaction(client, redis_client, acks):
     assert acks.replaces[0][0] == payload["response_url"]
     assert acks.replaces[0][1].status == "manual_approve"
 
-    review_response = process_review_response(payload)
+    review_response = parse_review_response(payload)
     updated_refund_request, _ = get_updated_refund_request_and_summary(temp_request, review_response)
     rr_json = redis_client.get(f"rr:{test_request_id}")  # Retrieve the updated refund request from Redis
     rr = RefundRequest.model_validate_json(rr_json)
@@ -149,7 +148,7 @@ def test_slack_webhook_interaction(client, redis_client, acks):
     assert rr.customer.customer_id == 32100
 
     # Retrieve the memory note for the user and verify its content
-    result = client.app.state.store.get(("users", str(32100)), f"{review_response.thread_id}-hitl-{review_response.refund_request_id}")
+    result = client.app.state.store.get(("users", str(32100)), hitl_memory_key(review_response.refund_request_id))
     # why this one return empty? but client.app.state.store.get works.
     # result = asyncio.run(load_user_memory(client.app.state.store, 32100, limit=5))  # Assuming customer_id is 32100 for this test
     text= result.value.get("text", "") if result else ""
@@ -158,7 +157,7 @@ def test_slack_webhook_interaction(client, redis_client, acks):
     assert review_response.decided_by in text
     assert rr.decided_date.strftime('%Y-%m-%d %H:%M:%S') in text
     # Cleanup: Delete the memory note for the user after the test
-    client.app.state.store.delete(("users", str(32100)), f"{review_response.thread_id}-hitl-{review_response.refund_request_id}")
+    client.app.state.store.delete(("users", str(32100)), hitl_memory_key(review_response.refund_request_id))
 
 
 def test_app_under_test_uses_the_isolated_redis_db(client, redis_client):
@@ -201,9 +200,9 @@ def test_missing_signature_headers_are_rejected(client, redis_client, acks):
 @pytest.mark.parametrize("mutate", [
     lambda p: p["actions"][0].update(value="delete"),                                   # unknown action
     lambda p: p["actions"][0].update(value=None),
-    lambda p: p["actions"][0].update(block_id="only-a-thread-id"),                       # block_id too short
-    lambda p: p["actions"][0].update(block_id="t|not-a-number|1|2.0|Name"),
-    lambda p: p["actions"][0].update(block_id="t|-5|1|2.0|Name"),                        # non-positive id
+    lambda p: p["actions"][0].update(block_id="only-one-part"),                       # block_id too short
+    lambda p: p["actions"][0].update(block_id="not-a-number|1|2.0|Name"),
+    lambda p: p["actions"][0].update(block_id="-5|1|2.0|Name"),                        # non-positive id
     lambda p: p["message"].update(ts="not-a-timestamp"),
     lambda p: p.pop("message"),
     lambda p: p.update(actions=[]),
@@ -228,7 +227,7 @@ def test_process_review_response_rejects_unknown_action():
     payload = copy.deepcopy(TEST_PAYLOAD)
     payload["actions"][0]["value"] = "refund_everything"
     with pytest.raises(InvalidReviewPayload):
-        process_review_response(payload)
+        parse_review_response(payload)
 
 
 def test_second_press_cannot_flip_a_decided_request(client, redis_client, acks):
@@ -263,7 +262,7 @@ def test_only_wait_for_manual_review_can_be_decided(client, redis_client, acks, 
 def test_unknown_refund_request_is_reported_not_crashed(client, redis_client, acks):
     rr = seed_refund_request(redis_client)
     payload = make_payload(rr)
-    payload["actions"][0]["block_id"] = payload["actions"][0]["block_id"].replace(f"|{rr.refund_request_id}|", "|424242|")
+    payload["actions"][0]["block_id"] = payload["actions"][0]["block_id"].replace(f"{rr.refund_request_id}|", "424242|", 1)
     assert signed_post(client, payload).status_code == 200
     assert "was not found" in acks[0][1]
     assert stored(redis_client).status == "wait_for_manual_review"
@@ -317,10 +316,10 @@ def _block_types(blocks):
 
 def test_decided_message_has_details_and_outcome_but_no_input_or_buttons(redis_client):
     rr = seed_refund_request(redis_client)
-    pending = slack_adapter.build_interactive_blocks_payload(shared_thread_id, rr)
+    pending = slack_adapter.build_interactive_blocks_payload(rr)
     assert _block_types(pending) == ["section", "input", "actions"]  # what a reviewer sees while it needs attention
 
-    review = process_review_response(make_payload(rr, "reject", "outside the window"))
+    review = parse_review_response(make_payload(rr, "reject", "outside the window"))
     decided_rr, _ = get_updated_refund_request_and_summary(rr, review)
     blocks = slack_adapter.build_decided_blocks_payload(decided_rr)
     assert _block_types(blocks) == ["section", "section", "divider"]  # no "input", no "actions"; divider marks the end
@@ -332,13 +331,13 @@ def test_decided_message_has_details_and_outcome_but_no_input_or_buttons(redis_c
 @pytest.mark.parametrize("action,label", [("approve", "Approved"), ("reject", "Rejected"), ("flag", "Flagged")])
 def test_decided_message_labels(redis_client, action, label):
     rr = seed_refund_request(redis_client)
-    decided_rr, _ = get_updated_refund_request_and_summary(rr, process_review_response(make_payload(rr, action)))
+    decided_rr, _ = get_updated_refund_request_and_summary(rr, parse_review_response(make_payload(rr, action)))
     assert label in slack_adapter.build_decided_blocks_payload(decided_rr)[1]["text"]["text"]
 
 
 def test_replace_original_message_posts_replace_original_and_never_raises(monkeypatch, redis_client):
     rr = seed_refund_request(redis_client)
-    decided_rr, _ = get_updated_refund_request_and_summary(rr, process_review_response(make_payload(rr)))
+    decided_rr, _ = get_updated_refund_request_and_summary(rr, parse_review_response(make_payload(rr)))
     sent = []
 
     async def record(self, url, json=None, **k):
@@ -363,7 +362,7 @@ def test_replace_original_message_posts_replace_original_and_never_raises(monkey
 
 
 def test_ack_failures_never_raise(monkeypatch):
-    data = process_review_response(TEST_PAYLOAD)
+    data = parse_review_response(TEST_PAYLOAD)
 
     async def boom(self, *a, **k):
         raise httpx.ConnectError("slack is down")

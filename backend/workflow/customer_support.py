@@ -1,7 +1,7 @@
 from __future__ import annotations
 from models.customer_support_model import Customer, CustomerContext, CustomerSupportState, FAQMatchEvals, FAQMatchResult, Order, OrderStructuredOutput,\
     ESCALATE_REASON, OrderRevisitEval, ExchangeReturnRefundAction, ExchangeReturnReason, ExchangeOrReturnInput, OrderToReturn, OrderRefundStatus, \
-    ReturnRefundStructuredOutput
+    ReturnRefundStructuredOutput, RefundRequest
 
 from langgraph.graph import END, START, StateGraph
 from langchain_core.messages import HumanMessage, RemoveMessage, SystemMessage, AIMessage, ChatMessage
@@ -556,52 +556,68 @@ class CustomerSupportAgent:
         }
 
     async def return_refund_process_node(self, state: CustomerSupportState) -> dict[str, Any]:
-        rr_id_in_process = state["rr_id_in_process"]    
-        temp_request = await self.redis_adapter.retrieve_refund_request(rr_id_in_process)
-        if temp_request is None:
-            # Redis is a cache; the service layer answers 400 first, this protects direct graph callers.
-            raise ValueError(f"Refund request {rr_id_in_process} not found in Redis")
+        rr_id_in_process = state["rr_id_in_process"]
         initial_decision = state["initial_return_refund_decision"]
-        response = ""
-        match initial_decision.order_refund_status:
-            case OrderRefundStatus.ORDER_AUTO_REFUNDABLE:
-                temp_request.status = 'auto_approve'
-                temp_request.decided_by = 'Agent'
-                temp_request.decided_date = temp_request.request_date
-                response = "You would receive a confirmation email with instructions on how and where to send your package."
-            case OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS | OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS:
-                reason = "the request has passed the return window deadline." if initial_decision.order_refund_status == OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS else \
-                "the request includes a non-refundable item."
-                if state.get("notes_for_human_review_override"):
-                    temp_request.status = 'wait_for_manual_review'
-                    temp_request.requires_manual_approval = True
-                    temp_request.requires_manual_approval_reason = reason
-                    temp_request.notes_for_human_review_override = state["notes_for_human_review_override"]
-                    response = "You would receive an email of a human review result regarding to your refund request shortly. " \
-                        "If approved, Your email will have the instructions on how and where to send your package."
-                else:    
-                    temp_request.status = 'auto_reject'
+        notes_override = state.get("notes_for_human_review_override")
+        if initial_decision.order_refund_status not in (
+                OrderRefundStatus.ORDER_AUTO_REFUNDABLE,
+                OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS,
+                OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS,
+                OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT):
+            return {}
+        responses: list[str] = []
+
+        def apply_decision(temp_request: RefundRequest) -> RefundRequest:
+            """Pure in-memory edit; it may run more than once if the compare-and-set has to retry."""
+            responses.clear()
+            match initial_decision.order_refund_status:
+                case OrderRefundStatus.ORDER_AUTO_REFUNDABLE:
+                    temp_request.status = 'auto_approve'
                     temp_request.decided_by = 'Agent'
                     temp_request.decided_date = temp_request.request_date
-                    temp_request.decision_reason = reason
-                    response = "You would receive a rejection email and detail the underlined reason."
-            case OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT:
-                temp_request.status = 'wait_for_manual_review'
-                temp_request.requires_manual_approval = True
-                temp_request.requires_manual_approval_reason = "the request exceeds the automatic authorized refund amount"
-                response = "You would receive an email of a human review result regarding to your refund request shortly. " \
-                    "If approved, Your email will have the instructions on how and where to send your package."
-            case _:
-                return {}
-        await self.redis_adapter.update_refund_request(rr_id_in_process, temp_request)
+                    responses.append("You would receive a confirmation email with instructions on how and where to send your package.")
+                case OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS | OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS:
+                    reason = "the request has passed the return window deadline." if initial_decision.order_refund_status == OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS else \
+                    "the request includes a non-refundable item."
+                    if notes_override:
+                        temp_request.status = 'wait_for_manual_review'
+                        temp_request.requires_manual_approval = True
+                        temp_request.requires_manual_approval_reason = reason
+                        temp_request.notes_for_human_review_override = notes_override
+                        responses.append("You would receive an email of a human review result regarding to your refund request shortly. "
+                            "If approved, Your email will have the instructions on how and where to send your package.")
+                    else:
+                        temp_request.status = 'auto_reject'
+                        temp_request.decided_by = 'Agent'
+                        temp_request.decided_date = temp_request.request_date
+                        temp_request.decision_reason = reason
+                        responses.append("You would receive a rejection email and detail the underlined reason.")
+                case OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT:
+                    temp_request.status = 'wait_for_manual_review'
+                    temp_request.requires_manual_approval = True
+                    temp_request.requires_manual_approval_reason = "the request exceeds the automatic authorized refund amount"
+                    responses.append("You would receive an email of a human review result regarding to your refund request shortly. "
+                        "If approved, Your email will have the instructions on how and where to send your package.")
+            return temp_request
+
+        # Compare-and-set on `pending`: /process is one-shot, so a concurrent or repeated call (or a Slack decision
+        # that somehow got there first) can never overwrite a request that has already left `pending`.
+        outcome, current = await self.redis_adapter.update_refund_request_if_status(
+            rr_id_in_process, "pending", apply_decision)
+        if outcome == "not_found":
+            # Redis is a cache; the service layer answers 400 first, this protects direct graph callers.
+            raise ValueError(f"Refund request {rr_id_in_process} not found in Redis")
+        if outcome == "status_mismatch":
+            raise ValueError(f"Refund request {rr_id_in_process} has already been processed (status: {current.status})")
+        response = responses[-1]
         message = ChatMessage(content=response, role= ROLE_AGENT, additional_kwargs={"source": SOURCE_RETURN_REFUND_PROCESS})
-        
+
         return {
             "response": response,
             "messages": [message],
             "rr_being_processed": True,
         }
-            
+
     async def return_refund_chat_node(self, state: CustomerSupportState) -> dict[str, Any]:
         recent_conversations = "\n".join(
             [f"- {message.content}" for message in state['messages']]

@@ -75,6 +75,18 @@ def clean_user_memory(store: BaseStore, user_id: Any) -> None:
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("Memory clean failed: %s", exc)    
 
+HITL_KEY_PREFIX = "hitl-"
+
+
+def hitl_memory_key(refund_request_id: int) -> str:
+    """Memory key of a human review result. The refund request id is globally unique (Redis INCR), so no thread id is needed."""
+    return f"{HITL_KEY_PREFIX}{refund_request_id}"
+
+
+def is_hitl_key(key: str) -> bool:
+    return key.startswith(HITL_KEY_PREFIX)
+
+
 # Need to summarize the conversation and how to summarize the conversation.
 async def save_user_memory(
     store: BaseStore, user_id: Any, thread_id: str, text: str
