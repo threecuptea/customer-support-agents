@@ -45,7 +45,7 @@ class RefundRequestRedisAdapter:
         if not refund_request_json:
             return None
         refund_request = RefundRequest.model_validate_json(refund_request_json)
-        if csa_only and refund_request.status != "csa":
+        if csa_only and refund_request.created_by != "csa":
             return None
         return refund_request
 
@@ -58,7 +58,7 @@ class RefundRequestRedisAdapter:
             refund_request_json = await self.redis_client.get(refund_request_key)
             if refund_request_json:
                 refund_request = RefundRequest.model_validate_json(refund_request_json)
-                if csa_only and refund_request.status != "csa":
+                if csa_only and refund_request.created_by != "csa":
                     continue
                 refund_requests.append(refund_request)
         return refund_requests
