@@ -301,7 +301,7 @@ async def invoke_return_refund_chat_workflow(support: GenericChatInput, request:
 async def retrieve_refund_request(refund_request_id: int, request: Request) -> RefundRequest | None:
     session_email(request)  # 401 if not signed in (before touching Redis)
     try:
-        refund_request = await request.app.state.redis_adapter.retrieve_refund_request(refund_request_id)
+        refund_request = await request.app.state.redis_adapter.retrieve_refund_request(refund_request_id, csa_only=True)
     except Exception as exc:
         error_msg = f"Error retrieving refund request by ID: {refund_request_id}"
         logger.exception(error_msg)
@@ -315,7 +315,7 @@ async def retrieve_refund_request(refund_request_id: int, request: Request) -> R
 async def retrieve_refund_requests_by_order(order_id: int, request: Request) -> list[RefundRequest]:
     session_email(request)
     try:
-        refund_requests = await request.app.state.redis_adapter.retrieve_refund_requests_by_order(order_id)
+        refund_requests = await request.app.state.redis_adapter.retrieve_refund_requests_by_order(order_id, csa_only=True)
     except Exception as exc:
         error_msg = f"Error retrieving refund requests by order ID: {order_id}"
         logger.exception(error_msg)

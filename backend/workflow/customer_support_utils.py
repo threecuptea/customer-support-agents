@@ -49,7 +49,7 @@ FAQs = {
 
         "What is your return policy in summary?": "We accept returns within 35 days of delivery for unused items.  The return item must have its tags attached "
         "and be returned in its original packaging with your receipt or proof of purchase",
-        "How do I start a return?": "You can talk to me to start a return/ refund request.",
+        "How do I start a return?": "You can talk to me to start a return/ refund request. However, you have to contact our customer support representative for the second return for refund request if you need to split the return.",
 
         "What items cannot be returned?": "We cannot accept returns on final sale items, customized items, perishable items, gift cards, or items that have been altered or damaged by the customer. "
         "Certain high-risk items, such as luxury goods and intimate items, are marked as non-returnable unless they are defective or damaged upon receipt.",
@@ -101,6 +101,8 @@ We are not charging any re-stocking fees. However, you will return at your own e
 
 5. How do I start a return?
 To initiate a return, you can contact our customer support web site. You'll need your the email address to login and start the process.
+dWe o not encourage to split return for refund requests for an order unless absolutely necessary.  In such cases, you have to contact our customer support representative for the second return for refund request.
+
 
 If your return is accepted, We will email you instructions on how and where to send your package.
 

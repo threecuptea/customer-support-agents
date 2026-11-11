@@ -38,15 +38,18 @@ class RefundRequestRedisAdapter:
         await self.redis_client.rpush(f"rr:by_order:{value.returned_order.origin_order_id}", f"rr:{new_value}")
         return new_value  # Return the new key for the retrieval of the refund request later.
 
-    async def retrieve_refund_request(self, refund_request_id: int) -> RefundRequest | None:    
+    async def retrieve_refund_request(self, refund_request_id: int, csa_only: bool = True) -> RefundRequest | None:    
         if not self.redis_client:
             raise RuntimeError("Redis client is not connected.")
         refund_request_json = await self.redis_client.get(f"rr:{refund_request_id}")
         if not refund_request_json:
             return None
-        return RefundRequest.model_validate_json(refund_request_json)
+        refund_request = RefundRequest.model_validate_json(refund_request_json)
+        if csa_only and refund_request.status != "csa":
+            return None
+        return refund_request
 
-    async def retrieve_refund_requests_by_order(self, origin_order_id: int) -> list[RefundRequest]:
+    async def retrieve_refund_requests_by_order(self, origin_order_id: int, csa_only: bool = True)-> list[RefundRequest]:
         if not self.redis_client:
             raise RuntimeError("Redis client is not connected.")
         refund_request_keys = await self.redis_client.lrange(f"rr:by_order:{origin_order_id}", 0, -1)
@@ -54,7 +57,10 @@ class RefundRequestRedisAdapter:
         for refund_request_key in refund_request_keys:
             refund_request_json = await self.redis_client.get(refund_request_key)
             if refund_request_json:
-                refund_requests.append(RefundRequest.model_validate_json(refund_request_json))
+                refund_request = RefundRequest.model_validate_json(refund_request_json)
+                if csa_only and refund_request.status != "csa":
+                    continue
+                refund_requests.append(refund_request)
         return refund_requests
 
     async def update_refund_request(self, refund_request_id: int, value: RefundRequest) -> None:

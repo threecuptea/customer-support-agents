@@ -124,6 +124,7 @@ class RefundRequest(BaseModel):
     decided_by: Annotated[str, Field(min_length=1)] | None = None
     decision_reason: Annotated[str, Field(min_length=1, max_length=MAX_REASON_CHARS)] | None = None
     decided_date: datetime | None = None
+    created_by: Literal["csa", "csr"] = "csa"
     customer: Customer
     returned_order: ReturnedOrder
 

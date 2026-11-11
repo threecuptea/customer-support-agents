@@ -55,7 +55,7 @@ export const FAQ_SECTIONS: FaqSection[] = [
       },
       {
         "question": "How do I start a return?",
-        "answer": "You can talk to me to start a return/ refund request."
+        "answer": "You can talk to me to start a return/ refund request. However, you have to contact our customer support representative for the second return for refund request if you need to split the return."
       },
       {
         "question": "What items cannot be returned?",
