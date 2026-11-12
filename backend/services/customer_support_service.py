@@ -161,6 +161,10 @@ async def invoke_exchange_return_recommendation_workflow(exchange_return_reason:
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
 
 
+ONE_REFUND_REQUEST_PER_ORDER = ("This order already has a return/ refund request. For any further return of this order, "
+    "please contact a customer-support representative.")
+
+
 async def invoke_return_refund_init_workflow(order_to_return: OrderToReturn, request: Request) -> InitialReturnRefundResponse:
     graph = request.app.state.support_graph
     thread_id = order_to_return.thread_id
@@ -171,6 +175,11 @@ async def invoke_return_refund_init_workflow(order_to_return: OrderToReturn, req
         # verify if the target order and order to return are in a valid state to start a return refund.
         target_order: Order = existing_state.values.get("target_order")
         check_if_order_to_return_in_valid_state(order_to_return, target_order)
+        # One CSA refund request per order: once it has left `pending` the agent creates no other. A further
+        # return (e.g. the other items of the order) goes to a human CSR. A `pending` one is adopted by the init node.
+        existing_requests = await request.app.state.redis_adapter.retrieve_refund_requests_by_order(target_order.order_id)
+        if any(rr.status != "pending" and owns_refund_request(request, rr) for rr in existing_requests):
+            raise ValueError(ONE_REFUND_REQUEST_PER_ORDER)
         initial_state = {
             "messages": [HumanMessage(content= f"Initialize return refund: {target_order.order_id}")],
             "support_category": "return_refund",
@@ -287,10 +296,13 @@ async def invoke_return_refund_chat_workflow(support: GenericChatInput, request:
         if memory_dict:
             initial_state.update(memory_dict)
         customer_support_state  = await graph.ainvoke(initial_state, config)
+        # Re-read after the graph: a Slack decision may have changed the status, and the UI shows this copy.
+        rr_in_process = await request.app.state.redis_adapter.retrieve_refund_request(rr_id_in_process)
         return ReturnRefundChatResponse(
             thread_id = thread_id,
             response = customer_support_state["response"],
             request_human_review_return_refund = customer_support_state["request_human_review_return_refund"],
+            rr_in_process = rr_in_process,
         )
         
     except Exception as exc:

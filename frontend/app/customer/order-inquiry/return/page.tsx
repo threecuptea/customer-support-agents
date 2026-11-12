@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Send,
@@ -10,7 +10,6 @@ import {
   ClipboardList,
   ShieldCheck,
   Receipt,
-  RotateCcw,
   MessageCircleQuestion,
   User,
   Bot,
@@ -19,6 +18,8 @@ import { useAuth, useRequireRole, Order } from "../../../../lib/auth-context";
 import { useOrderInquiry } from "../../../../lib/order-inquiry-context";
 import { EXCHANGE_RETURN_REASONS } from "../../../../lib/exchange-return-reasons";
 import { RETURN_POLICY } from "../../../../lib/return-policy";
+import { RefundRequest, isProcessed } from "../../../../lib/refund-request";
+import { useRefundRequestSync } from "../../../../lib/use-refund-request-sync";
 
 // Backend API base URL — defaults to same-origin (single-container deploy).
 // Override with NEXT_PUBLIC_API_URL at build time for other setups.
@@ -46,28 +47,6 @@ const OTHERS_KEY = "OTHERS";
 interface ReturnRefundInitialDecision {
   order_refund_status: string;
 }
-interface ReturnedOrder {
-  origin_order_id: number;
-  original_delivery_date: string;
-  returned_date: string | null;
-  status: "returned" | "pending";
-  tax_applied_rate: number;
-  estimated_amount_refund_incl_tax: number;
-  refurbished_amount_incl_tax: number;
-  processed_date: string | null;
-}
-interface RefundRequest {
-  refund_request_id: number;
-  request_date: string;
-  status: string;
-  requires_manual_approval: boolean;
-  requires_manual_approval_reason: string | null;
-  notes_for_human_review_override: string | null;
-  decided_by: string | null;
-  decision_reason: string | null;
-  decided_date: string | null;
-  returned_order: ReturnedOrder;
-}
 interface InitialReturnRefundResponse {
   thread_id: string;
   response: string;
@@ -85,6 +64,8 @@ interface ReturnRefundChatResponse {
   thread_id: string;
   response: string;
   request_human_review_return_refund: boolean;
+  // Latest copy from Redis (a Slack review may have changed it); absent on older backends.
+  rr_in_process?: RefundRequest | null;
 }
 interface GenericResponse {
   thread_id: string;
@@ -125,8 +106,16 @@ export default function ExchangeReturnPage() {
   const { session, isLoading } = useRequireRole("customer");
   const { logout } = useAuth();
   const router = useRouter();
-  const { threadId, targetOrder, exchangeReturnSurvey, markExchangeReturnSurveyDone, leaveOrderThread } =
-    useOrderInquiry();
+  const {
+    threadId,
+    targetOrder,
+    exchangeReturnSurvey,
+    markExchangeReturnSurveyDone,
+    leaveOrderThread,
+    refundRequest,
+    setRefundRequest,
+  } = useOrderInquiry();
+  const { refresh: refreshRefundRequest } = useRefundRequestSync();
 
   // Guard: this screen only makes sense mid-visit, right after the customer
   // picked a delivered order on the order-inquiry screen. A direct reload/URL
@@ -154,7 +143,6 @@ export default function ExchangeReturnPage() {
     initialSelections(targetOrder)
   );
   const [initialDecision, setInitialDecision] = useState<ReturnRefundInitialDecision | null>(null);
-  const [refundRequest, setRefundRequest] = useState<RefundRequest | null>(null);
   const [decisionResponse, setDecisionResponse] = useState<string | null>(null);
   const [chatMode, setChatMode] = useState(false);
   const [chatInput, setChatInput] = useState("");
@@ -167,10 +155,56 @@ export default function ExchangeReturnPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // The agent keeps ONE refund request per order. If this order already has a `pending` one (the customer left
+  // before pressing "Process the request", or logged out and back in), resume it: /init adopts the pending
+  // request into this thread (it ignores the items, which are the request's own) and returns its decision.
+  const resumedRef = useRef(false);
+  // True while a pending request is being adopted: the itemized table is not shown (nothing to edit, it would only
+  // flash before the decision appears).
+  const [resuming, setResuming] = useState(false);
+  useEffect(() => {
+    if (resumedRef.current || !eligible || !threadId || initialDecision) return;
+    if (!refundRequest || refundRequest.status !== "pending") return;
+    resumedRef.current = true;
+    const items = refundRequest.returned_order.items.map((i) => ({ product_id: i.product_id, qty: i.number_units }));
+    setItemSelections((prev) => {
+      const next = { ...prev };
+      for (const i of items) next[i.product_id] = { selected: true, qty: i.qty };
+      return next;
+    });
+    setStep("process");
+    setLoading(true);
+    setResuming(true);
+    (async () => {
+      try {
+        const res = await fetch(`${API_URL}/support/return_refund/init`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ thread_id: threadId, items }),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          setError(body?.detail ?? `HTTP ${res.status}`);
+          return;
+        }
+        const data: InitialReturnRefundResponse = await res.json();
+        setInitialDecision(data.initial_return_refund_decision);
+        setRefundRequest(data.rr_in_process);
+        setDecisionResponse(data.response);
+      } catch {
+        setError("Could not reach support. Please try again.");
+      } finally {
+        setLoading(false);
+        setResuming(false);
+      }
+    })();
+  }, [eligible, threadId, initialDecision, refundRequest, setRefundRequest]);
+
   if (isLoading || !session || !eligible) return null;
 
   const itemsEditable = !initialDecision;
-  const processed = rrBeingProcessed;
+  // `rrBeingProcessed` comes from /process; after a refresh from Redis (or a resume) only the status is known.
+  const processed = rrBeingProcessed || isProcessed(refundRequest);
 
   const exit = async () => {
     await leaveOrderThread();
@@ -256,18 +290,6 @@ export default function ExchangeReturnPage() {
     }
   };
 
-  const resetItemizeInput = () => {
-    setInitialDecision(null);
-    setRefundRequest(null);
-    setDecisionResponse(null);
-    setChatMode(false);
-    setChatInput("");
-    setChatExchanges([]);
-    setRequestHumanReview(false);
-    setReviewNotes("");
-    setError(null);
-  };
-
   const sendReturnRefundChat = async () => {
     const trimmed = chatInput.trim();
     if (!trimmed || !threadId) return;
@@ -283,12 +305,19 @@ export default function ExchangeReturnPage() {
       const data: ReturnRefundChatResponse = await res.json();
       setChatExchanges((prev) => [...prev, { question: trimmed, answer: data.response }]);
       setRequestHumanReview(data.request_human_review_return_refund);
+      if (data.rr_in_process) setRefundRequest(data.rr_in_process);
       setChatInput("");
     } catch {
       setError("Could not reach support. Please try again.");
     } finally {
       setLoading(false);
     }
+  };
+
+  // Opening the chat is only a screen switch, so pull the latest request first: a Slack review may have decided it.
+  const openChat = async () => {
+    await refreshRefundRequest();
+    setChatMode(true);
   };
 
   const processRequest = async () => {
@@ -477,7 +506,13 @@ export default function ExchangeReturnPage() {
               <Receipt className="w-6 h-6 text-brand-purple" /> Return/ Refund for Order #{targetOrder.order_id}
             </h1>
 
-            <div className="bg-white border border-gray-100 rounded-xl shadow-soft p-4 mb-6 overflow-x-auto">
+            {resuming && (
+              <div className="flex items-center gap-2 text-sm text-gray-600 mb-6" data-testid="resuming">
+                <Loader2 className="w-4 h-4 animate-spin" /> Loading your return request...
+              </div>
+            )}
+
+            <div className={`bg-white border border-gray-100 rounded-xl shadow-soft p-4 mb-6 overflow-x-auto ${resuming ? "hidden" : ""}`}>
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-gray-600">
@@ -541,7 +576,7 @@ export default function ExchangeReturnPage() {
               </table>
             </div>
 
-            {itemsEditable && (
+            {itemsEditable && !resuming && (
               <div className="flex flex-wrap justify-center gap-3 mb-6">
                 <button
                   onClick={submitItemize}
@@ -745,26 +780,19 @@ export default function ExchangeReturnPage() {
                     <ArrowLeft className="w-4 h-4" /> Cancel
                   </button>
                   <button
-                      onClick={() => setChatMode(true)}
+                      onClick={openChat}
                       disabled={loading || !refundRequest || chatMode}
                       className="inline-flex items-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-50 text-gray-800 rounded-lg px-4 py-2 text-sm font-medium transition-colors"
                     >
                       <MessageCircleQuestion className="w-4 h-4" /> I like to chat
                     </button>
-                  <button
-                    onClick={resetItemizeInput}
-                    disabled={loading}
-                    className="inline-flex items-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-50 text-gray-800 rounded-lg px-4 py-2 text-sm font-medium transition-colors"
-                  >
-                    <RotateCcw className="w-4 h-4" /> Reset Input
-                  </button>
                 </>
               )}
 
               {processed && (
                 <>
                   <button
-                      onClick={() => setChatMode(true)}
+                      onClick={openChat}
                       disabled={loading || !refundRequest || chatMode}
                       className="inline-flex items-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-50 text-gray-800 rounded-lg px-4 py-2 text-sm font-medium transition-colors"
                     >

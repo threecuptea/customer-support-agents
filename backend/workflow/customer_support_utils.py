@@ -279,12 +279,15 @@ def check_if_order_to_return_in_valid_state(return_order: OrderToReturn, origina
         raise ValueError(ORIGINAL_ORDER_FOR_RETURN_IS_NOT_DELIVERED)
         
     product_dict = {item.product_id: item.number_units for item in original_order.items}
+    returned_units: dict = {}
     for item_return in return_order.items:
         if item_return.product_id not in product_dict:
             raise ValueError(f"{item_return.product_id} is {NOT_A_VALID_PRODUCT_ID}: {original_order.order_id}")
-        if item_return.qty > product_dict[item_return.product_id]:
-            raise ValueError(f"The return {item_return.qty} units of {item_return.product_id} is {NOT_A_VALID_RETURN_QUANTITY}: {original_order.order_id}.")
-    return True    
+        # Sum duplicate rows of the same product so that two rows cannot together exceed the ordered units.
+        returned_units[item_return.product_id] = returned_units.get(item_return.product_id, 0) + item_return.qty
+        if returned_units[item_return.product_id] > product_dict[item_return.product_id]:
+            raise ValueError(f"The return {returned_units[item_return.product_id]} units of {item_return.product_id} is {NOT_A_VALID_RETURN_QUANTITY}: {original_order.order_id}.")
+    return True
 
 def get_initial_return_refund_decision(return_order: OrderToReturn, original_order: Order, customer: Customer) -> tuple[RefundRequest, ReturnRefundInitialDecision]:
     """ Get ReturnRefundDecision with OrderRefundStatus signals how we should handle return refund
@@ -311,6 +314,7 @@ def get_initial_return_refund_decision(return_order: OrderToReturn, original_ord
     refund_request.returned_order.estimated_amount_refund_incl_tax = _calculate_amount_refund_incl_tax(refund_request)
     
     initial_decision: ReturnRefundInitialDecision = _get_initial_return_refund_decision(refund_request)
+    refund_request.initial_decision = initial_decision.order_refund_status
     return (refund_request, initial_decision)
 
 

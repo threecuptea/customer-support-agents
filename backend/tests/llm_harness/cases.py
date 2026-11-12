@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from langchain_core.messages import AIMessage, HumanMessage
 
 from models.customer_support_model import (
+    CustomerContext,
     Order, OrderItem, OrderRefundStatus, ReturnRefundInitialDecision, Customer,
 )
 from tests.llm_harness.harness import Case
@@ -125,6 +126,11 @@ RETURN_REFUND_CASES: list[Case] = [
         question="What is the status of my request?",
         must_not_contain=["has been approved", "is approved", "refund is approved", "i have approved"] + NO_REVIEW_OFFER,
         expect={"request_human_review_return_refund": False}),
+    _rr("RR-15", "processed (final): customer wants to return the other items of the order -> a representative handles it, no new return, no review offer",
+        request_status="auto_approve", rr_being_processed=True, flag=False,
+        question="I also want to return the other item in this order.",
+        must_contain=[("representative",)], must_not_contain=NO_REVIEW_OFFER + NO_PROCESS_PROMPT,
+        expect={"request_human_review_return_refund": False}),
 ]
 
 
@@ -140,6 +146,8 @@ def build_order_continue_state(*, status: str, revisit: bool, question: str, rec
         "order_number_provided": ORDER_ID,
         "target_order": make_order(status, order_date=NOW - timedelta(days=9)) if status == "pending" else make_order(status),
         "order_is_revisit": revisit,
+        "customer_context": CustomerContext(customer_id=TEST_CUSTOMER.customer_id, first_name=TEST_CUSTOMER.first_name,
+                                            last_name=TEST_CUSTOMER.last_name, email=TEST_CUSTOMER.email),
         # Read by select_order_situation (CSA-19). Ignored by the node until step 3 wires it in.
         "order_turns": turns,
         "order_prior_topic": prior_topic,
@@ -214,6 +222,24 @@ ORDER_CONTINUE_CASES: list[Case] = [
             turns=1, prior_topic="lost_shipment",
             recent_conversation=[AIMessage(content="Have you found your package yet, or do you need our help?")],
             must_contain=[("return", "exchange", "button")]),
+
+    # The order's refund request is read from Redis (REFUND REQUEST FACTS), so status questions are answered, not escalated.
+    _oc("OC-14", "delivered, the order's refund request is pending: remind the customer to close it (Process or chat), do not escalate",
+        status="delivered", revisit=False, question="What is going on with my return request?", rr_status="pending",
+        must_contain=[("process the request", "i like to chat", "human review")],
+        must_not_contain=["contact a customer-support", "cannot check", "can't check"], expect={"order_issue_escalated": False}),
+    _oc("OC-15", "delivered, the refund request was approved by a reviewer: answer from the facts, do not escalate",
+        status="delivered", revisit=False, question="Did my refund get approved?", rr_status="manual_approve",
+        must_contain=[("approved",)], must_not_contain=["cannot check", "can't check"], expect={"order_issue_escalated": False}),
+    _oc("OC-16", "delivered, a request exists and the customer wants to return the other items: escalate to a human, do not point to the disabled button",
+        status="delivered", revisit=False, question="I would also like to return the other item of this order.", rr_status="auto_approve",
+        must_not_contain=["press the 'like to exchange", "click the 'like to exchange"], expect={"order_issue_escalated": True}),
+    # The reply after "Cancel" on the return screen / a re-login: /order/init now detects the order's request as a revisit
+    # (detect_order_revisit_node reads Redis) and sends the opening message, not a customer question, to this node.
+    _oc("OC-17", "delivered + revisit because the order has a pending request, opening message: remind to close it, no escalation, no 'Is everything O.K.?' script",
+        status="delivered", revisit=True, question=f"Order inquiry: {ORDER_ID}", rr_status="pending", turns=0, prior_topic="other",
+        must_contain=[("process the request", "i like to chat", "human review")],
+        must_not_contain=["is everything o.k", "contact a customer-support"], expect={"order_issue_escalated": False}),
             
 ]
 

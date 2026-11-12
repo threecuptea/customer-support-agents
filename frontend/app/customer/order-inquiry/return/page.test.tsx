@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { renderWithOrderInquiry, jsonResponse } from "../../../../lib/test-utils";
 import { Order } from "../../../../lib/auth-context";
 import ExchangeReturnPage from "./page";
+import { REFUND_POLL_INTERVAL_MS } from "../../../../lib/use-refund-request-sync";
 
 const push = vi.fn();
 const replace = vi.fn();
@@ -58,6 +59,32 @@ function sessionWith(order: Order) {
       email: "sonya@x.com",
       latest_orders: [order],
     },
+  };
+}
+
+function pendingRequest(id: number, overrides: Record<string, unknown> = {}) {
+  return {
+    refund_request_id: id,
+    request_date: "2026-08-01T00:00:00Z",
+    status: "pending",
+    requires_manual_approval: false,
+    requires_manual_approval_reason: null,
+    notes_for_human_review_override: null,
+    decided_by: null,
+    decision_reason: null,
+    decided_date: null,
+    returned_order: {
+      origin_order_id: 2001,
+      original_delivery_date: "2026-07-05T00:00:00Z",
+      returned_date: null,
+      status: "pending",
+      tax_applied_rate: 0.08,
+      estimated_amount_refund_incl_tax: 65.36,
+      refurbished_amount_incl_tax: 0,
+      processed_date: null,
+      items: [{ product_id: deliveredOrder.items[0].product_id, product_name: deliveredOrder.items[0].product_name, number_units: 1 }],
+    },
+    ...overrides,
   };
 }
 
@@ -191,7 +218,7 @@ describe("ExchangeReturnPage", () => {
     const refundRequest = {
       refund_request_id: 0,
       request_date: "2026-08-01T00:00:00Z",
-      status: "auto_approve",
+      status: "pending",
       requires_manual_approval: false,
       requires_manual_approval_reason: null,
       notes_for_human_review_override: null,
@@ -254,7 +281,7 @@ describe("ExchangeReturnPage", () => {
         rr_in_process: {
           refund_request_id: 0,
           request_date: "2026-08-01T00:00:00Z",
-          status: "auto_approve",
+          status: "pending",
           requires_manual_approval: false,
           requires_manual_approval_reason: null,
           notes_for_human_review_override: null,
@@ -379,32 +406,161 @@ describe("ExchangeReturnPage", () => {
     expect(await screen.findByText("I can offer a human review.")).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/never wore the item/i)).toBeInTheDocument();
 
-    const chatBody = JSON.parse(fetchMock.mock.calls[2][1].body);
+    // calls: [0] recommend, [1] init, [2] the pull when "I like to chat" opened, [3] the chat itself
+    expect(fetchMock.mock.calls[2][0]).toContain("/support/return_refund/0");
+    const chatBody = JSON.parse(fetchMock.mock.calls[3][1].body);
     expect(chatBody).toEqual({ thread_id: "t1", user_conversation: "I really think this should be approved" });
   });
 
-  it("resets itemize input without calling the backend", async () => {
+  it("has no Reset Input once the request exists: one refund request per order (CSA-23)", async () => {
     const fetchMock = await goToItemizeStep();
+    expect(screen.getByRole("button", { name: /^submit$/i })).toBeInTheDocument();
     fetchMock.mockResolvedValueOnce(
       jsonResponse({
         thread_id: "t1",
         response: "ok",
         initial_return_refund_decision: { order_refund_status: "The return/ refund request ..." },
-        rr_in_process: null,
+        rr_in_process: pendingRequest(0),
       })
     );
     await userEvent.click(screen.getAllByRole("checkbox")[0]);
     await userEvent.click(screen.getByRole("button", { name: /^submit$/i }));
     await screen.findByText("ok");
 
-    expect(screen.getByRole("button", { name: /process the request/i })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /i like to chat/i })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /reset input/i })).not.toBeInTheDocument();
+    // the items are locked: the request exists and can only be processed or discussed
+    expect(screen.getAllByRole("checkbox")[0]).toBeDisabled();
+  });
 
-    fetchMock.mockClear();
-    await userEvent.click(screen.getByRole("button", { name: /reset input/i }));
+  describe("syncing with a Slack human review (CSA-23)", () => {
+    // Drives the real path: itemize -> /init (pending) -> /process (wait_for_manual_review).
+    async function reachWaitingForReview() {
+      const fetchMock = await goToItemizeStep();
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse({
+          thread_id: "t1",
+          response: "needs a human",
+          initial_return_refund_decision: { order_refund_status: "needs a manual approval" },
+          rr_in_process: pendingRequest(7),
+          rr_being_processed: false,
+        })
+      );
+      await userEvent.click(screen.getAllByRole("checkbox")[0]);
+      await userEvent.click(screen.getByRole("button", { name: /^submit$/i }));
+      await screen.findByText("needs a human");
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse({
+          thread_id: "t1",
+          response: "You would receive an email of a human review result shortly.",
+          rr_being_processed: true,
+          rr_in_process: pendingRequest(7, { status: "wait_for_manual_review", requires_manual_approval: true }),
+        })
+      );
+      await userEvent.click(screen.getByRole("button", { name: /process the request/i }));
+      await screen.findByText(/human review result shortly/i);
+      fetchMock.mockClear();
+      return fetchMock;
+    }
 
-    expect(screen.queryByText("ok")).not.toBeInTheDocument();
-    expect(screen.getAllByRole("checkbox")[0]).not.toBeDisabled();
-    expect(fetchMock).not.toHaveBeenCalled();
+    it("shows the new status on the chat reply, which carries the latest request from Redis", async () => {
+      const fetchMock = await reachWaitingForReview();
+      fetchMock.mockResolvedValueOnce(jsonResponse(null)); // the pull when chat opens: nothing newer yet
+      await userEvent.click(screen.getByRole("button", { name: /i like to chat/i }));
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse({
+          thread_id: "t1",
+          response: "You should have received an email.",
+          request_human_review_return_refund: false,
+          rr_in_process: pendingRequest(7, { status: "manual_approve", decided_by: "alice", decision_reason: "Looks fine" }),
+        })
+      );
+      await userEvent.type(screen.getByPlaceholderText(/can a human review/i), "any news?");
+      await userEvent.click(screen.getByRole("button", { name: /send/i }));
+
+      expect(await screen.findByText("You should have received an email.")).toBeInTheDocument();
+      expect(screen.getByText("manual_approve")).toBeInTheDocument();
+      expect(screen.getByText("Looks fine")).toBeInTheDocument();
+    });
+
+    it("pulls the latest request when chat opens; a null/failed pull keeps what is on screen", async () => {
+      const fetchMock = await reachWaitingForReview();
+      fetchMock.mockResolvedValueOnce(jsonResponse(pendingRequest(7, { status: "manual_reject", decided_by: "bob" })));
+      await userEvent.click(screen.getByRole("button", { name: /i like to chat/i }));
+      expect(fetchMock.mock.calls[0][0]).toContain("/support/return_refund/7");
+      await waitFor(() => expect(screen.getByText("manual_reject")).toBeInTheDocument());
+    });
+
+    it("polls while waiting for the review and stops once the status changes", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const fetchMock = await reachWaitingForReview();
+        fetchMock.mockResolvedValueOnce(jsonResponse(pendingRequest(7, { status: "wait_for_manual_review" })));
+        await vi.advanceTimersByTimeAsync(REFUND_POLL_INTERVAL_MS);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(fetchMock.mock.calls[0][0]).toContain("/support/return_refund/7");
+
+        fetchMock.mockResolvedValueOnce(jsonResponse(pendingRequest(7, { status: "manual_approve", decided_by: "alice" })));
+        await vi.advanceTimersByTimeAsync(REFUND_POLL_INTERVAL_MS);
+        await waitFor(() => expect(screen.getByText("manual_approve")).toBeInTheDocument());
+
+        fetchMock.mockClear();
+        await vi.advanceTimersByTimeAsync(REFUND_POLL_INTERVAL_MS * 3);
+        expect(fetchMock).not.toHaveBeenCalled(); // decided: the poll stopped by itself
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("resumes a pending request left behind: /init adopts it with the request's own items", async () => {
+      const fetchMock = vi.fn().mockResolvedValueOnce(
+        jsonResponse({
+          thread_id: "t1",
+          response: "resumed",
+          initial_return_refund_decision: { order_refund_status: "The return/ refund request has been approved by an automatic agent." },
+          rr_in_process: pendingRequest(7),
+          rr_being_processed: false,
+        })
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      renderWithOrderInquiry(<ExchangeReturnPage />, {
+        seedSession: sessionWith(deliveredOrder),
+        seedOrderInquiry: { threadId: "t1", targetOrder: deliveredOrder, refundRequest: pendingRequest(7) as never },
+      });
+
+      expect(await screen.findByText("resumed")).toBeInTheDocument();
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toContain("/support/return_refund/init");
+      expect(JSON.parse(init.body)).toEqual({
+        thread_id: "t1",
+        items: [{ product_id: deliveredOrder.items[0].product_id, qty: 1 }],
+      });
+      expect(screen.getByRole("button", { name: /process the request/i })).toBeEnabled();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not show the itemized table while a pending request is being resumed", async () => {
+      let release: (r: Response) => void = () => {};
+      const fetchMock = vi.fn().mockReturnValueOnce(new Promise<Response>((resolve) => (release = resolve)));
+      vi.stubGlobal("fetch", fetchMock);
+      renderWithOrderInquiry(<ExchangeReturnPage />, {
+        seedSession: sessionWith(deliveredOrder),
+        seedOrderInquiry: { threadId: "t1", targetOrder: deliveredOrder, refundRequest: pendingRequest(7) as never },
+      });
+
+      expect(await screen.findByTestId("resuming")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^submit$/i })).not.toBeInTheDocument();
+      // jsdom has no Tailwind CSS, so check the class that hides the table
+      expect(screen.getByRole("table").closest("div.hidden")).not.toBeNull();
+
+      release(jsonResponse({
+        thread_id: "t1",
+        response: "resumed",
+        initial_return_refund_decision: { order_refund_status: "x" },
+        rr_in_process: pendingRequest(7),
+        rr_being_processed: false,
+      }));
+      expect(await screen.findByText("resumed")).toBeInTheDocument();
+      expect(screen.queryByTestId("resuming")).not.toBeInTheDocument();
+    });
   });
 });

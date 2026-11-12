@@ -125,6 +125,9 @@ class RefundRequest(BaseModel):
     decision_reason: Annotated[str, Field(min_length=1, max_length=MAX_REASON_CHARS)] | None = None
     decided_date: datetime | None = None
     created_by: Literal["csa", "csr"] = "csa"
+    # Audit record of the decision the customer was told when the request was created (before any processing).
+    # Optional so that records written before this field existed still validate.
+    initial_decision: OrderRefundStatus | None = None
     customer: Customer
     returned_order: ReturnedOrder
 
@@ -287,4 +290,6 @@ class ReturnRefundProcessResponse(GenericResponse):
 
 class ReturnRefundChatResponse(GenericResponse):
     request_human_review_return_refund: bool = False
+    # Latest copy from Redis, so the UI can show a status changed by a Slack review (same field as /init and /process).
+    rr_in_process: RefundRequest | None = None
     
