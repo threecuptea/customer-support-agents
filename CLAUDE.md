@@ -564,9 +564,9 @@ See README.md for the details. I might add memory sections and eleborate the sum
     - **Pending warning is bold red** in a tinted box (`role="alert"`) on the refund card.
     - **Extra GETs after `manual_approve`**: returning to the tab from Slack fires both `focus` and `visibilitychange`, so two reads went out together (not the 20s poll). `useRefundRequestSync.refresh` has an in-flight guard, and the event pulls only run while the status is `wait_for_manual_review`.
   - **Still not run:** the harness on `gpt-4.1` for the new cases; the Slack Approve path was verified by hand only (no automated end-to-end test).
-  - **Post CSA-23 review**
-    - I removed the following section.
-   ```python
+- **Post CSA-23 review**
+  - I removed the following section.
+  ```python
     try:
             customer_context = state.get("customer_context")
             if customer_context and any(
@@ -577,11 +577,40 @@ See README.md for the details. I might add memory sections and eleborate the sum
                 return {"order_is_revisit": True, "order_prior_topic": "other"}
         except Exception:
             logger.exception("detect_order_revisit_node could not read refund requests of order #%s", target_order.order_id)
-   ```
-   in `detect_order_revisit_node` and also clean up tests in `_detect` section in `test_refund_request_facts.py`
-    - The same check now lives in `retrieve_target_order_node` (the data-fetching node), which sets `order_has_refund_request` (new `CustomerSupportState` field, reset in `/order/init`) when the order has a refund request of this customer in Redis; a Redis error leaves it False. `route_after_retrieve_target_order` stays a pure function that only reads state (routers are light-weight and never do I/O or change state): not found -> `summarize_node`; flag set -> `order_continue_chat_node` (skips the revisit LLM call and the static greeting; it reads the request from Redis itself); otherwise -> `detect_order_revisit_node`. This works with no conversation history (same thread after Cancel/ Back, or a new thread after re-login without a saved summary). `order_is_revisit` stays False on this path; harness case `OC-18` (opening message `Order inquiry: N`, `revisit=False`, pending request) covers it and passes 10/10 on `gpt-4o-mini` (temperature 0) together with `OC-1`, `OC-10..17`; the rest of the harness and `gpt-4.1` were not re-run for it. Tests: `test_route_after_retrieve_target_order` and `test_retrieve_target_order_*` in `test_customer_support.py`.
-    - New `ESCALATE_REASON.HELP_NEW_RETURN_REFUND_REQUEST` (further return of an order that already has a request) with `PREFIX_NEW_RETURN_REFUND_REQUEST`.
-  - Also correct some naming in `order_situation.py` and `llm_harness/cases.py`.  I tried to add "OC-18" with revisit=True , prior_topic="other", rr_status="wait_for_manual_review" but fail to find `must_contains` words that passes the test and abort that effort.  
+  ```
+  in `detect_order_revisit_node` and also clean up tests in `_detect` section in `test_refund_request_facts.py`
+  - The same check now lives in `retrieve_target_order_node` (the data-fetching node), which sets `order_has_refund_request` (new `CustomerSupportState` field, reset in `/order/init`) when the order has a refund request of this customer in Redis; a Redis error leaves it False. `route_after_retrieve_target_order` stays a pure function that only reads state (routers are light-weight and never do I/O or change state): not found -> `summarize_node`; flag set -> `order_continue_chat_node` (skips the revisit LLM call and the static greeting; it reads the request from Redis itself); otherwise -> `detect_order_revisit_node`. This works with no conversation history (same thread after Cancel/ Back, or a new thread after re-login without a saved summary). `order_is_revisit` stays False on this path; harness case `OC-18` (opening message `Order inquiry: N`, `revisit=False`, pending request) covers it and passes 10/10 on `gpt-4o-mini` (temperature 0) together with `OC-1`, `OC-10..17`; the rest of the harness and `gpt-4.1` were not re-run for it. Tests: `test_route_after_retrieve_target_order` and `test_retrieve_target_order_*` in `test_customer_support.py`.
+  - New `ESCALATE_REASON.HELP_NEW_RETURN_REFUND_REQUEST` (further return of an order that already has a request) with `PREFIX_NEW_RETURN_REFUND_REQUEST`.
+  - Also correct some naming in `order_situation.py` and `llm_harness/cases.py`.  I tried to add "OC-18" with revisit=True , prior_topic="other", rr_status="wait_for_manual_review" but fail to find `must_contains` words that passes the test and abort that effort.
+  - I re-ran all LLM test harness, including new added OC tests, using gpt-4.1, 10-trials. It works.
+
+- CSA-24: Simplify Slack handling and API-Slack end-to-end tests
+  - I integrated n8n with Slack and have separate sending and receiving workflows. The best way to match receivinng end and sending end is to encode those information in a field like `block_id` that Slack interactive payload will postback.
+  - Redis is the source of truth of RefundRequest, I should change the mindset when switching to integrate customer-support-agents app with Slack. I only need to store `refund_request_id` in `block_id` and I can retrieve the rest from Redis. Simplify `ReviewResponse` to include only `refund_request_id` and fields from Slack payload response. 
+  - Remove `build_acknowledgement_text` function from slack_adapter and clean & remove redundant steps in `post_process_review_response` of slack_webhook
+  - Clean up and modify `test_slack_webhook.py` to get it pass. 
+  - Start add `test_api_slack_e2e.py` and  its `test_slack_e2e_flow` following the idea of the Jira ticket.  I borrows `recorder`/`capture` concept of SlackCalls and `make_payload`, `signed_post`, `stored` from `test_slack_webhook.py`.  I added the following to capture `block_id`
+  ```python
+  def fake_slack_calls(monkeypatch):
+         :
+    def fake_post_message(channel, text, blocks):
+        calls.block_id = blocks[2]["block_id"]
+
+    monkeypatch.setattr(slack_sdk_client, "chat_postMessage", fake_post_message)
+  ```
+  - I start to realize that `WebClient.chat_postMessage` is a sync function call.  It will block async `send_interactive_blocks_payload` if connection to Slack has problem, ex.  I patch as the followings:
+  ```python
+  await asyncio.to_thread(
+            slack_client.chat_postMessage,
+            channel=SLACK_CHANNEL_ID_REVIEW_DEV,
+            text="CSR's review is required for the following return for refund request",
+            blocks=blocks
+        )
+  ``` 
+  I feed the captured `block_id` to `make_payload` function and make 3 set of parameters covering all 3 actions `approve`, `reject`, `flag`. I verified with GET `/api/support/return_refund/{refund_request_id}` GET `/api/support/return_refund/by_order/{order_id}` and POST `/api/support/return_refund/chat`.  The e2e test also verifies POST `/api/support/order/continue`: the `order_chat_prompts` fixture replaces `order_llm_for_inquiry_chat` with a fake LLM that records the prompt, and the test asserts the REFUND REQUEST FACTS section carries the reviewer's decision (`Request #<id>: status 'manual_<action>'`, the quoted reason, `Decided by ...`). The compiled graph does not expose the agent; the fixture reaches it via `graph.nodes["order_continue_chat_node"].bound.afunc.__self__`.
+  - Run `USE_MOCK_LLM=true uv run pytest tests/test_api_slack_e2e.py` from `backend/`. It uses Redis DB `TEST_REDIS_DB` (default 15) and makes no network call. Granular webhook cases (double press, bad id, stale signature, ...) stay in `test_slack_webhook.py`; the e2e test only verifies what the workflow needs.
+  - **Bug found by the e2e test:** `invoke_order_continue_workflow` never set `support_category`, unlike every other support endpoint. `route_branch` dispatches on it, so after any exchange/return or return/refund call the thread stayed on `return_refund` and an `/order/continue` message went to `return_refund_done_or_unknown`: HTTP 200, but the order LLM was never called. Now sets `"support_category": "order_inquery"`. **Rule: every `/support/*` endpoint that invokes the graph must set its own `support_category`.** The UI mostly hid this because it calls `/order/init` first, which resets the category.
+  - **Fixture scope:** `main_client`/`slack_client` in the e2e module are `scope="module"` (apps start once for the three parametrized cases) and each asserts its Redis adapter URL is `TEST_REDIS_URL` (DB 15). A module-scoped fixture starts before the class-scoped `_isolated_redis_db`, so `conftest.py` also has a module-scoped autouse `_isolated_redis_db_module` that sets `REDIS_URL` first. Elsewhere `scope="class"` on module-level test functions behaves as function scope (pytest falls back to the test item when there is no class); those fixtures were left alone, since a fresh app per test keeps session cookies and checkpoint state from leaking between tests.
 
 ### Current API Endpoints
 - `GET /api/health` — liveness check
