@@ -107,7 +107,10 @@ async def invoke_order_continue_workflow(support: GenericChatInput, request: Req
             detail="Order inquiry session not found or expired. Please restart from the order selection screen.",
         )
     initial_state = {
-        "messages": [HumanMessage(content= support.user_conversation)]
+        "messages": [HumanMessage(content= support.user_conversation)],
+        # Every endpoint sets its own category (route_branch dispatches on it). Without this, a thread that last
+        # visited the exchange/return or return/refund screens would route an order chat message to that flow.
+        "support_category": "order_inquery",
     }
 
     # history is pretty steady and has been captured in initial states. We like to capture only the latest external human_reviews and human_escalates.

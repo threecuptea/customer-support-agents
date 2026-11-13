@@ -14,8 +14,6 @@ from workflow.customer_support import SOURCE_RETURN_REFUND_CHAT, CustomerSupport
     PREFIX_NEED_EXPEDIT_REPLACEMENT, PREFIX_RCVD_DAMAGED_PRODUCT, PREFIX_RCVD_WRONG_ITEM, PREFIX_FOUND_BETTER_PRICE, ESCALATE_MESSAGE, SOURCE_RETURN_REFUND_PROCESS
 from workflow.customer_support_utils import get_initial_return_refund_decision
 import uuid
-import os
-import redis
 
 load_dotenv(override=True)
 

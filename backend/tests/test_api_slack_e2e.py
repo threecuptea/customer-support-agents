@@ -1,22 +1,18 @@
-import asyncio
 import copy
 import json
 import time
 import urllib.parse
 
-import httpx
 from fastapi.testclient import TestClient
 from dotenv import load_dotenv
 import pytest
-from backend.models.slack_model import ReviewResponse
 from adapters.slack_adapter import slack_client as slack_sdk_client
 import slack_webhook
-from memory import hitl_memory_key
 from main import app as main_app
-from slack_webhook import app as slack_app, parse_review_response, get_updated_refund_request, get_updated_summary, InvalidReviewPayload, signature_verifier
-from models.customer_support_model import CustomerContext, Customer, ItemToReturn, OrderToReturn, RefundRequest, Order
-from workflow.customer_support_utils import get_initial_return_refund_decision
-from models.demo_data import get_demo_customer
+from slack_webhook import app as slack_app, signature_verifier, parse_review_response
+from models.customer_support_model import CustomerContext, RefundRequest, Order
+from models.customer_support_model import OrderStructuredOutput
+from tests.conftest import TEST_REDIS_URL
 import uuid
 
 load_dotenv()
@@ -27,15 +23,35 @@ shared_thread_id = str(uuid.uuid4())
 TEST_PAYLOAD = {'type': 'block_actions', 'user': {'id': 'U0BGP48TASV', 'username': 'threecuptea', 'name': 'threecuptea', 'team_id': 'T0BHFGFMTJL'}, 'api_app_id': 'A0BJ6CVPD5G', 'token': '5L436A90IncHzTU0swTWOPMS', 'container': {'type': 'message', 'message_ts': '1793835696.919579', 'channel_id': 'C0BGQUCRKV2', 'is_ephemeral': False}, 'trigger_id': '12510419155986.11593559741632.31ccd3c0cfcf08ee87d79ecf6bc813f1', 'team': {'id': 'T0BHFGFMTJL', 'domain': 'threecupteacom'}, 'enterprise': None, 'is_enterprise_install': False, 'channel': {'id': 'C0BGQUCRKV2', 'name': 'customer-support-review-dev'}, 'message': {'user': 'U0BJ8CRSTPB', 'type': 'message', 'ts': '1793835696.919579', 'bot_id': 'B0BJ07TG75H', 'app_id': 'A0BJ6CVPD5G', 'text': "CSR's review is required for the following return for refund request", 'team': 'T0BHFGFMTJL', 'blocks': [{'type': 'section', 'block_id': 'iZLgH', 'text': {'type': 'mrkdwn', 'text': "*CSR's review is required for the following return for refund request*\n\n*Refund request id:* 9999\n*Original order number:* 123458\n*Refund amount:* $569.74\n*Customer name:* Ms. Pamela Brown\n*Delivery date:* 2026-10-10\n*Return items:*\n    Cannondale Trail 3 Mountain Bike, REI, 1, ", 'verbatim': False}}, {'type': 'input', 'block_id': 'reason_input', 'label': {'type': 'plain_text', 'text': 'Reason (Optional):', 'emoji': True}, 'optional': True, 'dispatch_action': False, 'element': {'type': 'plain_text_input', 'action_id': 'reason_value', 'placeholder': {'type': 'plain_text', 'text': 'Elaborate the reason for your decision if needed...', 'emoji': True}, 'multiline': False, 'dispatch_action_config': {'trigger_actions_on': ['on_enter_pressed']}}}, {'type': 'actions', 'block_id': '9999', 'elements': [{'type': 'button', 'action_id': 'approve_action', 'text': {'type': 'plain_text', 'text': ':white_check_mark: Approve', 'emoji': True}, 'style': 'primary', 'value': 'approve'}, {'type': 'button', 'action_id': 'reject_action', 'text': {'type': 'plain_text', 'text': ':x: Reject', 'emoji': True}, 'style': 'danger', 'value': 'reject'}, {'type': 'button', 'action_id': 'flag_action', 'text': {'type': 'plain_text', 'text': ':warning: Flag', 'emoji': True}, 'value': 'flag'}]}]}, 'state': {'values': {'reason_input': {'reason_value': {'type': 'plain_text_input', 'value': 'It looks like a normal return for refund request'}}}}, 'response_url': 'https://hooks.slack.com/actions/T0BHFGFMTJL/12508636977350/N9BhFjdHdoNzt5qaUOG7fbWo', 'actions': [{'type': 'button', 'block_id': '9999', 'action_id': 'approve_action', 'text': {'type': 'plain_text', 'text': ':white_check_mark: Approve', 'emoji': True}, 'value': 'approve', 'style': 'primary', 'action_ts': '1793835785.140390'}]}
 
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="module")
 def main_client():
     with TestClient(main_app) as test_client:
+        # Both apps are started once for the module; make sure they are NOT on the dev Redis DB.
+        assert test_client.app.state.redis_adapter.redis_url == TEST_REDIS_URL
         yield test_client
 
-@pytest.fixture(scope="class")
+@pytest.fixture(scope="module")
 def slack_client():
     with TestClient(slack_app) as test_client:
+        assert test_client.app.state.redis_adapter.redis_url == TEST_REDIS_URL
         yield test_client
+
+
+@pytest.fixture()
+def order_chat_prompts(main_client, monkeypatch):
+    """Replace the LLM of order_continue_chat_node with a fake that records the prompt it is given.
+
+    The compiled graph does not expose the agent, but its node's bound method does (`__self__`)."""
+    agent = main_client.app.state.support_graph.nodes["order_continue_chat_node"].bound.afunc.__self__
+    prompts: list[str] = []
+
+    class _EchoOrderChatLLM:
+        async def ainvoke(self, messages):
+            prompts.append(str(messages[0].content))
+            return OrderStructuredOutput(response="Noted.", escalate=False, escalation_reason=None)
+
+    monkeypatch.setattr(agent, "order_llm_for_inquiry_chat", _EchoOrderChatLLM())
+    return prompts
 
 
 class SlackCalls(list):
@@ -67,7 +83,7 @@ def fake_slack_calls(monkeypatch):
     return calls
 
 def make_payload(block_id, action, reason) -> dict:
-    """The captured Slack payload, re-pointed at `rr` (block_id carries rr id|order id|amount|name)."""
+    """The captured Slack payload, with the specified block_id, action, and reason."""
     payload = copy.deepcopy(TEST_PAYLOAD)
     payload["actions"][0]["block_id"] = block_id
     payload["actions"][0]["value"] = action
@@ -120,7 +136,7 @@ def stored(redis_client, request_id) -> RefundRequest:
         ),
     ]
 )
-def test_slack_e2e_flow(main_client, slack_client, fake_slack_calls, redis_client, email_addr, requires_manual_approval_reason, notes_to_human_reviwer, action, reason):
+def test_slack_e2e_flow(main_client, slack_client, fake_slack_calls, redis_client, order_chat_prompts, email_addr, requires_manual_approval_reason, notes_to_human_reviwer, action, reason):
     resp = main_client.post("/api/auth", json={"email_addr": email_addr})
     context = CustomerContext(**resp.json()[1])
     target_order_id = context.latest_orders[0].order_id
@@ -155,8 +171,16 @@ def test_slack_e2e_flow(main_client, slack_client, fake_slack_calls, redis_clien
     block_id = fake_slack_calls.block_id
     assert block_id == str(rr_in_process.refund_request_id)
     payload = make_payload(block_id, action, reason)
-    signed_post(slack_client, payload)
+    resp = signed_post(slack_client, payload)
+    assert resp.status_code == 200
     assert fake_slack_calls.acks == []
+    assert len(fake_slack_calls.replaces) == 1
+    assert fake_slack_calls.replaces[0][0] == payload["response_url"]
+    assert fake_slack_calls.replaces[0][1].status == f"manual_{action}"
+    review_response = parse_review_response(payload)
+    assert review_response.action == action
+    assert review_response.refund_request_id == int(block_id)
+    assert review_response.reason == reason
     
     resp = main_client.get(f"/api/support/return_refund/{rr_in_process.refund_request_id}")
     rr1 = RefundRequest(**resp.json())
@@ -175,4 +199,15 @@ def test_slack_e2e_flow(main_client, slack_client, fake_slack_calls, redis_clien
     rr_in_process = RefundRequest(**data.get("rr_in_process"))
     assert rr_in_process.status == f"manual_{action}"
     assert rr_in_process.decision_reason == reason
-    
+
+    # The order chat reads the request from Redis: its REFUND REQUEST FACTS must show the reviewer's decision.
+    resp = main_client.post(
+            "/api/support/order/continue",
+            json={"thread_id": thread_id, "user_conversation": "What happened to my return request?"})
+    assert resp.status_code == 200
+    assert len(order_chat_prompts) == 1
+    prompt = order_chat_prompts[0]
+    assert "REFUND REQUEST FACTS" in prompt
+    assert f"Request #{rr1.refund_request_id}: status 'manual_{action}'" in prompt
+    assert f'"{reason}"' in prompt
+    assert rr1.decided_by and f"Decided by {rr1.decided_by}." in prompt

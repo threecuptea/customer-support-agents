@@ -44,6 +44,14 @@ _BASE_REDIS_URL = (
 TEST_REDIS_URL = _redis_url_for_db(_BASE_REDIS_URL, TEST_REDIS_DB)
 
 
+@pytest.fixture(autouse=True, scope="module")
+def _isolated_redis_db_module():
+    # Module-scoped app fixtures (e.g. tests/test_api_slack_e2e.py) start their lifespans BEFORE any
+    # class/function-scoped fixture runs, so REDIS_URL must already point at the test DB at that point.
+    os.environ["REDIS_URL"] = TEST_REDIS_URL
+    yield
+
+
 @pytest.fixture(autouse=True, scope="class")
 def _isolated_redis_db():
     # The app lifespans (main.py, slack_webhook.py) read REDIS_URL when they start, and modules that run

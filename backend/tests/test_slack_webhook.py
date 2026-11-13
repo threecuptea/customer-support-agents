@@ -77,7 +77,7 @@ def seed_refund_request(redis_client, status="wait_for_manual_review", request_i
 
 
 def make_payload(rr: RefundRequest, action="approve", reason="It looks like a normal return for refund request") -> dict:
-    """The captured Slack payload, re-pointed at `rr` (block_id carries rr id|order id|amount|name)."""
+    """The captured Slack payload, with the specified block_id, action, and reason."""
     payload = copy.deepcopy(TEST_PAYLOAD)
     block_id = f"{rr.refund_request_id}"
     payload["actions"][0]["block_id"] = block_id
