@@ -74,6 +74,18 @@ function sessionWith(orders: Order[]) {
   };
 }
 
+// /order/init is followed by GET /return_refund/by_order/{id} (CSA-23: the order's refund request card). Answer that
+// one here (default: the order has no request) and leave every other call to the test's own queued mock, so
+// the existing sequence/index assertions are unaffected.
+function stubFetch(fetchMock: ReturnType<typeof vi.fn>, byOrder: unknown = []) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string, init?: RequestInit) =>
+      String(url).includes("/return_refund/by_order/") ? Promise.resolve(jsonResponse(byOrder)) : fetchMock(url, init)
+    )
+  );
+}
+
 beforeEach(() => {
   push.mockClear();
   replace.mockClear();
@@ -105,7 +117,7 @@ describe("OrderInquiryPage", () => {
         response: "Your order is still in 'transit' status.",
       })
     );
-    vi.stubGlobal("fetch", fetchMock);
+    stubFetch(fetchMock);
 
     renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
     await screen.findByText(/order #1002/i);
@@ -131,7 +143,7 @@ describe("OrderInquiryPage", () => {
         response: "System error!! We cannot find your order, please try it later",
       })
     );
-    vi.stubGlobal("fetch", fetchMock);
+    stubFetch(fetchMock);
 
     renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
     await screen.findByText(/order #1002/i);
@@ -160,7 +172,7 @@ describe("OrderInquiryPage", () => {
       .mockResolvedValueOnce(
         jsonResponse({ thread_id: "t1", response: "We'll be happy to process the return." })
       );
-    vi.stubGlobal("fetch", fetchMock);
+    stubFetch(fetchMock);
 
     renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
     await screen.findByText(/order #1002/i);
@@ -202,7 +214,7 @@ describe("OrderInquiryPage", () => {
         response: "Your order was delivered.",
       })
     );
-    vi.stubGlobal("fetch", fetchMock);
+    stubFetch(fetchMock);
 
     renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderWithIntimateItem]) });
     await screen.findByText(/order #1001/i);
@@ -222,7 +234,7 @@ describe("OrderInquiryPage", () => {
         response: "Your order was delivered.",
       })
     );
-    vi.stubGlobal("fetch", fetchMock);
+    stubFetch(fetchMock);
 
     renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderOlder]) });
     await screen.findByText(/order #1001/i);
@@ -243,7 +255,7 @@ describe("OrderInquiryPage", () => {
         response: "Your order is still in 'transit' status.",
       })
     );
-    vi.stubGlobal("fetch", fetchMock);
+    stubFetch(fetchMock);
 
     renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
     await screen.findByText(/order #1002/i);
@@ -269,7 +281,7 @@ describe("OrderInquiryPage", () => {
         status: 400,
         json: async () => ({ detail: "Order inquiry session not found or expired." }),
       });
-    vi.stubGlobal("fetch", fetchMock);
+    stubFetch(fetchMock);
 
     renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
     await screen.findByText(/order #1002/i);
@@ -293,7 +305,7 @@ describe("OrderInquiryPage", () => {
         response: "Your order is still in 'transit' status.",
       })
     );
-    vi.stubGlobal("fetch", fetchMock);
+    stubFetch(fetchMock);
 
     renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
     await screen.findByText(/order #1002/i);
@@ -322,7 +334,7 @@ describe("OrderInquiryPage", () => {
           response: "Your order is in 'delivered' status.",
         })
       );
-    vi.stubGlobal("fetch", fetchMock);
+    stubFetch(fetchMock);
 
     renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderOlder, orderNewer]) });
     await screen.findByText(/order #1002/i);
@@ -363,7 +375,7 @@ describe("OrderInquiryPage", () => {
         })
       )
       .mockResolvedValueOnce(jsonResponse(null));
-    vi.stubGlobal("fetch", fetchMock);
+    stubFetch(fetchMock);
 
     renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
     await screen.findByText(/order #1002/i);
@@ -389,7 +401,7 @@ describe("OrderInquiryPage", () => {
 
   it("clears the session and returns home on Exit without a thread yet", async () => {
     const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
+    stubFetch(fetchMock);
 
     renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
     await screen.findByText(/order #1002/i);
@@ -413,7 +425,7 @@ describe("OrderInquiryPage", () => {
         })
       )
       .mockResolvedValueOnce(jsonResponse(null));
-    vi.stubGlobal("fetch", fetchMock);
+    stubFetch(fetchMock);
 
     renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderNewer]) });
     await screen.findByText(/order #1002/i);
@@ -430,5 +442,129 @@ describe("OrderInquiryPage", () => {
     expect(JSON.parse(exitInit.body)).toEqual({ thread_id: "t1" });
     expect(fetchMock.mock.calls[2][0]).toContain("/auth/logout");
     expect(push).toHaveBeenCalledWith("/");
+  });
+
+  describe("the order's refund request card (CSA-23)", () => {
+    function refundRequest(overrides: Record<string, unknown> = {}) {
+      return {
+        refund_request_id: 7,
+        request_date: "2026-08-01T00:00:00Z",
+        status: "pending",
+        requires_manual_approval: false,
+        requires_manual_approval_reason: null,
+        notes_for_human_review_override: null,
+        decided_by: null,
+        decision_reason: null,
+        decided_date: null,
+        returned_order: {
+          origin_order_id: 1001,
+          original_delivery_date: "2026-07-05T00:00:00Z",
+          returned_date: null,
+          status: "pending",
+          tax_applied_rate: 0.08,
+          estimated_amount_refund_incl_tax: 54,
+          refurbished_amount_incl_tax: 0,
+          processed_date: null,
+          items: [{ product_id: "P1", product_name: "Widget", number_units: 2 }],
+        },
+        ...overrides,
+      };
+    }
+
+    async function openDeliveredOrder(byOrder: unknown) {
+      const fetchMock = vi.fn().mockResolvedValueOnce(
+        jsonResponse({ thread_id: "t1", target_order: orderOlder, response: "Your order was delivered." })
+      );
+      stubFetch(fetchMock, byOrder);
+      renderWithOrderInquiry(<OrderInquiryPage />, { seedSession: sessionWith([orderOlder]) });
+      await screen.findByText(/order #1001/i);
+      await userEvent.click(screen.getByRole("radio"));
+      await userEvent.click(screen.getByRole("button", { name: /continue/i }));
+      await screen.findByText("Your order was delivered.");
+      return fetchMock;
+    }
+
+    describe("coming back to the order chat after a request was created", () => {
+      function renderBack(exchanges: { question: string | null; answer: string }[], initMock: ReturnType<typeof vi.fn>) {
+        stubFetch(initMock);
+        renderWithOrderInquiry(<OrderInquiryPage />, {
+          seedSession: sessionWith([orderOlder]),
+          seedOrderInquiry: { threadId: "t1", targetOrder: orderOlder, refundRequest: refundRequest() as never, exchanges },
+        });
+      }
+
+      it("replaces the stale seeded greeting by asking /order/init again on the same thread", async () => {
+        const initMock = vi.fn().mockResolvedValue(
+          jsonResponse({ thread_id: "t1", target_order: orderOlder, response: "You have a request that is not processed." })
+        );
+        renderBack([{ question: null, answer: "Is everything O.K.?" }], initMock);
+        expect(await screen.findByText("You have a request that is not processed.")).toBeInTheDocument();
+        expect(screen.queryByText("Is everything O.K.?")).not.toBeInTheDocument();
+        expect(initMock).toHaveBeenCalledTimes(1);
+        expect(JSON.parse(initMock.mock.calls[0][1].body)).toMatchObject({
+          thread_id: "t1",
+          order_number_provided: orderOlder.order_id,
+        });
+      });
+
+      it("leaves a conversation the customer has already had alone", async () => {
+        const initMock = vi.fn();
+        renderBack(
+          [
+            { question: null, answer: "Is everything O.K.?" },
+            { question: "my package is late", answer: "Sorry to hear that." },
+          ],
+          initMock
+        );
+        expect(await screen.findByText("Sorry to hear that.")).toBeInTheDocument();
+        expect(initMock).not.toHaveBeenCalled();
+      });
+    });
+
+    it("shows no card and keeps the exchange/return button when the order has no request", async () => {
+      await openDeliveredOrder([]);
+      expect(screen.queryByTestId("refund-request-card")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /like to exchange or return for refund/i })).toBeInTheDocument();
+    });
+
+    it("shows a pending request with a way to resume it, and disables the exchange/return button", async () => {
+      await openDeliveredOrder([refundRequest()]);
+      const card = await screen.findByTestId("refund-request-card");
+      expect(card).toHaveTextContent("#7");
+      expect(card).toHaveTextContent("Not processed yet");
+      expect(card).toHaveTextContent("2 × Widget");
+      expect(screen.queryByRole("button", { name: /like to exchange or return for refund/i })).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole("button", { name: /resume return request/i }));
+      expect(push).toHaveBeenCalledWith("/customer/order-inquiry/return");
+    });
+
+    it("shows a decided request read-only, from a previous visit (after re-login)", async () => {
+      await openDeliveredOrder([
+        refundRequest({ status: "manual_approve", decided_by: "alice", decided_date: "2026-08-02T00:00:00Z", decision_reason: "Looks fine" }),
+      ]);
+      const card = await screen.findByTestId("refund-request-card");
+      expect(card).toHaveTextContent("Approved after human review");
+      expect(card).toHaveTextContent("alice");
+      expect(card).toHaveTextContent("Looks fine");
+      expect(screen.queryByRole("button", { name: /resume return request/i })).not.toBeInTheDocument();
+    });
+
+    it("picks the newest request if the order somehow has several", async () => {
+      await openDeliveredOrder([refundRequest({ refund_request_id: 3 }), refundRequest({ refund_request_id: 9, status: "auto_approve" })]);
+      expect(await screen.findByTestId("refund-request-card")).toHaveTextContent("#9");
+    });
+
+    it("refreshes the card after an order chat reply", async () => {
+      const fetchMock = await openDeliveredOrder([refundRequest({ status: "wait_for_manual_review" })]);
+      expect(await screen.findByTestId("refund-request-card")).toHaveTextContent("Waiting for a human review");
+      fetchMock.mockResolvedValueOnce(jsonResponse({ thread_id: "t1", response: "It was approved." }));
+      // the GET by id for the refresh (not by_order) goes through the queued mock too
+      fetchMock.mockResolvedValueOnce(jsonResponse(refundRequest({ status: "manual_approve", decided_by: "alice" })));
+      await userEvent.type(screen.getByPlaceholderText(/haven't received/i), "was my refund approved?");
+      await userEvent.click(screen.getByRole("button", { name: /send/i }));
+      expect(await screen.findByText("It was approved.")).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByTestId("refund-request-card")).toHaveTextContent("Approved after human review"));
+    });
   });
 });

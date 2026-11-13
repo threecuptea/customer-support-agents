@@ -47,31 +47,43 @@ def _evaluate(node, case):
         pytest.fail(message)
 
 
+def make_refund_request(status: str, notes: str | None = None) -> RefundRequest:
+    return RefundRequest(
+        refund_request_id=1001, request_date=NOW, status=status,
+        notes_for_human_review_override=notes,
+        customer=TEST_CUSTOMER,
+        returned_order=ReturnedOrder(
+            origin_order_id=ORDER_ID, original_delivery_date=NOW - timedelta(days=40), tax_applied_rate=0.085,
+            estimated_amount_refund_incl_tax=108.5,
+            items=[ReturnedOrderItem(product_id="PRD-1", product_name="Wine Glasses", supplier_name="Heritage Brands",
+                                    unit_price=25.0, number_units=4)],
+        ),
+    )
+
+
+class _FakeRedisAdapter:
+    """Serves the case's refund request the way Redis would (by id and by order)."""
+    def __init__(self, status: str | None):
+        self.status = status
+
+    async def retrieve_refund_request(self, refund_request_id: int) -> RefundRequest | None:
+        return make_refund_request(self.status)
+
+    async def retrieve_refund_requests_by_order(self, origin_order_id: int) -> list[RefundRequest]:
+        return [make_refund_request(self.status)] if self.status else []
+
+
 @pytest.mark.parametrize("case", RETURN_REFUND_CASES, ids=lambda c: c.id)
 def test_return_refund_chat_node(case):
-    def make_refund_request(status: str, notes: str | None = None) -> RefundRequest:
-        return RefundRequest(
-            refund_request_id=1001, request_date=NOW, status=status,
-            notes_for_human_review_override=notes,
-            customer=TEST_CUSTOMER,
-            returned_order=ReturnedOrder(
-                origin_order_id=ORDER_ID, original_delivery_date=NOW - timedelta(days=40), tax_applied_rate=0.085,
-                estimated_amount_refund_incl_tax=108.5,
-                items=[ReturnedOrderItem(product_id="PRD-1", product_name="Wine Glasses", supplier_name="Heritage Brands",
-                                        unit_price=25.0, number_units=4)],
-            ),
-    )
-    class _FakeRedisAdapter:
-                async def retrieve_refund_request(self, refund_request_id: int) -> RefundRequest | None:
-                    return make_refund_request(case.rr_status)
-
-    agent_with_redis = build_agent(harness.REQUESTED_MODEL, harness.REQUESTED_TEMPERATURE, redis_adapter=_FakeRedisAdapter())
+    agent_with_redis = build_agent(harness.REQUESTED_MODEL, harness.REQUESTED_TEMPERATURE, redis_adapter=_FakeRedisAdapter(case.rr_status))
     _evaluate(agent_with_redis.return_refund_chat_node, case)
 
 
 @pytest.mark.parametrize("case", ORDER_CONTINUE_CASES, ids=lambda c: c.id)
-def test_order_continue_chat_node(agent, case):
-    _evaluate(agent.order_continue_chat_node, case)
+def test_order_continue_chat_node(case):
+    # The order node reads the order's refund request from Redis too; cases without rr_status see none.
+    agent_with_redis = build_agent(harness.REQUESTED_MODEL, harness.REQUESTED_TEMPERATURE, redis_adapter=_FakeRedisAdapter(case.rr_status))
+    _evaluate(agent_with_redis.order_continue_chat_node, case)
 
 
 @pytest.mark.parametrize("case", REVISIT_CASES, ids=lambda c: c.id)

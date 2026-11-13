@@ -22,6 +22,7 @@ class ESCALATE_REASON(StrEnum):
     HELP_EXPEDITE_EXCHANGE_FOR_DEFECTIVE_WRONG_ITEM = "Help expedite the exchange of defective, broken or wrong item(s)"
     HELP_CHECK_RETURN_REFUND_STATUS = "Help check the return refund status of an order"
     HELP_DECIDE_IF_PRICE_MATCH_WITH_COMPETITOR = "Decide if we should offer a refund so we can price match to beat our competitor(s)"
+    HELP_NEW_RETURN_REFUND_REQUEST = "Help handle a new return for refund request"
     
 
 # ORDER_NON_REFUNDABLE_DAYS means an order is non-refundable because the refund request has exceeded the return window.
@@ -124,6 +125,10 @@ class RefundRequest(BaseModel):
     decided_by: Annotated[str, Field(min_length=1)] | None = None
     decision_reason: Annotated[str, Field(min_length=1, max_length=MAX_REASON_CHARS)] | None = None
     decided_date: datetime | None = None
+    created_by: Literal["csa", "csr"] = "csa"
+    # Audit record of the decision the customer was told when the request was created (before any processing).
+    # Optional so that records written before this field existed still validate.
+    initial_decision: OrderRefundStatus | None = None
     customer: Customer
     returned_order: ReturnedOrder
 
@@ -168,6 +173,7 @@ class CustomerSupportState(MessagesState):
     order_number_provided:  int
     target_order: Order = None
     order_is_revisit: bool = False # set by detect_order_revisit_node; routes order_init straight into order_continue_chat_node
+    order_has_refund_request: bool = False # set by retrieve_target_order_node from Redis; routes order_init straight into order_continue_chat_node
     order_issue_escalated: bool = False
     order_issue_resolved: bool = False
     # Number of replies order_continue_chat_node has given in this order thread; reset by /order/init.
@@ -286,4 +292,6 @@ class ReturnRefundProcessResponse(GenericResponse):
 
 class ReturnRefundChatResponse(GenericResponse):
     request_human_review_return_refund: bool = False
+    # Latest copy from Redis, so the UI can show a status changed by a Slack review (same field as /init and /process).
+    rr_in_process: RefundRequest | None = None
     

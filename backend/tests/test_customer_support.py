@@ -270,6 +270,45 @@ def test_route_after_retrieve_target_order(test_customer_context):
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     assert agent.route_after_retrieve_target_order({"target_order": None}) == "summarize_node"
     assert agent.route_after_retrieve_target_order({"target_order": test_customer_context.latest_orders[0]}) == "detect_order_revisit_node"
+    order = test_customer_context.latest_orders[0]
+    assert agent.route_after_retrieve_target_order({"target_order": order, "order_has_refund_request": False}) == "detect_order_revisit_node"
+    assert agent.route_after_retrieve_target_order({"target_order": order, "order_has_refund_request": True}) == "order_continue_chat_node"
+    # Not found wins over the flag
+    assert agent.route_after_retrieve_target_order({"target_order": None, "order_has_refund_request": True}) == "summarize_node"
+
+
+class _FakeRedis:
+    def __init__(self, requests=None, fail=False):
+        self.requests, self.fail = requests or [], fail
+
+    async def retrieve_refund_requests_by_order(self, order_id):
+        if self.fail:
+            raise ConnectionError("redis down")
+        return self.requests
+
+
+def _retrieve_state(ctx):
+    order = ctx.latest_orders[0]
+    return {"customer_context": ctx, "order_number_provided": order.order_id}
+
+
+def test_retrieve_target_order_flags_existing_refund_request(test_customer_context):
+    from types import SimpleNamespace
+    mine = SimpleNamespace(customer=SimpleNamespace(customer_id=test_customer_context.customer_id))
+    other = SimpleNamespace(customer=SimpleNamespace(customer_id=test_customer_context.customer_id + 999))
+    state = _retrieve_state(test_customer_context)
+    for requests, expected in (([mine], True), ([other], False), ([], False)):
+        agent = CustomerSupportAgent(checkpointer=None, store=None, redis_adapter=_FakeRedis(requests))
+        result = asyncio.run(agent.retrieve_target_order_node(state))
+        assert result["order_has_refund_request"] is expected
+        assert result["target_order"] is not None
+
+
+def test_retrieve_target_order_redis_error_leaves_flag_false(test_customer_context):
+    agent = CustomerSupportAgent(checkpointer=None, store=None, redis_adapter=_FakeRedis(fail=True))
+    result = asyncio.run(agent.retrieve_target_order_node(_retrieve_state(test_customer_context)))
+    assert result["order_has_refund_request"] is False
+    assert result["target_order"] is not None
 
 def test_route_after_detect_order_revisit():
     agent = CustomerSupportAgent(checkpointer=None, store=None)

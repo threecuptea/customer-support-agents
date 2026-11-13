@@ -49,7 +49,7 @@ FAQs = {
 
         "What is your return policy in summary?": "We accept returns within 35 days of delivery for unused items.  The return item must have its tags attached "
         "and be returned in its original packaging with your receipt or proof of purchase",
-        "How do I start a return?": "You can talk to me to start a return/ refund request.",
+        "How do I start a return?": "You can talk to me to start a return/ refund request. However, you have to contact our customer support representative for the second return for refund request if you need to split the return.",
 
         "What items cannot be returned?": "We cannot accept returns on final sale items, customized items, perishable items, gift cards, or items that have been altered or damaged by the customer. "
         "Certain high-risk items, such as luxury goods and intimate items, are marked as non-returnable unless they are defective or damaged upon receipt.",
@@ -101,6 +101,8 @@ We are not charging any re-stocking fees. However, you will return at your own e
 
 5. How do I start a return?
 To initiate a return, you can contact our customer support web site. You'll need your the email address to login and start the process.
+dWe o not encourage to split return for refund requests for an order unless absolutely necessary.  In such cases, you have to contact our customer support representative for the second return for refund request.
+
 
 If your return is accepted, We will email you instructions on how and where to send your package.
 
@@ -277,12 +279,15 @@ def check_if_order_to_return_in_valid_state(return_order: OrderToReturn, origina
         raise ValueError(ORIGINAL_ORDER_FOR_RETURN_IS_NOT_DELIVERED)
         
     product_dict = {item.product_id: item.number_units for item in original_order.items}
+    returned_units: dict = {}
     for item_return in return_order.items:
         if item_return.product_id not in product_dict:
             raise ValueError(f"{item_return.product_id} is {NOT_A_VALID_PRODUCT_ID}: {original_order.order_id}")
-        if item_return.qty > product_dict[item_return.product_id]:
-            raise ValueError(f"The return {item_return.qty} units of {item_return.product_id} is {NOT_A_VALID_RETURN_QUANTITY}: {original_order.order_id}.")
-    return True    
+        # Sum duplicate rows of the same product so that two rows cannot together exceed the ordered units.
+        returned_units[item_return.product_id] = returned_units.get(item_return.product_id, 0) + item_return.qty
+        if returned_units[item_return.product_id] > product_dict[item_return.product_id]:
+            raise ValueError(f"The return {returned_units[item_return.product_id]} units of {item_return.product_id} is {NOT_A_VALID_RETURN_QUANTITY}: {original_order.order_id}.")
+    return True
 
 def get_initial_return_refund_decision(return_order: OrderToReturn, original_order: Order, customer: Customer) -> tuple[RefundRequest, ReturnRefundInitialDecision]:
     """ Get ReturnRefundDecision with OrderRefundStatus signals how we should handle return refund
@@ -309,6 +314,7 @@ def get_initial_return_refund_decision(return_order: OrderToReturn, original_ord
     refund_request.returned_order.estimated_amount_refund_incl_tax = _calculate_amount_refund_incl_tax(refund_request)
     
     initial_decision: ReturnRefundInitialDecision = _get_initial_return_refund_decision(refund_request)
+    refund_request.initial_decision = initial_decision.order_refund_status
     return (refund_request, initial_decision)
 
 

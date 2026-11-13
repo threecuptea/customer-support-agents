@@ -1,3 +1,4 @@
+import type { RefundRequest } from "./refund-request";
 import { render } from "@testing-library/react";
 import { AuthProvider, AuthSession, Order } from "./auth-context";
 import { OrderInquiryProvider } from "./order-inquiry-context";
@@ -26,7 +27,12 @@ export function renderWithOrderInquiry(
   {
     seedSession,
     seedOrderInquiry,
-  }: { seedSession?: AuthSession; seedOrderInquiry?: { threadId: string; targetOrder: Order } } = {}
+  }: { seedSession?: AuthSession; seedOrderInquiry?: {
+      threadId: string;
+      targetOrder: Order;
+      refundRequest?: RefundRequest;
+      exchanges?: { question: string | null; answer: string }[];
+    } } = {}
 ) {
   if (seedSession) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(seedSession));
@@ -36,6 +42,8 @@ export function renderWithOrderInquiry(
       <OrderInquiryProvider
         initialThreadId={seedOrderInquiry?.threadId}
         initialTargetOrder={seedOrderInquiry?.targetOrder}
+        initialRefundRequest={seedOrderInquiry?.refundRequest}
+        initialExchanges={seedOrderInquiry?.exchanges}
       >
         {ui}
       </OrderInquiryProvider>

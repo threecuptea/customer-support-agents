@@ -554,7 +554,9 @@ def test_api_refund_request_get(client, redis_client):
     assert rr1.returned_order.items[0].product_id == item1["product_id"]
     assert rr1.returned_order.items[0].number_units == item1["qty"]
 
-    # Will next advance to the second item in the target order without the condition? 
+    # One CSA refund request per order: re-running /init while the request is still `pending` adopts it
+    # (same id, same items, no orphan), whatever items the second call carries.
+    assert rr1.initial_decision is not None  # audit record of what the customer was told
     item2 = next(({"product_id": item.product_id, "qty": item.number_units} for item in target_order.items if item.product_id != item1["product_id"]), None)
     if item2 is None:
         pytest.fail("No item found in the target order")
@@ -562,25 +564,27 @@ def test_api_refund_request_get(client, redis_client):
             "/api/support/return_refund/init",
             json={"thread_id": thread_id, "items": [item2]})
     assert resp.status_code == 200
-    assert "rr_in_process" in resp.json()
-    rr_in_process = RefundRequest(**resp.json()["rr_in_process"])
-    rr_id_2 = rr_in_process.refund_request_id
-    resp = client.get(f"/api/support/return_refund/{rr_id_2}")
-    assert resp.status_code == 200
-    rr2 = RefundRequest(**resp.json())
-    assert rr2 == rr_in_process
-    assert rr2.refund_request_id == rr_id_2
-    assert rr2.returned_order.items[0].product_id == target_order.items[1].product_id
-    assert rr2.returned_order.items[0].product_id == item2["product_id"]
-    assert rr2.returned_order.items[0].number_units == item2["qty"]
+    rr_again = RefundRequest(**resp.json()["rr_in_process"])
+    assert rr_again == rr1
+    assert resp.json()["initial_return_refund_decision"]["order_refund_status"] == rr1.initial_decision.value
 
     resp = client.get(f"/api/support/return_refund/by_order/{target_order.order_id}")
     assert resp.status_code == 200
-    data = resp.json()
-    rr_list = [RefundRequest(**datum) for datum in data]
-    assert len(rr_list) == 2
-    assert rr1 in rr_list
-    assert rr2 in rr_list
+    rr_list = [RefundRequest(**datum) for datum in resp.json()]
+    assert rr_list == [rr1]
+
+    # Once processed, the agent creates no other request for this order: 400, and still only one in Redis.
+    resp = client.post(
+            "/api/support/return_refund/process",
+            json={"thread_id": thread_id, "turn_off_slack_integration_for_test": True})
+    assert resp.status_code == 200
+    resp = client.post(
+            "/api/support/return_refund/init",
+            json={"thread_id": thread_id, "items": [item2]})
+    assert resp.status_code == 400
+    assert "contact a customer-support representative" in resp.json()["detail"]
+    resp = client.get(f"/api/support/return_refund/by_order/{target_order.order_id}")
+    assert len(resp.json()) == 1
 
 
 def _start_return_refund(client, email_addr="manu.raju@cnn.com"):
@@ -628,3 +632,30 @@ def test_process_and_chat_return_400_when_the_refund_request_vanished_from_redis
 
     
     
+
+def test_chat_response_carries_the_latest_refund_request(client, redis_client):
+    """/chat returns rr_in_process like /init and /process, re-read from Redis after the graph ran, so a status
+    changed behind our back (the Slack webhook) shows up on the very next chat reply."""
+    thread_id, rr, _ = _start_return_refund(client)
+    resp = client.post("/api/support/return_refund/chat", json={"thread_id": thread_id, "user_conversation": "hello?"})
+    assert resp.status_code == 200
+    assert resp.json()["rr_in_process"]["refund_request_id"] == rr.refund_request_id
+    assert resp.json()["rr_in_process"]["status"] == "pending"
+
+    stored = RefundRequest.model_validate_json(redis_client.get(f"rr:{rr.refund_request_id}"))
+    stored.status = "manual_approve"
+    redis_client.set(f"rr:{rr.refund_request_id}", stored.model_dump_json())
+    resp = client.post("/api/support/return_refund/chat", json={"thread_id": thread_id, "user_conversation": "any news?"})
+    assert resp.json()["rr_in_process"]["status"] == "manual_approve"
+
+
+def test_init_rejects_duplicate_rows_that_together_exceed_the_ordered_units(client, redis_client):
+    resp = client.post("/api/auth", json={"email_addr": "manu.raju@cnn.com"})
+    context = CustomerContext(**resp.json()[1])
+    data = client.post(
+        "/api/support/order/init",
+        json={"customer_context": context.model_dump(mode="json"), "order_number_provided": context.latest_orders[0].order_id}).json()
+    item = Order(**data["target_order"]).items[0]
+    rows = [{"product_id": item.product_id, "qty": item.number_units}] * 2  # each row is fine, together they are double
+    resp = client.post("/api/support/return_refund/init", json={"thread_id": data["thread_id"], "items": rows})
+    assert resp.status_code == 400

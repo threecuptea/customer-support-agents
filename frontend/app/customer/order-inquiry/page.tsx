@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Send,
@@ -15,6 +15,8 @@ import {
 } from "lucide-react";
 import { useAuth, useRequireRole, Order } from "../../../lib/auth-context";
 import { useOrderInquiry } from "../../../lib/order-inquiry-context";
+import { RefundRequest, fetchRefundRequestForOrder, isProcessed, statusLabel } from "../../../lib/refund-request";
+import { useRefundRequestSync } from "../../../lib/use-refund-request-sync";
 
 // Backend API base URL — defaults to same-origin (single-container deploy).
 // Override with NEXT_PUBLIC_API_URL at build time for other setups.
@@ -68,6 +70,69 @@ function canExchangeOrReturn(order: Order): boolean {
   return order.status === "delivered" && !!order.delivery_date;
 }
 
+// The order's refund request (CSA-23), shown under the order details whether or not the customer asks about it.
+// For a request that has not been processed, the only way forward is the return screen, which resumes it
+// ("Process the request" / "I like to chat"); a processed one is read-only here.
+function RefundRequestCard({ rr, onResume, disabled }: { rr: RefundRequest; onResume: () => void; disabled: boolean }) {
+  const items = rr.returned_order.items.map((i) => `${i.number_units} × ${i.product_name}`).join(", ");
+  return (
+    <div className="bg-white border border-gray-100 rounded-xl shadow-soft p-4 mb-6" data-testid="refund-request-card">
+      <h2 className="text-sm font-semibold text-brand-navy mb-2">Return / refund request #{rr.refund_request_id}</h2>
+      <table className="w-full text-sm">
+        <tbody className="divide-y divide-gray-100">
+          <tr>
+            <th className="py-1 pr-3 text-left font-medium text-gray-600 whitespace-nowrap">Status</th>
+            <td className="py-1">{statusLabel(rr.status)}</td>
+          </tr>
+          <tr>
+            <th className="py-1 pr-3 text-left font-medium text-gray-600 whitespace-nowrap">Items</th>
+            <td className="py-1">{items}</td>
+          </tr>
+          <tr>
+            <th className="py-1 pr-3 text-left font-medium text-gray-600 whitespace-nowrap">Estimated refund (incl. tax)</th>
+            <td className="py-1">{formatCurrency(rr.returned_order.estimated_amount_refund_incl_tax)}</td>
+          </tr>
+          {isProcessed(rr) && rr.decided_by && (
+            <tr>
+              <th className="py-1 pr-3 text-left font-medium text-gray-600 whitespace-nowrap">Decided by</th>
+              <td className="py-1">
+                {rr.decided_by}
+                {rr.decided_date ? ` on ${formatDate(rr.decided_date)}` : ""}
+              </td>
+            </tr>
+          )}
+          {rr.decision_reason && (
+            <tr>
+              <th className="py-1 pr-3 text-left font-medium text-gray-600 whitespace-nowrap">Decision reason</th>
+              <td className="py-1">{rr.decision_reason}</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+      {!isProcessed(rr) && (
+        <div className="mt-3">
+          <p className="text-sm font-semibold text-red-700 bg-red-50 border border-red-300 rounded-lg px-3 py-2 mb-3" role="alert">
+            This request has not been processed yet. Please resume it to press &quot;Process the request&quot; or
+            &quot;I like to chat&quot; (to ask for a human review) before anything else.
+          </p>
+          <button
+            onClick={onResume}
+            disabled={disabled}
+            className="inline-flex items-center gap-1.5 bg-brand-purple hover:bg-brand-purple/90 disabled:opacity-50 text-white rounded-lg px-4 py-2 text-sm font-medium transition-colors"
+          >
+            <Undo2 className="w-4 h-4" /> Resume return request
+          </button>
+        </div>
+      )}
+      {rr.status === "wait_for_manual_review" && (
+        <p className="mt-3 text-sm text-gray-600">
+          A human reviewer is looking at it. You will receive an email with the result, usually within 30 minutes.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function OrderInquiryPage() {
   const { session, isLoading } = useRequireRole("customer");
   const { logout } = useAuth();
@@ -81,12 +146,51 @@ export default function OrderInquiryPage() {
     setExchanges,
     resetForNewOrder,
     leaveOrderThread,
+    refundRequest,
+    setRefundRequest,
+    greetingKnowsRequest,
+    setGreetingKnowsRequest,
   } = useOrderInquiry();
+  const { refresh: refreshRefundRequest } = useRefundRequestSync();
 
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
   const [conversation, setConversation] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // The opening reply is a static script seeded when the order was selected. If a refund request was created
+  // afterwards (on the return screen), coming back would still show "Is everything O.K.?". Re-ask /order/init on the
+  // same thread once: it sees the request (detect_order_revisit_node) and answers from it. Only done while the chat is
+  // just that seeded reply; a conversation the customer has already had is left alone.
+  const greetingAskedRef = useRef(false);
+  const seedOnly = exchanges.length === 1 && exchanges[0].question === null;
+  const customerForGreeting = session?.customer_context ?? null;
+  useEffect(() => {
+    if (!targetOrder || !refundRequest || greetingKnowsRequest || greetingAskedRef.current || !threadId || !customerForGreeting) return;
+    // A ref, besides the context flag: the flag's state update has not landed yet when React (dev strict mode)
+    // runs the effect a second time, which would send a second /order/init.
+    greetingAskedRef.current = true;
+    setGreetingKnowsRequest(true);
+    if (!seedOnly) return;
+    (async () => {
+      try {
+        const res = await fetch(`${API_URL}/support/order/init`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            thread_id: threadId,
+            customer_context: customerForGreeting,
+            order_number_provided: targetOrder.order_id,
+          }),
+        });
+        if (!res.ok) return; // keep the old reply rather than blocking the screen
+        const data: OrderInitResponse = await res.json();
+        if (data.target_order) setExchanges([{ question: null, answer: data.response }]);
+      } catch {
+        // keep the old reply
+      }
+    })();
+  }, [targetOrder, refundRequest, greetingKnowsRequest, threadId, customerForGreeting, seedOnly, setGreetingKnowsRequest, setExchanges]);
 
   if (isLoading || !session) return null;
 
@@ -148,6 +252,13 @@ export default function OrderInquiryPage() {
       }
       setTargetOrder(data.target_order);
       setExchanges([{ question: null, answer: data.response }]);
+      // The agent keeps one refund request per order; load it (also after a logout/ re-login) so the card shows.
+      // undefined = the call failed: leave it empty rather than blocking the order chat.
+      const existing = (await fetchRefundRequestForOrder(data.target_order.order_id)) ?? null;
+      setRefundRequest(existing);
+      // /order/init above ran before this read, so it saw the request only if one already existed. With none, the
+      // reply is the static script and goes stale once a request is created on the return screen.
+      setGreetingKnowsRequest(existing !== null);
     } catch {
       setError("Could not reach support. Please try again.");
     } finally {
@@ -177,6 +288,8 @@ export default function OrderInquiryPage() {
       const data: GenericResponse = await res.json();
       setExchanges((prev) => [...prev, { question: trimmed, answer: data.response }]);
       setConversation("");
+      // The reply may have been generated from a request a Slack review just decided: refresh the card to match.
+      void refreshRefundRequest();
     } catch {
       setError("Could not reach support. Please try again.");
     } finally {
@@ -392,6 +505,10 @@ export default function OrderInquiryPage() {
               </table>
             </div>
 
+            {refundRequest && (
+              <RefundRequestCard rr={refundRequest} onResume={goToExchangeOrReturn} disabled={loading} />
+            )}
+
             <div className="space-y-4 mb-6">
               {exchanges.map((exchange, i) => (
                 <div key={i} className="space-y-2">
@@ -448,7 +565,8 @@ export default function OrderInquiryPage() {
             </div>
 
             <div className="flex flex-wrap justify-center gap-3">
-              {canExchangeOrReturn(targetOrder) && (
+              {/* One CSA refund request per order: once it exists the button is disabled (hidden); a further return goes to a CSR. */}
+              {canExchangeOrReturn(targetOrder) && !refundRequest && (
                 <button
                   onClick={goToExchangeOrReturn}
                   disabled={loading}

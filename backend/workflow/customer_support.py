@@ -1,7 +1,7 @@
 from __future__ import annotations
 from models.customer_support_model import Customer, CustomerContext, CustomerSupportState, FAQMatchEvals, FAQMatchResult, Order, OrderStructuredOutput,\
     ESCALATE_REASON, OrderRevisitEval, ExchangeReturnRefundAction, ExchangeReturnReason, ExchangeOrReturnInput, OrderToReturn, OrderRefundStatus, \
-    ReturnRefundStructuredOutput, RefundRequest
+    ReturnRefundStructuredOutput, RefundRequest, ReturnRefundInitialDecision
 
 from langgraph.graph import END, START, StateGraph
 from langchain_core.messages import HumanMessage, RemoveMessage, SystemMessage, AIMessage, ChatMessage
@@ -12,11 +12,12 @@ import os
 from workflow.llm import get_llm
 from langchain_core.runnables import RunnableConfig
 from datetime import timedelta
-from workflow.order_situation import select_order_situation, render_situation_text, escalation_allowed, ALWAYS_ON_TEXT
+from workflow.order_situation import select_order_situation, render_situation_text, escalation_allowed, ALWAYS_ON_TEXT, \
+    render_refund_request_facts
 from memory import save_user_memory
 from text_safety import human_reviews_prompt_block
 from workflow.customer_support_utils import find_closest_faq, retrieve_target_order, faq_dict, RETURN_POLICY, \
-    get_initial_return_refund_decision, threshold_amount_auto_approve, threshold_days_auto_approve
+    get_initial_return_refund_decision, threshold_amount_auto_approve, threshold_days_auto_approve, _get_initial_return_refund_decision
 from adapters.redis_adapter import RefundRequestRedisAdapter 
 
 
@@ -34,6 +35,7 @@ PREFIX_ANSWER_QUESTION = "I don't have an answer to your question."
 PREFIX_LOST_SHIPMENT = "You need help to handle your lost shipment."
 PREFIX_CANCEL_ORDER = "You need help to cancel your order."
 PREFIX_CHECK_RETURN_REFIND_STATUS = "You need help to check the return refund status of your order."
+PREFIX_NEW_RETURN_REFUND_REQUEST = "You need help to handle a new return for refund request."
 PREFIX_NEED_EXPEDIT_REPLACEMENT = "need to expedite a replacement."
 PREFIX_RCVD_DAMAGED_PRODUCT = "You received broken or defective items or a product with missing parts"
 PREFIX_RCVD_WRONG_ITEM = "You received an wrong item"
@@ -293,6 +295,16 @@ class CustomerSupportAgent:
             situation_text = situation_text.replace(reason.name, f"'{reason.value}'")
             always_on_text = always_on_text.replace(reason.name, f"'{reason.value}'")
         latest_message = next((m.content for m in reversed(state['messages']) if isinstance(m, HumanMessage)), "")
+        # The order's CSA refund request (one per order) is read from Redis, the source of truth, on every turn so a
+        # status changed by a Slack review shows up here, also after a logout/ re-login. A Redis outage must not break
+        # the order chat: answer without the section.
+        try:
+            order_refund_requests = [rr for rr in await self.redis_adapter.retrieve_refund_requests_by_order(target_order.order_id)
+                                     if rr.customer.customer_id == state["customer_context"].customer_id]
+        except Exception:
+            logger.exception("order_continue_chat_node could not read refund requests of order #%s", target_order.order_id)
+            order_refund_requests = []
+        refund_facts = render_refund_request_facts(order_refund_requests)
         logger.info("order_continue_chat_node situation for order #%s: %s (turns=%s)", state['order_number_provided'], situation, turns)
         # Cut down token usage if we don't have content for any of the sections (history, recent conversations, summary, human reviews)
         SYSTEM_PROMPT = f"""
@@ -303,6 +315,8 @@ class CustomerSupportAgent:
             {human_reviews_prompt_block(state.get("human_reviews"))}
             {"Here is what we remember from past visits :"+ state.get('history') + "." if state.get('history') else ""}            
             The above is the context of this order.
+
+            {refund_facts}
 
             CURRENT SITUATION (the only situation-specific instructions that apply): {situation_text}
 
@@ -330,7 +344,9 @@ class CustomerSupportAgent:
                 case ESCALATE_REASON.HELP_CANCEL_ORDER:
                     prefix = PREFIX_CANCEL_ORDER
                 case ESCALATE_REASON.HELP_CHECK_RETURN_REFUND_STATUS:
-                    prefix = PREFIX_CHECK_RETURN_REFIND_STATUS    
+                    prefix = PREFIX_CHECK_RETURN_REFIND_STATUS
+                case ESCALATE_REASON.HELP_NEW_RETURN_REFUND_REQUEST:
+                    prefix = PREFIX_NEW_RETURN_REFUND_REQUEST
                 case _:
                     prefix = PREFIX_ANSWER_QUESTION
             response = f"{prefix} {ESCALATE_MESSAGE}"                
@@ -359,7 +375,20 @@ class CustomerSupportAgent:
     async def retrieve_target_order_node(self, state: CustomerSupportState) -> dict[str, Any]:
         target_order: Order = retrieve_target_order(state["customer_context"], state["order_number_provided"])
         if target_order:
-            return {"target_order": target_order}
+            # An order that already has a CSA refund request of this customer has, by definition, been discussed.
+            # Redis is the source of truth, so this holds with no conversation history too (same session after
+            # "Go back to the order"/ "Cancel", or a new thread after re-login). Routing reads this flag; a Redis
+            # outage leaves it False and the normal revisit judgement applies.
+            has_refund_request = False
+            if self.redis_adapter:
+                try:
+                    customer_id = state["customer_context"].customer_id
+                    has_refund_request = any(
+                        rr.customer.customer_id == customer_id
+                        for rr in await self.redis_adapter.retrieve_refund_requests_by_order(target_order.order_id))
+                except Exception:
+                    logger.exception("retrieve_target_order_node could not read refund requests of order #%s", target_order.order_id)
+            return {"target_order": target_order, "order_has_refund_request": has_refund_request}
         # It should not happen
         response = SYSTEM_ERROR_MESSAGE
         message = ChatMessage(content=response, role= ROLE_AGENT, additional_kwargs= {"source": SOURCE_ORDER_RETRIEVAL})
@@ -517,6 +546,20 @@ class CustomerSupportAgent:
         refund_request, initial_decision = get_initial_return_refund_decision(order_to_return, target_order, customer)
         messages = []
         
+        # One CSA refund request per order: if this order already has a `pending` one (Cancel, a double click, an
+        # earlier thread before re-login), adopt it instead of inserting another. The service layer has already
+        # rejected the case where a processed request exists.
+        existing_pending = None
+        if refund_request:
+            for existing in await self.redis_adapter.retrieve_refund_requests_by_order(target_order.order_id):
+                if existing.status == "pending" and existing.customer.customer_id == customer.customer_id:
+                    existing_pending = existing
+            if existing_pending:
+                refund_request = existing_pending
+                # The stored decision is what the customer was told; old records without it are recomputed.
+                initial_decision = (ReturnRefundInitialDecision(order_refund_status=existing_pending.initial_decision)
+                                    if existing_pending.initial_decision else _get_initial_return_refund_decision(existing_pending))
+
         if refund_request:
             messages.append(ChatMessage(content=initial_decision.order_refund_status.value, role= ROLE_FUNCTION, name=FUNCTION_GET_INITIAL_DECISION, 
                 additional_kwargs={
@@ -539,7 +582,7 @@ class CustomerSupportAgent:
                     I am sorry that I have to reject your return refund request because you are trying to return a non-refundable item.
                     """)
             response += " Press 'Process the request' to proceed based on the initial decision, press 'Cancel' to cancel the request or press 'I like to chat' to chat for a futher discussion" 
-            rr_id_in_process = await self.redis_adapter.insert_refund_request(refund_request)       
+            rr_id_in_process = existing_pending.refund_request_id if existing_pending else await self.redis_adapter.insert_refund_request(refund_request)
             return {
                 "response": response, 
                 "messages": messages, 
@@ -646,14 +689,16 @@ class CustomerSupportAgent:
                 "Facts for questions about this request's status, decision, human review or next steps: the customer will receive an email once the review is done, "
                 "usually within 15 minutes and no more than 30 minutes (the app is integrated with Slack so an on-duty representative is notified). "
                 "Rules: NEVER offer or ask about a human review, NEVER ask the customer to write notes or press 'Process the request', and treat a 'yes' to a human review as already done. "
-                "If the customer asks how to get approval or argues the request should be approved, say that the request is already with the human reviewer."
+                "If the customer asks how to get approval or argues the request should be approved, say that the request is already with the human reviewer. "
+                "If the customer asks to return OTHER items of this order, say that this chat cannot start another return for this order and that a customer-support representative handles any further return once this request is closed."
             )
         elif processed:
             situation = (
                 f"The request has ALREADY been processed and its final status is '{refund_request.status}' (the decision has been made, by the agent or by a human reviewer). "
                 "Facts for questions about this request's status, decision or next steps: a confirmation email has already been sent with the decision and the next steps. "
                 "Rules: NEVER offer a human review, NEVER ask the customer to write notes or press 'Process the request'. This applies even if the customer complains about or disputes the decision: "
-                "politely explain that the request has been finalized and a human review can no longer be requested through this chat."
+                "politely explain that the request has been finalized and a human review can no longer be requested through this chat. "
+                "If the customer asks to return OTHER items of this order, say that this chat cannot start another return for this order and that a customer-support representative handles any further return."
             )
         elif review_requested:
             situation = (
@@ -780,6 +825,9 @@ class CustomerSupportAgent:
         if not state.get("target_order"):
             # retrieve_target_order_node already built the SYSTEM_ERROR_MESSAGE response
             return "summarize_node"
+        if state.get("order_has_refund_request"):
+            # Skip the revisit LLM call and the static greeting: order_continue_chat_node reads the request from Redis.
+            return "order_continue_chat_node"
         return "detect_order_revisit_node"
 
     def route_after_detect_order_revisit(self, state: CustomerSupportState) -> str:
@@ -859,7 +907,8 @@ class CustomerSupportAgent:
 
         builder.add_node("retrieve_target_order_node", self.retrieve_target_order_node)
         builder.add_conditional_edges("retrieve_target_order_node", self.route_after_retrieve_target_order,
-            {"summarize_node": "summarize_node", "detect_order_revisit_node": "detect_order_revisit_node"})
+            {"summarize_node": "summarize_node", "detect_order_revisit_node": "detect_order_revisit_node",
+             "order_continue_chat_node": "order_continue_chat_node"})
 
         builder.add_node("detect_order_revisit_node", self.detect_order_revisit_node)
         builder.add_conditional_edges("detect_order_revisit_node", self.route_after_detect_order_revisit,

@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useState } from "react";
 import { Order } from "./auth-context";
+import { RefundRequest } from "./refund-request";
 
 // Backend API base URL — defaults to same-origin (single-container deploy).
 // Override with NEXT_PUBLIC_API_URL at build time for other setups.
@@ -52,6 +53,15 @@ interface OrderInquiryContextValue {
   exchanges: Exchange[];
   setExchanges: React.Dispatch<React.SetStateAction<Exchange[]>>;
 
+  // The order's refund request (CSA-23), shared by the order chat screen (card) and the return screen so a
+  // status changed by a Slack review shows on both. Cleared by resetForNewOrder().
+  refundRequest: RefundRequest | null;
+  setRefundRequest: (rr: RefundRequest | null) => void;
+  // True once the opening reply of the order chat was produced knowing the order's refund request. A request created
+  // later (on the return screen) makes the seeded static reply stale; the order screen then re-asks /order/init.
+  greetingKnowsRequest: boolean;
+  setGreetingKnowsRequest: (known: boolean) => void;
+
   // Exchange/return survey (CSA-14) completion for the current order — lets the
   // customer revisit the survey screen within this visit and press "Start
   // return for refund process" to bypass re-filling it, per the ticket's own
@@ -88,16 +98,22 @@ interface OrderInquiryProviderProps {
   // empty and gets populated by the order-inquiry page itself.
   initialThreadId?: string | null;
   initialTargetOrder?: Order | null;
+  initialRefundRequest?: RefundRequest | null;
+  initialExchanges?: Exchange[];
 }
 
 export function OrderInquiryProvider({
   children,
   initialThreadId = null,
   initialTargetOrder = null,
+  initialRefundRequest = null,
+  initialExchanges = [],
 }: OrderInquiryProviderProps) {
   const [threadId, setThreadId] = useState<string | null>(initialThreadId);
   const [targetOrder, setTargetOrder] = useState<Order | null>(initialTargetOrder);
-  const [exchanges, setExchanges] = useState<Exchange[]>([]);
+  const [exchanges, setExchanges] = useState<Exchange[]>(initialExchanges);
+  const [refundRequest, setRefundRequest] = useState<RefundRequest | null>(initialRefundRequest);
+  const [greetingKnowsRequest, setGreetingKnowsRequest] = useState(false);
   const [exchangeReturnSurvey, setExchangeReturnSurvey] = useState<ExchangeReturnSurvey>(EMPTY_SURVEY);
 
   const markExchangeReturnSurveyDone = useCallback(
@@ -110,6 +126,8 @@ export function OrderInquiryProvider({
   const resetForNewOrder = useCallback(() => {
     setTargetOrder(null);
     setExchanges([]);
+    setRefundRequest(null);
+    setGreetingKnowsRequest(false);
     setExchangeReturnSurvey(EMPTY_SURVEY);
   }, []);
 
@@ -135,6 +153,10 @@ export function OrderInquiryProvider({
         setTargetOrder,
         exchanges,
         setExchanges,
+        refundRequest,
+        setRefundRequest,
+        greetingKnowsRequest,
+        setGreetingKnowsRequest,
         exchangeReturnSurvey,
         markExchangeReturnSurveyDone,
         resetForNewOrder,
