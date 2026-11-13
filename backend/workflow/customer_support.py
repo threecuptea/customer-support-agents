@@ -639,7 +639,7 @@ class CustomerSupportAgent:
                 case OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT:
                     temp_request.status = 'wait_for_manual_review'
                     temp_request.requires_manual_approval = True
-                    temp_request.requires_manual_approval_reason = "the request exceeds the automatic authorized refund amount"
+                    temp_request.requires_manual_approval_reason = "the request exceeds the automatic authorized refund amount."
                     responses.append("You would receive an email of a human review result regarding to your refund request shortly. "
                         "If approved, Your email will have the instructions on how and where to send your package.")
             return temp_request

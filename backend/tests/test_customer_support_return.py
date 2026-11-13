@@ -241,7 +241,7 @@ def test_routes_return():
         ),
         ("pamela.brown@cnn.com", OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT,
          "You would receive an email of a human review result regarding to your refund request shortly.",
-         "wait_for_manual_review", None, None, True, "the request exceeds the automatic authorized refund amount"
+         "wait_for_manual_review", None, None, True, "the request exceeds the automatic authorized refund amount."
         ),
         ("wolf.blitzer@cnn.com", OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS,
         "You would receive a rejection email and detail the underlined reason.",
@@ -350,7 +350,6 @@ def test_api_invoke_return_refund_process_workflow(client, redis_client, email_a
         ),
     ]
 )
-
 def test_api_invoke_return_refund_process_workflow_human_override(client, redis_client, email_addr, expected_order_refund_status, in_response,
                                                               requires_manual_approval_reason, notes_to_human_reviwer):
     resp = client.post("/api/auth", json={"email_addr": email_addr})
@@ -630,8 +629,6 @@ def test_process_and_chat_return_400_when_the_refund_request_vanished_from_redis
     resp = client.post("/api/support/return_refund/chat", json={"thread_id": thread_id, "user_conversation": "hello?"})
     assert resp.status_code == 400
 
-    
-    
 
 def test_chat_response_carries_the_latest_refund_request(client, redis_client):
     """/chat returns rr_in_process like /init and /process, re-read from Redis after the graph ran, so a status

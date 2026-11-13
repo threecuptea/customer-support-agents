@@ -1,4 +1,5 @@
 
+import asyncio
 import os
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
@@ -22,7 +23,7 @@ SLACK_CHANNEL_ID_REVIEW_DEV = os.getenv("SLACK_CHANNEL_ID_REVIEW_DEV")
 slack_client = WebClient(token=SLACK_BOT_TOKEN)
 
 
-def _customer_name(refund_request: RefundRequest) -> str:
+def customer_name(refund_request: RefundRequest) -> str:
     return slack_escape(f"{refund_request.customer.title} {refund_request.customer.first_name} {refund_request.customer.last_name}")
 
 
@@ -31,7 +32,7 @@ def _details_text(refund_request: RefundRequest, heading: str) -> str:
     notes_to_the_reviewer = f"*Notes to the reviewer:* {slack_escape(refund_request.notes_for_human_review_override)}\n" if refund_request.notes_for_human_review_override else ""
     return (f"{heading}\n\n"
             f"*Refund request id:* {refund_request.refund_request_id}\n*Original order number:* {refund_request.returned_order.origin_order_id}\n"
-            f"*Refund amount:* ${refund_request.returned_order.estimated_amount_refund_incl_tax}\n*Customer name:* {_customer_name(refund_request)}\n*Delivery date:* {refund_request.returned_order.original_delivery_date.strftime('%Y-%m-%d')}\n"
+            f"*Refund amount:* ${refund_request.returned_order.estimated_amount_refund_incl_tax}\n*Customer name:* {customer_name(refund_request)}\n*Delivery date:* {refund_request.returned_order.original_delivery_date.strftime('%Y-%m-%d')}\n"
             f"{notes_to_the_reviewer}"
             f"*Return items:*\n" + "\n".join([f"    {slack_escape(item.product_name)}, {slack_escape(item.supplier_name)}, {item.number_units}, {'NR' if item.nonrefundable_item else ''}" for item in refund_request.returned_order.items]))
 
@@ -61,7 +62,7 @@ def build_decided_blocks_payload(refund_request: RefundRequest) -> list[dict]:
     ]
 
 
-def build_interactive_blocks_payload(refund_request: RefundRequest) -> list[any]:
+def build_interactive_blocks_payload(refund_request: RefundRequest) -> list[dict]:
     """
     Format a Slack interactive message for a refund request review.
 
@@ -71,7 +72,6 @@ def build_interactive_blocks_payload(refund_request: RefundRequest) -> list[any]
     Returns:
         list: A list of dictionaries representing the Slack 'blocks' message.
     """
-    customer_name = _customer_name(refund_request)
     return [
             {
                 "type": "section",
@@ -101,7 +101,7 @@ def build_interactive_blocks_payload(refund_request: RefundRequest) -> list[any]
             },
             {
                 "type": "actions",
-                "block_id": f"{refund_request.refund_request_id}|{refund_request.returned_order.origin_order_id}|{refund_request.returned_order.estimated_amount_refund_incl_tax}|{customer_name}",
+                "block_id": str(refund_request.refund_request_id),
                 "elements": [
                     {
                         "type": "button",
@@ -146,7 +146,9 @@ async def send_interactive_blocks_payload(refund_request: RefundRequest) -> None
     blocks = build_interactive_blocks_payload(refund_request)
     logger.debug(f"Prepared interactive blocks payload: {blocks}")
     try:
-        response = slack_client.chat_postMessage(
+        # chat_postMessage is a sync function, need to wrap; otherwise will block the event loop
+        await asyncio.to_thread(
+            slack_client.chat_postMessage,
             channel=SLACK_CHANNEL_ID_REVIEW_DEV,
             text="CSR's review is required for the following return for refund request",
             blocks=blocks
@@ -156,57 +158,21 @@ async def send_interactive_blocks_payload(refund_request: RefundRequest) -> None
         logger.error(f"Failed to send interactive blocks message to Slack: {e}")
 
 
-def build_acknowledgement_text(data: ReviewResponse) -> str:
-    """Build the acknowledgement text for a return/ refund request review response.
-
-    Args:
-        data (ReviewResponse): The review response data containing the action and decision details.
-
-    Returns:
-        str: The formatted acknowledgement text.
-    """
-    text = ""
-    if data.action == "approve":
-        text = (
-            "✅ *The return/ refund request review status: Approved*\n"
-            f"The request id: *{data.refund_request_id}* (origin order id: *{data.origin_order_id}*) of *${data.estimated_amount_refund_incl_tax}*\n"
-            f"requested by *{data.customer_name}* was approved by *{data.decided_by}*\n"
-        )
-    elif data.action == "reject":
-        text = (
-            "❌ *The return/ refund request review status: Rejected*\n"
-            f"The request id: *{data.refund_request_id}* (origin order id: *{data.origin_order_id}*) of *${data.estimated_amount_refund_incl_tax}*\n"
-            f"requested by *{data.customer_name}* was rejected by *{data.decided_by}*\n"
-        )
-    elif data.action == "flag":
-        text = (
-            "🚩 *The return/ refund request review status: Flagged*\n"
-            f"The request id: *{data.refund_request_id}* (origin order id: *{data.origin_order_id}*) of *${data.estimated_amount_refund_incl_tax}*\n"
-            f"requested by *{data.customer_name}* was flagged by *{data.decided_by}*\n"
-            "⚠️ Please review this invoice manually and follow up with the customer.\n"
-        )
-    optional_reason = f"*Reason:* {data.reason}\n" if data.reason else ""
-    divider = "-------------------------------------------------------------------------------------------------\n"  
-    return text + optional_reason + divider
-
-
 def build_not_applied_text(data: ReviewResponse, outcome: str, current_status: str | None = None) -> str:
-    """Acknowledgement for a button press that did NOT change the refund request (duplicate press, unknown id, ...)."""
+    """Informational message for a button press that did NOT change the refund request (duplicate press, unknown id, ...)."""
     divider = "-------------------------------------------------------------------------------------------------\n"
-    head = f"The request id: *{data.refund_request_id}* (origin order id: *{data.origin_order_id}*)"
+    head = f"The request id: *{data.refund_request_id}*"
     if outcome == "status_mismatch":
         text = (f"ℹ️ *No change made.* {head} is no longer waiting for a review "
                 f"(current status: *{current_status}*). Your *{data.action}* from *{slack_escape(data.decided_by)}* was ignored.\n")
     elif outcome == "not_found":
         text = f"⚠️ *No change made.* {head} was not found. Your *{data.action}* from *{slack_escape(data.decided_by)}* was ignored.\n"
-    elif outcome == "order_mismatch":
-        text = f"⚠️ *No change made.* {head} does not match the stored request. Your *{data.action}* was ignored.\n"
     else:
         text = f"⚠️ *The review could not be recorded* for {head}. Please try again or contact support.\n"
     return text + divider
 
 
-async def send_interactive_acknowledgement(data: ReviewResponse, text: str | None = None) -> None:
+async def send_reply_text(data: ReviewResponse, reply_text: str) -> None:
     """Send an interactive acknowledgement message to Slack for a return/ refund request review response.
 
     Best effort: this runs in a background task after Slack already got its 200, so there is nobody to
@@ -221,20 +187,22 @@ async def send_interactive_acknowledgement(data: ReviewResponse, text: str | Non
     """
     if not data.response_url.startswith(SLACK_RESPONSE_URL_PREFIX):
         # response_url comes from the payload; only ever post to Slack itself (SSRF guard).
-        logger.error("Refusing to post an acknowledgement to a non-Slack response_url")
+        logger.error("Refusing to post a reply text to a non-Slack response_url")
         return
-    acknowledgement_text = text if text is not None else build_acknowledgement_text(data)
-    logger.debug(f"Prepared acknowledgement text: {acknowledgement_text}")
+    if not reply_text:
+        logger.error("Refusing to send an empty reply_text to Slack")
+        return
+    logger.debug(f"Prepared text: {reply_text}")
     try:
         async with httpx.AsyncClient(timeout=30.0) as http_client:
             payload = {
             "response_type": "in_channel",
-            "text": acknowledgement_text,
+            "text": reply_text,
             "replace_original": False  # Purely acknowledgement, do not replace the original message
             }
             # The response_url dynamically generated responding to a specific interaction is different from the static webhook URL tied to the Slack Bot token 
             # after re-install into the Slack workspace for permission changes.  Therefore, we cannot use slack_client that send the acknowledge to the static webhook URL.
-            logger.info("Sending an interactive acknowledgement to the response_url")
+            logger.info("Sending reply text to the response_url")
             response = await http_client.post(
                 data.response_url,
                 json=payload
@@ -243,7 +211,7 @@ async def send_interactive_acknowledgement(data: ReviewResponse, text: str | Non
 
     except httpx.HTTPError as e:
         # 4xx/5xx (e.g. expired response_url: 30 minutes or 5 uses) or network trouble
-        logger.error(f"Error sending review acknowledgement text: {e}")
+        logger.error(f"Error sending reply text: {e}")
 
 
 async def replace_original_message(response_url: str, refund_request: RefundRequest) -> None:

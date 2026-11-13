@@ -12,7 +12,7 @@ from datetime import datetime
 
 from models.customer_support_model import RefundRequest, MAX_REASON_CHARS
 from models.slack_model import ReviewResponse
-from adapters.slack_adapter import send_interactive_acknowledgement, build_not_applied_text, replace_original_message
+from adapters.slack_adapter import build_not_applied_text, replace_original_message, send_reply_text, customer_name
 import logging
 
 from contextlib import asynccontextmanager
@@ -131,11 +131,7 @@ def parse_review_response(data: dict[str, Any]) -> ReviewResponse:
         action = action_obj["value"]
         if action not in ALLOWED_ACTIONS:
             raise InvalidReviewPayload(f"unknown action: {action!r}")
-        combo = action_obj["block_id"].split("|")
-        refund_request_id = int(combo[0])
-        origin_order_id = int(combo[1])
-        estimated_amount_refund_incl_tax = float(combo[2])
-        customer_name = "|".join(combo[3:])  # the name is last, so a '|' inside it is preserved
+        refund_request_id = int(action_obj["block_id"])
         decided_ts = float(data["message"]["ts"])
     except (KeyError, IndexError, ValueError, TypeError, AttributeError) as exc:
         raise InvalidReviewPayload(f"malformed payload: {exc!r}") from exc
@@ -149,16 +145,13 @@ def parse_review_response(data: dict[str, Any]) -> ReviewResponse:
     return ReviewResponse(
         response_url=response_url,
         refund_request_id=refund_request_id,
-        origin_order_id=origin_order_id,
-        estimated_amount_refund_incl_tax=estimated_amount_refund_incl_tax,
-        customer_name=customer_name,
         action=action,
         reason=reason or "",
         decided_by=decided_by or "",
         decided_ts=decided_ts,
     )
 
-def get_updated_refund_request_and_summary(refund_request: RefundRequest, review_response: ReviewResponse) -> tuple[RefundRequest, str]:
+def get_updated_refund_request(refund_request: RefundRequest, review_response: ReviewResponse) -> RefundRequest:
     refund_request.status = f'manual_{review_response.action}'
     # decision_reason has min_length=1: an empty string would make the stored JSON fail validation when read back
     refund_request.decision_reason = review_response.reason or None
@@ -166,12 +159,14 @@ def get_updated_refund_request_and_summary(refund_request: RefundRequest, review
     tzinfo = refund_request.returned_order.original_delivery_date.tzinfo
     refund_request.decided_date = datetime.fromtimestamp(review_response.decided_ts, tz=tzinfo)
     
-    summary= (f"Updating the refund request of ID: {refund_request.refund_request_id}, origin_order_id: {review_response.origin_order_id}, customer: {review_response.customer_name} with "
-                            f"status: {refund_request.status}, "
-                            f"decision_reason: {(chr(34) + refund_request.decision_reason + chr(34)) if refund_request.decision_reason else 'none given'}, "
-                            f"decided_by: {refund_request.decided_by}, "
-                            f"decided_date: {refund_request.decided_date.strftime('%Y-%m-%d %H:%M:%S')}")
-    return refund_request, summary
+    return refund_request
+
+def get_updated_summary(updated_rr: RefundRequest) -> str:
+    return (f"Updating the refund request of ID: {updated_rr.refund_request_id}, origin_order_id: {updated_rr.returned_order.origin_order_id}, customer: {customer_name(updated_rr)} with "
+                            f"status: {updated_rr.status}, "
+                            f"decision_reason: {(chr(34) + updated_rr.decision_reason + chr(34)) if updated_rr.decision_reason else 'none given'}, "
+                            f"decided_by: {updated_rr.decided_by}, "
+                            f"decided_date: {updated_rr.decided_date.strftime('%Y-%m-%d %H:%M:%S')}")
 
 async def log_review_updated_summary_into_memory(customer_id: str, review_response: ReviewResponse, summary: str) -> None:
     key = hitl_memory_key(review_response.refund_request_id)
@@ -184,44 +179,31 @@ async def log_review_updated_summary_into_memory(customer_id: str, review_respon
 async def post_process_review_response(review_response: ReviewResponse) -> tuple[str, RefundRequest | None]:
     """Apply the reviewer's decision. Returns (outcome, the stored refund request as it is now, or None).
 
-    outcome: "updated" | "not_found" | "order_mismatch" | "status_mismatch".
+    outcome: "updated" | "not_found" |  "status_mismatch".
     Only a request that is STILL `wait_for_manual_review` is changed, atomically (see
     RefundRequestRedisAdapter.update_refund_request_if_status), so a double press, a second reviewer or a Slack
     retry can never flip a request that is already decided, nor overwrite its decided_by/decided_date.
     """
-    # It won't be meaningful to return an HTTP error from here: the background task runs after the 200 OK went out.
-    adapter = app.state.redis_adapter
-    existing = await adapter.retrieve_refund_request(review_response.refund_request_id)
-    if existing is None:
-        logger.error("Refund request not found for ID: %s", review_response.refund_request_id)
-        return "not_found", None
-    if existing.returned_order.origin_order_id != review_response.origin_order_id:
-        # block_id is only trusted as a pointer; the stored request is the source of truth.
-        logger.error("Refund request %s: order id in the Slack payload (%s) does not match the stored one (%s)",
-                     review_response.refund_request_id, review_response.origin_order_id, existing.returned_order.origin_order_id)
-        return "order_mismatch", existing
-
-    summaries: list[str] = []
-
+    # ReviewResponse should only carry refund_request_id and the action taken by the reviewer. The source of truth for the refund request details is the stored RefundRequest object.
+    # We should not need retrieve_refund_request here, adapter.update_refund_request_if_status will handle the check anyway
     def apply(refund_request: RefundRequest) -> RefundRequest:
-        updated, summary = get_updated_refund_request_and_summary(refund_request, review_response)
-        summaries.append(summary)
-        return updated
-
-    outcome, current = await adapter.update_refund_request_if_status(
+        return get_updated_refund_request(refund_request, review_response)
+    adapter = app.state.redis_adapter
+    outcome, updated_rr = await adapter.update_refund_request_if_status(
         review_response.refund_request_id, "wait_for_manual_review", apply)
     if outcome != "updated":
         logger.warning("Ignored review %r of refund request %s: %s (current status: %s)",
-                       review_response.action, review_response.refund_request_id, outcome, current.status if current else None)
-        return outcome, current
-
-    logger.info(summaries[-1])
+                       review_response.action, review_response.refund_request_id, outcome, updated_rr.status if updated_rr else None)
+        return outcome, updated_rr
+    # Log the summary of the updated refund request
+    summary= get_updated_summary(updated_rr)
+    logger.info(summary)
     try:
-        await log_review_updated_summary_into_memory(current.customer.customer_id, review_response, summaries[-1])
+        await log_review_updated_summary_into_memory(updated_rr.customer.customer_id, review_response, summary)
     except Exception:
         # The refund request is already updated; a memory-store failure must not undo or mask that.
         logger.exception("Could not log the human review of refund request %s into memory", review_response.refund_request_id)
-    return "updated", current
+    return "updated", updated_rr
 
 
 async def handle_review_response(review_response: ReviewResponse) -> None:
@@ -240,7 +222,7 @@ async def handle_review_response(review_response: ReviewResponse) -> None:
         # status_mismatch: this press lost the race / was a duplicate, but the message may still show stale buttons
         await replace_original_message(review_response.response_url, current)
     if outcome != "updated":
-        await send_interactive_acknowledgement(
+        await send_reply_text(
             review_response, build_not_applied_text(review_response, outcome, current.status if current else None))
 
 
