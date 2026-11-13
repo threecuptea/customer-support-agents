@@ -564,6 +564,24 @@ See README.md for the details. I might add memory sections and eleborate the sum
     - **Pending warning is bold red** in a tinted box (`role="alert"`) on the refund card.
     - **Extra GETs after `manual_approve`**: returning to the tab from Slack fires both `focus` and `visibilitychange`, so two reads went out together (not the 20s poll). `useRefundRequestSync.refresh` has an in-flight guard, and the event pulls only run while the status is `wait_for_manual_review`.
   - **Still not run:** the harness on `gpt-4.1` for the new cases; the Slack Approve path was verified by hand only (no automated end-to-end test).
+  - **Post CSA-23 review**
+    - I removed the following section.
+   ```python
+    try:
+            customer_context = state.get("customer_context")
+            if customer_context and any(
+                rr.customer.customer_id == customer_context.customer_id
+                for rr in await self.redis_adapter.retrieve_refund_requests_by_order(target_order.order_id)
+            ):
+                logger.info("detect_order_revisit_node: order #%s has a refund request, treated as a revisit", target_order.order_id)
+                return {"order_is_revisit": True, "order_prior_topic": "other"}
+        except Exception:
+            logger.exception("detect_order_revisit_node could not read refund requests of order #%s", target_order.order_id)
+   ```
+   in `detect_order_revisit_node` and also clean up tests in `_detect` section in `test_refund_request_facts.py`
+    - The same check now lives in `retrieve_target_order_node` (the data-fetching node), which sets `order_has_refund_request` (new `CustomerSupportState` field, reset in `/order/init`) when the order has a refund request of this customer in Redis; a Redis error leaves it False. `route_after_retrieve_target_order` stays a pure function that only reads state (routers are light-weight and never do I/O or change state): not found -> `summarize_node`; flag set -> `order_continue_chat_node` (skips the revisit LLM call and the static greeting; it reads the request from Redis itself); otherwise -> `detect_order_revisit_node`. This works with no conversation history (same thread after Cancel/ Back, or a new thread after re-login without a saved summary). `order_is_revisit` stays False on this path; harness case `OC-18` (opening message `Order inquiry: N`, `revisit=False`, pending request) covers it and passes 10/10 on `gpt-4o-mini` (temperature 0) together with `OC-1`, `OC-10..17`; the rest of the harness and `gpt-4.1` were not re-run for it. Tests: `test_route_after_retrieve_target_order` and `test_retrieve_target_order_*` in `test_customer_support.py`.
+    - New `ESCALATE_REASON.HELP_NEW_RETURN_REFUND_REQUEST` (further return of an order that already has a request) with `PREFIX_NEW_RETURN_REFUND_REQUEST`.
+  - Also correct some naming in `order_situation.py` and `llm_harness/cases.py`.  I tried to add "OC-18" with revisit=True , prior_topic="other", rr_status="wait_for_manual_review" but fail to find `must_contains` words that passes the test and abort that effort.  
 
 ### Current API Endpoints
 - `GET /api/health` — liveness check

@@ -69,6 +69,7 @@ async def invoke_order_init_workflow(support: OrderInitRequest, request: Request
             "order_number_provided": support.order_number_provided,
             "target_order": None,
             "order_is_revisit": False,
+            "order_has_refund_request": False,
             "order_issue_escalated": False,
             "order_issue_resolved": False,
             "order_turns": 0,

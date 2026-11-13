@@ -182,6 +182,6 @@ def render_refund_request_facts(refund_requests: list[RefundRequest]) -> str:
     lines.append(
         "Because a request exists, do NOT tell the customer to press 'Like to Exchange or Return for Refund' (it is disabled for this order). "
         "Answer questions about the request itself from the facts above and do NOT escalate them. ONLY when the customer asks to return OTHER items of "
-        "this order (a further return), set `escalate` to True and `escalate_reason` to HELP_ANSWER_ORDER_INQUIRY: further returns of this order are "
+        "this order (a further return), set `escalate` to True and `escalate_reason` to HELP_NEW_RETURN_REFUND_REQUEST: further returns of this order are "
         "handled by a customer-support representative once the current request is closed (processed).")
     return "\n".join(lines)

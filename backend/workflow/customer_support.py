@@ -35,6 +35,7 @@ PREFIX_ANSWER_QUESTION = "I don't have an answer to your question."
 PREFIX_LOST_SHIPMENT = "You need help to handle your lost shipment."
 PREFIX_CANCEL_ORDER = "You need help to cancel your order."
 PREFIX_CHECK_RETURN_REFIND_STATUS = "You need help to check the return refund status of your order."
+PREFIX_NEW_RETURN_REFUND_REQUEST = "You need help to handle a new return for refund request."
 PREFIX_NEED_EXPEDIT_REPLACEMENT = "need to expedite a replacement."
 PREFIX_RCVD_DAMAGED_PRODUCT = "You received broken or defective items or a product with missing parts"
 PREFIX_RCVD_WRONG_ITEM = "You received an wrong item"
@@ -343,7 +344,9 @@ class CustomerSupportAgent:
                 case ESCALATE_REASON.HELP_CANCEL_ORDER:
                     prefix = PREFIX_CANCEL_ORDER
                 case ESCALATE_REASON.HELP_CHECK_RETURN_REFUND_STATUS:
-                    prefix = PREFIX_CHECK_RETURN_REFIND_STATUS    
+                    prefix = PREFIX_CHECK_RETURN_REFIND_STATUS
+                case ESCALATE_REASON.HELP_NEW_RETURN_REFUND_REQUEST:
+                    prefix = PREFIX_NEW_RETURN_REFUND_REQUEST
                 case _:
                     prefix = PREFIX_ANSWER_QUESTION
             response = f"{prefix} {ESCALATE_MESSAGE}"                
@@ -372,7 +375,20 @@ class CustomerSupportAgent:
     async def retrieve_target_order_node(self, state: CustomerSupportState) -> dict[str, Any]:
         target_order: Order = retrieve_target_order(state["customer_context"], state["order_number_provided"])
         if target_order:
-            return {"target_order": target_order}
+            # An order that already has a CSA refund request of this customer has, by definition, been discussed.
+            # Redis is the source of truth, so this holds with no conversation history too (same session after
+            # "Go back to the order"/ "Cancel", or a new thread after re-login). Routing reads this flag; a Redis
+            # outage leaves it False and the normal revisit judgement applies.
+            has_refund_request = False
+            if self.redis_adapter:
+                try:
+                    customer_id = state["customer_context"].customer_id
+                    has_refund_request = any(
+                        rr.customer.customer_id == customer_id
+                        for rr in await self.redis_adapter.retrieve_refund_requests_by_order(target_order.order_id))
+                except Exception:
+                    logger.exception("retrieve_target_order_node could not read refund requests of order #%s", target_order.order_id)
+            return {"target_order": target_order, "order_has_refund_request": has_refund_request}
         # It should not happen
         response = SYSTEM_ERROR_MESSAGE
         message = ChatMessage(content=response, role= ROLE_AGENT, additional_kwargs= {"source": SOURCE_ORDER_RETRIEVAL})
@@ -389,20 +405,6 @@ class CustomerSupportAgent:
     # by product name ("your PowerBank order") without repeating the numeric id.
     async def detect_order_revisit_node(self, state: CustomerSupportState) -> dict[str, Any]:
         target_order = state["target_order"]
-        # An order that already has a CSA refund request of this customer has, by definition, been discussed. Redis is
-        # the source of truth, so this also holds with no conversation history (same session after "Go back to the
-        # order", or a thread started after re-login). No LLM call; order_continue_chat_node then answers from the
-        # REFUND REQUEST FACTS section. A Redis outage falls through to the normal LLM judgement.
-        try:
-            customer_context = state.get("customer_context")
-            if customer_context and any(
-                rr.customer.customer_id == customer_context.customer_id
-                for rr in await self.redis_adapter.retrieve_refund_requests_by_order(target_order.order_id)
-            ):
-                logger.info("detect_order_revisit_node: order #%s has a refund request, treated as a revisit", target_order.order_id)
-                return {"order_is_revisit": True, "order_prior_topic": "other"}
-        except Exception:
-            logger.exception("detect_order_revisit_node could not read refund requests of order #%s", target_order.order_id)
         # invoke_order_init_workflow injects long-term memory as a SystemMessage — keep it in its
         # own labeled section rather than folding it into the raw conversation transcript, so the
         # classifier doesn't have to infer which lines are "known history" vs. this turn's message.
@@ -823,6 +825,9 @@ class CustomerSupportAgent:
         if not state.get("target_order"):
             # retrieve_target_order_node already built the SYSTEM_ERROR_MESSAGE response
             return "summarize_node"
+        if state.get("order_has_refund_request"):
+            # Skip the revisit LLM call and the static greeting: order_continue_chat_node reads the request from Redis.
+            return "order_continue_chat_node"
         return "detect_order_revisit_node"
 
     def route_after_detect_order_revisit(self, state: CustomerSupportState) -> str:
@@ -902,7 +907,8 @@ class CustomerSupportAgent:
 
         builder.add_node("retrieve_target_order_node", self.retrieve_target_order_node)
         builder.add_conditional_edges("retrieve_target_order_node", self.route_after_retrieve_target_order,
-            {"summarize_node": "summarize_node", "detect_order_revisit_node": "detect_order_revisit_node"})
+            {"summarize_node": "summarize_node", "detect_order_revisit_node": "detect_order_revisit_node",
+             "order_continue_chat_node": "order_continue_chat_node"})
 
         builder.add_node("detect_order_revisit_node", self.detect_order_revisit_node)
         builder.add_conditional_edges("detect_order_revisit_node", self.route_after_detect_order_revisit,
