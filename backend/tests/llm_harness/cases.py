@@ -148,7 +148,7 @@ def build_order_continue_state(*, status: str, revisit: bool, question: str, rec
         "order_is_revisit": revisit,
         "customer_context": CustomerContext(customer_id=TEST_CUSTOMER.customer_id, first_name=TEST_CUSTOMER.first_name,
                                             last_name=TEST_CUSTOMER.last_name, email=TEST_CUSTOMER.email),
-        # Read by select_order_situation (CSA-19). Ignored by the node until step 3 wires it in.
+        # Read by determine_order_situation (CSA-19). Ignored by the node until step 3 wires it in.
         "order_turns": turns,
         "order_prior_topic": prior_topic,
     }
@@ -249,7 +249,7 @@ ORDER_CONTINUE_CASES: list[Case] = [
 
 
 # ---------------------------------------------------------------- detect_order_revisit_node
-# The revisit classifier (is_revisit + prior_topic) feeds select_order_situation, so a wrong label here
+# The revisit classifier (is_revisit + prior_topic) feeds determine_order_situation, so a wrong label here
 # picks the wrong situation. It runs on LLM_MODEL (the "other-node" model in the report header).
 OTHER_MEMORY = f"Customer asked to return a damaged item from order #{ORDER_ID} and was told the refund decision."
 DIFFERENT_ORDER_MEMORY = "Customer reported that order #99999 shows delivered but the package never arrived."

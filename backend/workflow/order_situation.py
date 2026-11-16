@@ -6,7 +6,7 @@ LLM (the pattern CSA-17 introduced for return_refund_chat_node). This module is 
 "exactly one situation, strictest first" property is tested offline.
 
 Rules of the design:
-- `select_order_situation` returns exactly one `OrderSituation`; there is always a result (DEFAULT is the catch-all).
+- `determine_order_situation` returns exactly one `OrderSituation`; there is always a result (DEFAULT is the catch-all).
 - Priority is the order of the checks below: the strictest (most conditions) wins.
 - A revisit whose prior topic does not match the order's status (or is "other"/unknown) is not special: it behaves
   as its plain status situation.
@@ -16,6 +16,7 @@ from __future__ import annotations
 from enum import StrEnum
 
 from models.customer_support_model import ESCALATE_REASON, RefundRequest
+from langfuse import observe
 
 # Prior-visit topics that have their own situations. Anything else (including None) is not special.
 PRIOR_LOST_SHIPMENT = "lost_shipment"
@@ -35,7 +36,9 @@ class OrderSituation(StrEnum):
     DEFAULT = "default"                                          # unknown status: no special handling
 
 
-def select_order_situation(*, status: str | None, is_revisit: bool, prior_topic: str | None,
+# create a customized `determine_order_situation` span.
+@observe(as_type="span", capture_input=True, capture_output=True)
+def determine_order_situation(*, status: str | None, is_revisit: bool, prior_topic: str | None,
                            turns: int) -> OrderSituation:
     """Pick the single situation. `turns` = replies already given in this thread (state["order_turns"])."""
     started = turns > 0

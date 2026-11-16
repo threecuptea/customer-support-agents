@@ -1,7 +1,6 @@
 from __future__ import annotations
 from typing import Any
 
-from langchain_core.tools import tool
 from rapidfuzz import process, fuzz
 from models.customer_support_model import Customer, CustomerContext, Order, RefundRequest, ReturnRefundInitialDecision, FAQMatchResult, OrderToReturn, \
     ReturnedOrderItem, ReturnedOrder, OrderRefundStatus
@@ -157,7 +156,7 @@ def find_closest_faq(user_question: str) -> FAQMatchResult:
     matched_question = match[0]
     faq = next((key, val) for key, val in faq_dict.items() if key == matched_question)
     # double to escape {}
-    return FAQMatchResult(question= faq[0], answer= faq[1], confidence_score=round(match[1], 2))
+    return FAQMatchResult(question= faq[0], answer= faq[1], confidence_score=round(match[1]/ 100, 2))
     
 
 def retrieve_target_order(context: CustomerContext, order_number: int) -> Order | None:

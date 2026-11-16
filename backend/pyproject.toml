@@ -26,6 +26,7 @@ dependencies = [
     "slack-sdk>=3.45.0",
     "httpx>=0.28.1",
     "redis>=8.1.0",
+    "langfuse>=5.2.0",
 ]
 
 [dependency-groups]

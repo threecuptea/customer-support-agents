@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import Request, HTTPException
 import os
 from langchain_core.messages import HumanMessage
+from langfuse import propagate_attributes
 from models.customer_support_model import ExchangeOrReturnOutput, GeneralSupportRequest, OrderInitRequest, OrderInitResponse, \
     GenericChatInput, SummarizeOnExit, OrderToReturn, Order, ExchangeOrReturnInput, GenericResponse, InitialReturnRefundResponse, RefundRequest, \
     ReturnRefundProcessRequest, ReturnRefundProcessResponse, ReturnRefundChatResponse
@@ -10,15 +11,17 @@ from services.ownership import check_context_owner, check_thread_owner, owns_ref
 import uuid
 import logging
 from workflow.customer_support_utils import check_if_order_to_return_in_valid_state, group_memory
+from langfuse.langchain import CallbackHandler
 
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
 integrate_slack = os.getenv("INTEGRATE_SLACK", "false").lower() == "true"
+LANGFUSE_CSA_TRACE_NAME = "CS-Agents"
 
 
-async def invoke_general_support_workflow(support: GeneralSupportRequest, request: Request) -> GenericResponse:
+async def invoke_general_others_workflow(support: GeneralSupportRequest, request: Request) -> GenericResponse:
     graph = request.app.state.support_graph
     check_context_owner(request, support.customer_context)
     if support.thread_id:
@@ -28,7 +31,7 @@ async def invoke_general_support_workflow(support: GeneralSupportRequest, reques
     initial_state = {
             "messages": [HumanMessage(content= support.general_inquiry)],
             "customer_context": support.customer_context,
-            "support_category": "general/ others",
+            "support_category": "general_others",
             "general_inquiry": support.general_inquiry,
             "escalation_reason": None,
             "faq_match_evals": None,
@@ -41,13 +44,28 @@ async def invoke_general_support_workflow(support: GeneralSupportRequest, reques
     if memory_dict:
         initial_state.update(memory_dict)
     try:
-        customer_support_state  = await graph.ainvoke(initial_state, config)
+        if request.app.state.langfuse:
+            config["callbacks"] = [CallbackHandler()] # It is advised to have one callback handler per request
+            config["run_name"] = "general_others"
+            with propagate_attributes(
+                trace_name=LANGFUSE_CSA_TRACE_NAME,
+                user_id=session_email(request),
+                session_id=thread_id,
+                tags=["general_others"],
+                metadata={"graph": "customer_support", "invoke_from": "general_others"},
+            ):
+                customer_support_state  = await graph.ainvoke(initial_state, config)
+            request.app.state.langfuse.flush()
+        else:
+            customer_support_state  = await graph.ainvoke(initial_state, config)
         return GenericResponse(
            thread_id=thread_id,
            response=customer_support_state["response"],
         )
 
     except Exception as exc:
+        if request.app.state.langfuse:
+            request.app.state.langfuse.flush()
         error_msg = "Error starting customer-support general-inquiry"
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
@@ -59,6 +77,7 @@ async def invoke_order_init_workflow(support: OrderInitRequest, request: Request
         await check_thread_owner(graph, support.thread_id, request)
     thread_id = support.thread_id if support.thread_id else str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
+            
     # We can add "human_escalates" later. history is pretty steady. However, external human_reviews and human_escalates can come any time.
     memory_dict = await group_memory(store= graph.store, user_id= support.customer_context.customer_id, thread_id= support.thread_id)
     # Remove history as SystemMessage so that summary won't include history
@@ -80,13 +99,28 @@ async def invoke_order_init_workflow(support: OrderInitRequest, request: Request
     if memory_dict:
         initial_state.update(memory_dict)
     try:
-       customer_support_state  = await graph.ainvoke(initial_state, config)
-       return OrderInitResponse(
-           thread_id=thread_id,
-           target_order= customer_support_state["target_order"],
-           response=customer_support_state["response"],
-       )
+        if request.app.state.langfuse:
+            config["callbacks"] = [CallbackHandler()] # It is advised to have one callback handler per request
+            config["run_name"] = "order_inquery"
+            with propagate_attributes(
+                trace_name=LANGFUSE_CSA_TRACE_NAME,
+                user_id=session_email(request),
+                session_id=thread_id,
+                tags=["order_inquery", "init"],
+                metadata={"graph": "customer_support", "invoke_from": "order_init"},
+            ):
+                customer_support_state  = await graph.ainvoke(initial_state, config)
+            request.app.state.langfuse.flush() 
+        else:
+            customer_support_state  = await graph.ainvoke(initial_state, config)
+        return OrderInitResponse(
+            thread_id=thread_id,
+            target_order= customer_support_state["target_order"],
+            response=customer_support_state["response"],
+        )
     except Exception as exc:
+        if request.app.state.langfuse:
+            request.app.state.langfuse.flush()
         error_msg = "Error initializing customer-support order_inquery"
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
@@ -96,7 +130,7 @@ async def invoke_order_continue_workflow(support: GenericChatInput, request: Req
     thread_id = support.thread_id
     await check_thread_owner(graph, thread_id, request)
     config = {"configurable": {"thread_id": thread_id}}
-  
+   
     # Guard against a thread_id that was never initialized via /order/init (or whose init failed to find
     # an order): route_branch/order_continue_chat_node assume target_order is already populated, so without
     # this check a stale/uninitialized thread_id would crash the graph instead of returning a clear error.
@@ -118,15 +152,29 @@ async def invoke_order_continue_workflow(support: GenericChatInput, request: Req
     if memory_dict:
         initial_state.update(memory_dict)
     try:
-       customer_support_state  = await graph.ainvoke(initial_state, config)
-       # escalation_reason is for the future use: communication to CSR in slack
-       return GenericResponse(
-           thread_id=thread_id,
-           response=customer_support_state["response"],
-       )
+        if request.app.state.langfuse:
+            config["callbacks"] = [CallbackHandler()] # It is advised to have one callback handler per request
+            config["run_name"] = "order_inquery"
+            with propagate_attributes(
+                trace_name=LANGFUSE_CSA_TRACE_NAME,
+                user_id=session_email(request),
+                session_id=thread_id,
+                tags=["order_inquery", "chat"],
+                metadata={"graph": "customer_support", "invoke_from": "order_continue"},
+            ):
+                customer_support_state  = await graph.ainvoke(initial_state, config)
+            request.app.state.langfuse.flush()
+        else:
+            customer_support_state  = await graph.ainvoke(initial_state, config)
+        return GenericResponse(
+            thread_id=thread_id,
+            response=customer_support_state["response"],
+        )
     except Exception as exc:
         error_msg = "Error continuing customer-support order_inquiry"
         logger.exception(error_msg)
+        if request.app.state.langfuse:
+            request.app.state.langfuse.flush()
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
 
 async def invoke_exchange_return_recommendation_workflow(exchange_return_reason: ExchangeOrReturnInput, request: Request) -> ExchangeOrReturnOutput:
@@ -134,6 +182,7 @@ async def invoke_exchange_return_recommendation_workflow(exchange_return_reason:
     thread_id = exchange_return_reason.thread_id
     await check_thread_owner(graph, thread_id, request)
     config = {"configurable": {"thread_id": thread_id}}
+
     # Guard against a thread_id that was never initialized via /order/init: this node reads
     # state["order_number_provided"] without a fallback, so a missing/stale thread_id would
     # otherwise crash the graph instead of returning a clear error.
@@ -153,7 +202,20 @@ async def invoke_exchange_return_recommendation_workflow(exchange_return_reason:
         "escalation_reason": None,   
     }     
     try:
-        customer_support_state  = await graph.ainvoke(initial_state, config)
+        if request.app.state.langfuse:
+            config["callbacks"] = [CallbackHandler()] # It is advised to have one callback handler per request
+            config["run_name"] = "exchange_or_return"
+            with propagate_attributes(
+                trace_name=LANGFUSE_CSA_TRACE_NAME,
+                user_id=session_email(request),
+                session_id=thread_id,
+                tags=["exchange_or_return"],
+                metadata={"graph": "customer_support", "invoke_from": "exchange_return_recommendation"},
+            ):    
+                customer_support_state  = await graph.ainvoke(initial_state, config)
+            request.app.state.langfuse.flush()
+        else:
+            customer_support_state  = await graph.ainvoke(initial_state, config)    
         return ExchangeOrReturnOutput(
             thread_id=thread_id,
             response=customer_support_state["response"],
@@ -162,6 +224,8 @@ async def invoke_exchange_return_recommendation_workflow(exchange_return_reason:
     except Exception as exc:
         error_msg = "Error getting exchange or return recommendation based upon the given reason"
         logger.exception(error_msg)
+        if request.app.state.langfuse:
+            request.app.state.langfuse.flush()
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
 
 
@@ -199,8 +263,21 @@ async def invoke_return_refund_init_workflow(order_to_return: OrderToReturn, req
         memory_dict = await group_memory(store= graph.store, user_id= existing_state.values.get("customer_context").customer_id, thread_id= thread_id, include_history=False)
         if memory_dict:
             initial_state.update(memory_dict)
+        if request.app.state.langfuse:
+            config["callbacks"] = [CallbackHandler()] # It is advised to have one callback handler per request
+            config["run_name"] = "return_refund"
+            with propagate_attributes(
+                trace_name=LANGFUSE_CSA_TRACE_NAME,
+                user_id=session_email(request),
+                session_id=thread_id,
+                tags=["return_refund", "init"],
+                metadata={"graph": "customer_support", "invoke_from": "return_refund_init"},
+            ):    
+                customer_support_state  = await graph.ainvoke(initial_state, config)
+            request.app.state.langfuse.flush()
+        else:
+            customer_support_state  = await graph.ainvoke(initial_state, config)
 
-        customer_support_state  = await graph.ainvoke(initial_state, config)
         rr_in_process = await request.app.state.redis_adapter.retrieve_refund_request(customer_support_state["rr_id_in_process"])
         return InitialReturnRefundResponse(
             thread_id = thread_id,
@@ -214,6 +291,8 @@ async def invoke_return_refund_init_workflow(order_to_return: OrderToReturn, req
         logger.exception(error_msg)
         raise HTTPException(status_code=400, detail=f"{error_msg}: {verr}")
     except Exception as exc:
+        if request.app.state.langfuse:
+            request.app.state.langfuse.flush()
         error_msg = f"Error start a return refund request for thread: {order_to_return.thread_id}"
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
@@ -258,7 +337,21 @@ async def invoke_return_refund_process_workflow(request_to_process: ReturnRefund
             "proceed_to_process_return_refund": True,
             "notes_for_human_review_override": request_to_process.notes_for_human_review_override
         }
-        customer_support_state  = await graph.ainvoke(initial_state, config)
+        if request.app.state.langfuse:
+            config["callbacks"] = [CallbackHandler()] # It is advised to have one callback handler per request
+            config["run_name"] = "return_refund"
+            with propagate_attributes(
+                trace_name=LANGFUSE_CSA_TRACE_NAME,
+                user_id=session_email(request),
+                session_id=thread_id,
+                tags=["return_refund", "process"],
+                metadata={"graph": "customer_support", "invoke_from": "return_refund_process"},
+            ):
+                customer_support_state  = await graph.ainvoke(initial_state, config)
+            request.app.state.langfuse.flush()    
+        else:
+            customer_support_state  = await graph.ainvoke(initial_state, config)
+        
         rr_in_process = await request.app.state.redis_adapter.retrieve_refund_request(customer_support_state["rr_id_in_process"])
         turn_off_slack_integration_for_test = request_to_process.turn_off_slack_integration_for_test
         if rr_in_process and rr_in_process.status == "wait_for_manual_review" and integrate_slack and not turn_off_slack_integration_for_test:
@@ -273,6 +366,8 @@ async def invoke_return_refund_process_workflow(request_to_process: ReturnRefund
             rr_being_processed = customer_support_state["rr_being_processed"],
         )
     except Exception as exc:
+        if request.app.state.langfuse:
+            request.app.state.langfuse.flush()
         error_msg = f"Error process a return refund request for the order: {existing_state.values.get('order_number_provided')}"
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
@@ -299,7 +394,20 @@ async def invoke_return_refund_chat_workflow(support: GenericChatInput, request:
         memory_dict = await group_memory(store= graph.store, user_id= existing_state.values.get("customer_context").customer_id, thread_id= thread_id, include_history=False)
         if memory_dict:
             initial_state.update(memory_dict)
-        customer_support_state  = await graph.ainvoke(initial_state, config)
+        if request.app.state.langfuse:
+            config["callbacks"] = [CallbackHandler()] # It is advised to have one callback handler per request
+            config["run_name"] = "return_refund"
+            with propagate_attributes(
+                trace_name=LANGFUSE_CSA_TRACE_NAME,
+                user_id=session_email(request),
+                session_id=thread_id,
+                tags=["return_refund", "chat"],
+                metadata={"graph": "customer_support", "invoke_from": "return_refund_chat"},
+            ):
+                customer_support_state  = await graph.ainvoke(initial_state, config)
+            request.app.state.langfuse.flush()
+        else:
+            customer_support_state = await graph.ainvoke(initial_state, config)
         # Re-read after the graph: a Slack decision may have changed the status, and the UI shows this copy.
         rr_in_process = await request.app.state.redis_adapter.retrieve_refund_request(rr_id_in_process)
         return ReturnRefundChatResponse(
@@ -308,8 +416,9 @@ async def invoke_return_refund_chat_workflow(support: GenericChatInput, request:
             request_human_review_return_refund = customer_support_state["request_human_review_return_refund"],
             rr_in_process = rr_in_process,
         )
-        
     except Exception as exc:
+        if request.app.state.langfuse:
+            request.app.state.langfuse.flush()
         error_msg = f"Error chat about a return refund request for thread: {thread_id}"
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
@@ -344,9 +453,23 @@ async def invoke_summarize_on_exit(support: SummarizeOnExit, request: Request):
     await check_thread_owner(graph, thread_id, request)
     config = {"configurable": {"thread_id": thread_id}}
     try:
-        await graph.ainvoke({"summarize_on_exit": True}, config)
-        # escalation_reason is for the future use: communication to CSR in slack
+        if request.app.state.langfuse:
+            config["callbacks"] = [CallbackHandler()] # It is advised to have one callback handler per request
+            config["run_name"] = "summarize"
+            with propagate_attributes(
+                trace_name=LANGFUSE_CSA_TRACE_NAME,
+                user_id=session_email(request),
+                session_id=thread_id,
+                tags=["summarize"],
+                metadata={"graph": "customer_support", "invoke_from": "summarize_on_exit"},
+            ):
+                await graph.ainvoke({"summarize_on_exit": True}, config)
+            request.app.state.langfuse.flush()
+        else:
+            await graph.ainvoke({"summarize_on_exit": True}, config)    
     except Exception as exc:
+        if request.app.state.langfuse:
+            request.app.state.langfuse.flush()
         error_msg = "Error summarize on exit"
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")

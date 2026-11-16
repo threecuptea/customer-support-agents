@@ -483,7 +483,7 @@ def test_request_human_review_for_return_refund_chat_with_fake_llm():
     )
     class _FakeReturnRefundChatLLM:
         async def ainvoke(self, messages):
-            return output
+            return {"parsed": output}
         
     email_addr = "wolf.blitzer@cnn.com"
     customer_context = CustomerContext(**get_demo_customer(email_addr)) # It does not use API and call workflow directly

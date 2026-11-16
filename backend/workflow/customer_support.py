@@ -12,13 +12,12 @@ import os
 from workflow.llm import get_llm
 from langchain_core.runnables import RunnableConfig
 from datetime import timedelta
-from workflow.order_situation import select_order_situation, render_situation_text, escalation_allowed, ALWAYS_ON_TEXT, \
+from workflow.order_situation import determine_order_situation, render_situation_text, escalation_allowed, ALWAYS_ON_TEXT, \
     render_refund_request_facts
 from memory import save_user_memory
 from text_safety import human_reviews_prompt_block
 from workflow.customer_support_utils import find_closest_faq, retrieve_target_order, faq_dict, RETURN_POLICY, \
-    get_initial_return_refund_decision, threshold_amount_auto_approve, threshold_days_auto_approve, _get_initial_return_refund_decision
-from adapters.redis_adapter import RefundRequestRedisAdapter 
+    get_initial_return_refund_decision, threshold_amount_auto_approve, threshold_days_auto_approve, _get_initial_return_refund_decision 
 
 
 load_dotenv(override=True)
@@ -26,7 +25,7 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
 SUMMARIZE_MESSAGE_THRESHOLD = 6
-FAQ_MATCH_THRESHOLD = 75.0
+FAQ_MATCH_THRESHOLD = 0.80
 ESCALATE_MESSAGE = "I will escalate your inquiry/ request to a human agent and somebody will contact you within 3 business days."
 SYSTEM_ERROR_MESSAGE = "System error!! We cannot find your order, please try it later"
 ESCALATE_REASON_FAQ = "Unable to find a satifactory answer to the customer's question"
@@ -71,22 +70,23 @@ class CustomerSupportAgent:
         self.redis_adapter = redis_adapter
         require_stronge_chat_model = os.getenv("REQUIRE_STRONG_CHAT_NODE_MODEL", "false").lower() == "true"
         # I can override model and provider to use overrides if needed
-        self.summarize_llm = get_llm()
-        # FAQ matching
-        # Selected models should be customized by their speciality and strength in the production
-        self.general_llm_for_faq_match_evals = get_llm().with_structured_output(FAQMatchEvals)
-        self.general_llm_for_faq_match_result = get_llm().with_structured_output(FAQMatchResult)
+        self.summarize_llm = get_llm(stream_usage=True) # To ensure that provider will return `usage_metadata` in its response
+       
+        # For LLM with structured_output, it  normally only return `parsed`` one which is the structured output. In order to return 
+        # `usage_metadata`, we need to have include_raw=True. result["parsed"].usage_metadata to access it. LangFuse can tell to parse correctly w or w/o
+        self.general_llm_for_faq_match_evals = get_llm(stream_usage=True).with_structured_output(FAQMatchEvals, include_raw=True) 
+        self.general_llm_for_faq_match_result = get_llm(stream_usage=True).with_structured_output(FAQMatchResult, include_raw=True)
         self.faq_context = "\n".join([f"- 'question': {key}, 'answer': {val} " for key, val in faq_dict.items()])
         # The two free-form chat nodes (order_continue_chat_node, return_refund_chat_node) follow many
         # competing rules in one prompt and are the most model-sensitive (CSA-18 harness), so they use a
         # stronger model than the rest. Override with CHAT_NODE_MODEL; read here, at construction time.
         # gpt-4o-mini looks solid after Claude applied deterministic-situation-block pattern to order_continue-chat_node will
         # run test_llm_chat_node periodically and switch if seeing model drift  
-        self.chat_node_llm = get_llm(model=os.getenv("CHAT_NODE_MODEL", DEFAULT_CHAT_NODE_MODEL), temperature=0.0) if require_stronge_chat_model else get_llm(temperature=0.0)
-        self.order_llm_for_inquiry_chat = self.chat_node_llm.with_structured_output(OrderStructuredOutput)
+        self.chat_node_llm = get_llm(model=os.getenv("CHAT_NODE_MODEL", DEFAULT_CHAT_NODE_MODEL), temperature=0.0, stream_usage=True) if require_stronge_chat_model else get_llm(temperature=0.0, stream_usage=True)
+        self.order_llm_for_inquiry_chat = self.chat_node_llm.with_structured_output(OrderStructuredOutput, include_raw=True)
         # Classification, not conversation — low temperature for consistency across near-identical inputs.
-        self.order_llm_for_revisit_eval = get_llm(temperature=0.0).with_structured_output(OrderRevisitEval)
-        self.return_refund_llm = self.chat_node_llm.with_structured_output(ReturnRefundStructuredOutput)
+        self.order_llm_for_revisit_eval = get_llm(temperature=0.0, stream_usage=True).with_structured_output(OrderRevisitEval, include_raw=True)
+        self.return_refund_llm = self.chat_node_llm.with_structured_output(ReturnRefundStructuredOutput, include_raw=True)
 
         
     ###############################################
@@ -108,8 +108,8 @@ class CustomerSupportAgent:
         The summary grows richer turn by turn. Token costs stay nearly flat no matter how long
         the conversation runs.
         """
-        shared_instruction = "Focus on: any order(s) mentioned, order number and product name, and what order/ product issue occurred and what actions were taken." \
-        "Record the exchange/ return reason if any"
+        shared_instruction = "Focus on: any order(s) mentioned, order number and product name, and what order/ product issue occurred and what suggestions were given or actions were taken if any." \
+        "Record any return request created, processed and chat about if any."
         existing_summary = state.get("summary", "")
         if existing_summary:
             # Extend the existing summary with new messages
@@ -121,7 +121,7 @@ class CustomerSupportAgent:
         else:
             # First time summarising
             summarize_instruction = (
-                "Summarise this customer support conversation in under 5 sentences. " + shared_instruction
+                "Summarise the new messages above in this customer support conversation under 5 sentences. " + shared_instruction
             )
 
         messages = state["messages"] + [HumanMessage(content=summarize_instruction)]
@@ -146,16 +146,12 @@ class CustomerSupportAgent:
     ###############################################
     # I might need to 
     async def general_faq_eval_node(self, state: CustomerSupportState) -> dict[str, Any]:
-        # Long-term memory is already injected as a SystemMessage in `messages` by
-        # invoke_general_support_workflow, and folds into `summary` once summarize_node has
-        # run — no need to reach into `messages` by a fixed index for prior context.
+        # Do I really need to include the summary here
         SYSTEM_PROMPT = f"""
         You are an intelligent customer-support agent to help decide if it is helpful to match the customer question
         against FAQs
-        Here is the customer's question: {state["general_inquiry"]}.
         Here is FAQ context: {self.faq_context}.
         Here is the full return policy {RETURN_POLICY}.
-        Here is the summary of the previous conversation if any: {state.get("summary") if state.get("summary") else "None yet"}.
         There are two matching options:
         - Matches with fuzz.partial_ratio scorer of python Rapidfuzz library. The fuzz.partial_ratio process.extractOne finds 
         the single best matching string from choices of FAQ questions for the customer question
@@ -173,9 +169,9 @@ class CustomerSupportAgent:
         """
         # Do I use Mesage the right way.  
         system_msg = SystemMessage(content=SYSTEM_PROMPT)
-        # resp should an AIMessage wrapper
-        # FAQMatchEvals
-        eval = await self.general_llm_for_faq_match_evals.ainvoke([system_msg])
+        human_msg = HumanMessage(content=state["general_inquiry"])
+        result = await self.general_llm_for_faq_match_evals.ainvoke([system_msg, human_msg])
+        eval = result["parsed"]
         updates = {"faq_match_evals": eval, "general_issue_resolved": False}
         if not eval or (eval and not eval.rapid_fuzz_partial_ratio_match_helpful and not eval.llm_semantic_match_helpful):
             response = f"{PREFIX_ANSWER_QUESTION} {ESCALATE_MESSAGE}"
@@ -223,22 +219,22 @@ class CustomerSupportAgent:
             }
 
     async def general_faq_llm_match_node(self, state: CustomerSupportState) -> dict[str, Any]:
+        # This might be able to take advantage of prompt cache. RETURN_POLICY might have enough tokens 
         SYSTEM_PROMPT = f"""
         You are an intelligent customer-support agent to help match the customer question against FAQs
-        Here is the customer's question {state["general_inquiry"]}.
         Here is FAQ context: {self.faq_context}.
         Here is the full return policy {RETURN_POLICY}.  
         Set `question` to the 'question' that is most similar to the customer's question among FAQ context.  
         Set `answer` to the corresponding 'answer' of the above `question`.
-        Set `confidence_score` based upon your judgement.
+        Set `confidence_score` based upon your judgement. 
+        IMPORTANT: confidence_score is 0.0 - 1.0 and the passing score is 0.80.
         """
-        # Do I use Mesage the right way.  
         system_msg = SystemMessage(content=SYSTEM_PROMPT)
-        # resp should an AIMessage wrapper
-        # FAQMatchEvals
-        result: FAQMatchResult = await self.general_llm_for_faq_match_result.ainvoke([system_msg])
-        if result and result.confidence_score >= FAQ_MATCH_THRESHOLD:
-            response = result.answer
+        human_msg = HumanMessage(content=state["general_inquiry"])
+        result = await self.general_llm_for_faq_match_result.ainvoke([system_msg, human_msg])
+        faq_output: FAQMatchResult = result["parsed"]
+        if faq_output and faq_output.confidence_score >= FAQ_MATCH_THRESHOLD:
+            response = faq_output.answer
             message = AIMessage(content=response, additional_kwargs={
                 "source":SOURCE_FAQ_LLM_MATCH
             })
@@ -250,7 +246,7 @@ class CustomerSupportAgent:
         else:
             response = f"{PREFIX_ANSWER_QUESTION} {ESCALATE_MESSAGE}"
             message = ChatMessage(content=response, role=ROLE_AGENT, additional_kwargs={
-                "source":SOURCE_FAQ_LLM_MATCH, "faq_match_result": result,
+                "source":SOURCE_FAQ_LLM_MATCH, "faq_match_result": faq_output,
             })
             return {
                     "messages": [message],
@@ -274,15 +270,16 @@ class CustomerSupportAgent:
         recent_conversations = "\n".join(
             [f"- {message.content}" for message in state['messages']]
         )
-        logger.info(f"order_continue_chat_node beginning state for order #{state['order_number_provided']}:\nrecent conversations: {recent_conversations}\nsummary: {state.get('summary')}\nhistory: {state.get('history')}\nhuman_reviews: {state.get('human_reviews')}")
+        logger.debug(f"order_continue_chat_node beginning state for order #{state['order_number_provided']}:\nrecent conversations: {recent_conversations}\nsummary: {state.get('summary')}\nhistory: {state.get('history')}\nhuman_reviews: {state.get('human_reviews')}")
         # Code decides the ONE situation that applies (CSA-19); only that situation's text reaches the LLM,
         # so a rule written for one situation cannot contradict or shift the behaviour of another.
         target_order = state['target_order']
         turns = state.get("order_turns", 0)
-        situation = select_order_situation(
+        situation = determine_order_situation(
             status=target_order.status, is_revisit=bool(state.get('order_is_revisit')),
             prior_topic=state.get("order_prior_topic"), turns=turns)
-        logger.info(f"order_continue_chat_node 'situation' for order #{state['order_number_provided']}: {situation}")
+        # Need to find a way to get situation into LangFuse trace
+        logger.debug(f"order_continue_chat_node 'situation' for order #{state['order_number_provided']}: {situation}")
         situation_text = render_situation_text(
             situation,
             deadline=(target_order.order_date + timedelta(days=7)).isoformat(),
@@ -305,7 +302,6 @@ class CustomerSupportAgent:
             logger.exception("order_continue_chat_node could not read refund requests of order #%s", target_order.order_id)
             order_refund_requests = []
         refund_facts = render_refund_request_facts(order_refund_requests)
-        logger.info("order_continue_chat_node situation for order #%s: %s (turns=%s)", state['order_number_provided'], situation, turns)
         # Cut down token usage if we don't have content for any of the sections (history, recent conversations, summary, human reviews)
         SYSTEM_PROMPT = f"""
             You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her order.
@@ -327,8 +323,8 @@ class CustomerSupportAgent:
             """
 
         system_msg = SystemMessage(content=SYSTEM_PROMPT)
-        order_output: OrderStructuredOutput = await self.order_llm_for_inquiry_chat.ainvoke([system_msg])
-        logger.info("order_continue_chat_node structured output for order #%s: %s", state['order_number_provided'], order_output)
+        result = await self.order_llm_for_inquiry_chat.ainvoke([system_msg])
+        order_output: OrderStructuredOutput = result["parsed"]
         # mock llm will return order_output None
         if order_output and order_output.escalate and not escalation_allowed(
                 order_output.escalation_reason, situation, target_order.status):
@@ -412,7 +408,7 @@ class CustomerSupportAgent:
             [f"- {message.content}" for message in state["messages"]]
         )
         product_names = [f"'{item.product_name}'" for item in target_order.items]
-        logger.info(f"detect_order_revisit_node beginning state for order #{state['order_number_provided']}:\nmemory notes: {state.get('history')}\nrecent conversations: {recent_conversations}")
+        logger.debug(f"detect_order_revisit_node beginning state for order #{state['order_number_provided']}:\nmemory notes: {state.get('history')}\nrecent conversations: {recent_conversations}")
         # Cut down token usage if we don't have content for any of the sections (history, recent conversations, summary, human reviews)
         # However, we still keep the 'history' section regardless of whether it has content, as it provides important context for the LLM.
         SYSTEM_PROMPT = f"""
@@ -435,8 +431,8 @@ class CustomerSupportAgent:
         If `is_revisit` is False, leave `prior_topic` empty.
         """
         system_msg = SystemMessage(content=SYSTEM_PROMPT)
-        eval: OrderRevisitEval = await self.order_llm_for_revisit_eval.ainvoke([system_msg])
-        logger.info("detect_order_revisit_node structured output for order #%s: %s", target_order.order_id, eval)
+        result = await self.order_llm_for_revisit_eval.ainvoke([system_msg])
+        eval: OrderRevisitEval = result["parsed"]
         is_revisit = bool(eval and eval.is_revisit)
         # A prior topic only makes sense for a revisit; ignore one the LLM gave without it.
         prior_topic = eval.prior_topic if is_revisit else None
@@ -666,7 +662,8 @@ class CustomerSupportAgent:
         recent_conversations = "\n".join(
             [f"- {message.content}" for message in state['messages']]
         )
-        logger.info(f"return_refund_chat_node beginning state for order #{state['order_number_provided']}:\nrecent conversations: {recent_conversations}\nsummary: {state.get('summary')}\nmemory notes: {state.get('history')}\nhuman reviews: {state.get('human_reviews')}")
+        # Should comment out later once we get LangFuse integration
+        logger.debug(f"return_refund_chat_node beginning state for order #{state['order_number_provided']}:\nrecent conversations: {recent_conversations}\nsummary: {state.get('summary')}\nmemory notes: {state.get('history')}\nhuman reviews: {state.get('human_reviews')}")
         # Cut down token usage if we don't have content for any of the sections (history, recent conversations, summary, human reviews)
         rr_id_in_process = state["rr_id_in_process"]
         refund_request = await self.redis_adapter.retrieve_refund_request(rr_id_in_process)
@@ -683,6 +680,7 @@ class CustomerSupportAgent:
         review_requested = bool(state.get("request_human_review_return_refund"))
         rejected_by_agent = decision.order_refund_status in (
             OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS, OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS)
+        # How to get situation category into LangFuse using observability type generation or span
         if processed and refund_request.status == "wait_for_manual_review":
             situation = (
                 "The request has ALREADY been processed and a human review has ALREADY been requested and submitted; it is with a human reviewer now. "
@@ -757,8 +755,8 @@ class CustomerSupportAgent:
             set `response` to what you want to reply  
         """
         system_msg = SystemMessage(content=SYSTEM_PROMPT)
-        output: ReturnRefundStructuredOutput = await self.return_refund_llm.ainvoke([system_msg])
-        logger.info("return_refund_chat_node structured output for order #%s: %s", state['order_number_provided'], output)
+        result = await self.return_refund_llm.ainvoke([system_msg]) # result will have `parsed` and 'raw' has token usage_metadata
+        output: ReturnRefundStructuredOutput = result["parsed"]
         
         # mock llm will return output None; mirrors order_continue_chat_node's same guard.
         if not output:
@@ -793,7 +791,7 @@ class CustomerSupportAgent:
             return "summarize_node"
         
         match state['support_category']:
-            case "general/ others":
+            case "general_others":
                 return "general_faq"
             case "exchange_or_return":
                 return "exchange_or_return"

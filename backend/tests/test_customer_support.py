@@ -253,7 +253,7 @@ def test_detect_order_revisit_node_defaults_false_under_mock(test_customer_conte
 def test_detect_order_revisit_node_true_when_llm_confirms(test_customer_context):
     class _FakeRevisitLLM:
         async def ainvoke(self, messages):
-            return OrderRevisitEval(is_revisit=True)
+            return {"parsed": OrderRevisitEval(is_revisit=True)}
 
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     agent.order_llm_for_revisit_eval = _FakeRevisitLLM()
@@ -320,7 +320,7 @@ def test_route_after_detect_order_revisit():
 def test_routes_up_to_order(test_customer_context):
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     state = {
-       "support_category": "general/ others",
+       "support_category": "general_others",
     }
     assert agent.route_branch(state) == "general_faq"
     state = {
@@ -442,7 +442,7 @@ def test_faq_llm_match_with_fake_llm():
     answer = "The company's return policy allows returns within 35 days."
     class _FakeFaqMatchLLM:
         async def ainvoke(self, messages):
-            return FAQMatchResult(question=question, answer=answer, confidence_score=100.0)
+            return {"parsed": FAQMatchResult(question=question, answer=answer, confidence_score=1.0)}
     
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     agent.general_llm_for_faq_match_result = _FakeFaqMatchLLM()
@@ -460,7 +460,7 @@ def test_irrelevant_question_for_faq_llm_evals_with_fake_llm():
     both_are_not_helpful = FAQMatchEvals(rapid_fuzz_partial_ratio_match_helpful= False, llm_semantic_match_helpful=False)
     class _FakeFaqEvalsLLM:
         async def ainvoke(self, messages):
-            return both_are_not_helpful
+            return {"parsed": both_are_not_helpful}
     
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     agent.general_llm_for_faq_match_evals = _FakeFaqEvalsLLM()
@@ -477,7 +477,7 @@ def test_faq_question_for_faq_llm_evals_with_fake_llm():
     both_are_helpful = FAQMatchEvals(rapid_fuzz_partial_ratio_match_helpful= True, llm_semantic_match_helpful=True)
     class _FakeFaqEvalsLLM:
         async def ainvoke(self, messages):
-            return both_are_helpful
+            return {"parsed": both_are_helpful}
     
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     agent.general_llm_for_faq_match_evals = _FakeFaqEvalsLLM()
@@ -496,7 +496,7 @@ def test_simple_question_for_order_continue_chat_with_fake_llm(test_customer_con
     )
     class _FakeOrderChatLLM:
         async def ainvoke(self, messages):
-            return output
+            return {"parsed": output}
 
     state = {
         "messages": [HumanMessage(content=question)],
@@ -524,7 +524,7 @@ def test_escalate_situation_for_order_continue_chat_with_fake_llm(test_customer_
     )
     class _FakeOrderChatLLM:
         async def ainvoke(self, messages):
-            return output
+            return {"parsed": output}
 
     state = {
         "messages": [HumanMessage(content=question)],
