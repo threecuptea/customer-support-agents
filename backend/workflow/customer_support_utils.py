@@ -79,7 +79,7 @@ RETURN_POLICY = f"""
 Overview
 At 'e-shopping.com, we want you to love what you ordered. If something's not quite right, we're here to help.
 
-We have a 35 days return policy, starting from the day you receive your item, to request a return.  We extends 5 more days than most other vendors for the courtesy.
+We have a 35 days instead of 30 days return policy for the courtesy, starting from the day you receive your item, to request a return.
 
 2. What can I return?
 To be eligible for a return, you must provide your receipt or proof of purchase, and:

@@ -1,5 +1,5 @@
 from __future__ import annotations
-from models.customer_support_model import Customer, CustomerContext, CustomerSupportState, FAQMatchEvals, FAQMatchResult, Order, OrderStructuredOutput,\
+from models.customer_support_model import Customer, CustomerContext, CustomerSupportState, FAQMatchResult, Order, OrderStructuredOutput,\
     ESCALATE_REASON, OrderRevisitEval, ExchangeReturnRefundAction, ExchangeReturnReason, ExchangeOrReturnInput, OrderToReturn, OrderRefundStatus, \
     ReturnRefundStructuredOutput, RefundRequest, ReturnRefundInitialDecision
 
@@ -45,7 +45,6 @@ FUNCTION_FAQ_FUZZY_MATCH = "find_closest_faq"
 FUNCTION_GET_INITIAL_DECISION = "get_initial_return_refund_decision"
 SOURCE_FAQ_FUZZY_MATCH = "faq_fuzzy_match"
 SOURCE_FAQ_LLM_MATCH = "faq_llm_match"
-SOURCE_FAQ_LLM_EVALS = "faq_llm_evals"
 SOURCE_ORDER_RETRIEVAL = "retrieve_target_order"
 SOURCE_ORDER_INQUIRY = "order_inquiry"
 SOURCE_EXCHANGE_RETURN_REASON = "exchange_return_reason"
@@ -73,8 +72,7 @@ class CustomerSupportAgent:
         self.summarize_llm = get_llm(stream_usage=True) # To ensure that provider will return `usage_metadata` in its response
        
         # For LLM with structured_output, it  normally only return `parsed`` one which is the structured output. In order to return 
-        # `usage_metadata`, we need to have include_raw=True. result["parsed"].usage_metadata to access it. LangFuse can tell to parse correctly w or w/o
-        self.general_llm_for_faq_match_evals = get_llm(stream_usage=True).with_structured_output(FAQMatchEvals, include_raw=True) 
+        # `usage_metadata`, we need to have include_raw=True. result["parsed"].usage_metadata to access it. LangFuse can tell to parse correctly w or w/o 
         self.general_llm_for_faq_match_result = get_llm(stream_usage=True).with_structured_output(FAQMatchResult, include_raw=True)
         self.faq_context = "\n".join([f"- 'question': {key}, 'answer': {val} " for key, val in faq_dict.items()])
         # The two free-form chat nodes (order_continue_chat_node, return_refund_chat_node) follow many
@@ -144,46 +142,6 @@ class CustomerSupportAgent:
     ###############################################
     #               General Nodes
     ###############################################
-    # I might need to 
-    async def general_faq_eval_node(self, state: CustomerSupportState) -> dict[str, Any]:
-        # Do I really need to include the summary here
-        SYSTEM_PROMPT = f"""
-        You are an intelligent customer-support agent to help decide if it is helpful to match the customer question
-        against FAQs
-        Here is FAQ context: {self.faq_context}.
-        Here is the full return policy {RETURN_POLICY}.
-        There are two matching options:
-        - Matches with fuzz.partial_ratio scorer of python Rapidfuzz library. The fuzz.partial_ratio process.extractOne finds 
-        the single best matching string from choices of FAQ questions for the customer question
-        so it favors cases where the customer's question shares a close substring with an FAQ question, even if the
-        two differ in length (e.g. extra words before/after).
-        - LLM semantic matching
-        The above options are NOT mutual exclusive.
-        Some context for your reference.  LLM semantic matching will be given the full return policy along with FAQs as the context.
-        Rapidfuzz partial_ratio will only use FAQ questions and answers as the context.
-        However, I do extract the majority of content of the return policy into FAQ's questions and answers.
-        Set `rapid_fuzz_partial_ratio_match_helpful` if you think that the fuzz match option will be helpful.
-        Set `llm_semantic_match_helpful` if you think the LLM semantic match will be help.
-        state `reason` as needed.
-        Set both flags to False if you are not sure if either one will help
-        """
-        # Do I use Mesage the right way.  
-        system_msg = SystemMessage(content=SYSTEM_PROMPT)
-        human_msg = HumanMessage(content=state["general_inquiry"])
-        result = await self.general_llm_for_faq_match_evals.ainvoke([system_msg, human_msg])
-        eval = result["parsed"]
-        updates = {"faq_match_evals": eval, "general_issue_resolved": False}
-        if not eval or (eval and not eval.rapid_fuzz_partial_ratio_match_helpful and not eval.llm_semantic_match_helpful):
-            response = f"{PREFIX_ANSWER_QUESTION} {ESCALATE_MESSAGE}"
-            message = ChatMessage(content=response, role= ROLE_AGENT, additional_kwargs={
-                "source": SOURCE_FAQ_LLM_EVALS})
-            updates["messages"] = [message]
-            updates["response"] = response
-            updates["escalation_reason"] = f"{ESCALATE_REASON_FAQ}: {state["general_inquiry"]}"
-            updates["general_issue_resolved"] = True
-
-        return updates
-
     
     # I don't like to use ToolNode, Yes, it would know the latest AI message, 
     # runs the matching functions (often at the same time), and turns the results into tool messages
@@ -194,24 +152,14 @@ class CustomerSupportAgent:
         if result and result.confidence_score >= FAQ_MATCH_THRESHOLD:
             response = result.answer
             # Originally I want to use ToolMessage but that requires tool-call_id which will link back to AIMessage.
-            # But I can use function call and not need to use LLM bind_tools
+            # But I can use function call and not need to use LLM bind_tools, 
             message = ChatMessage(content=response, role= ROLE_FUNCTION, name=FUNCTION_FAQ_FUZZY_MATCH, additional_kwargs={
-                "faq_match_result": result
+                "faq_match_result": result, "source": SOURCE_FAQ_FUZZY_MATCH
             })
             return {
                 "messages": [message],
                 "response": response,
                 "general_issue_resolved": True,
-            }
-        elif not state["faq_match_evals"].llm_semantic_match_helpful:
-            response = f"{PREFIX_ANSWER_QUESTION} {ESCALATE_MESSAGE}"
-            message = ChatMessage(content=response, role= ROLE_AGENT, additional_kwargs={
-                "source":SOURCE_FAQ_FUZZY_MATCH})
-            return {
-                    "messages": [message],
-                    "response": response,
-                    "escalation_reason": f"{ESCALATE_REASON_FAQ}: {state["general_inquiry"]}",
-                    "general_issue_resolved": True,
             }
         else:
             return {
@@ -236,7 +184,7 @@ class CustomerSupportAgent:
         if faq_output and faq_output.confidence_score >= FAQ_MATCH_THRESHOLD:
             response = faq_output.answer
             message = AIMessage(content=response, additional_kwargs={
-                "source":SOURCE_FAQ_LLM_MATCH
+                "source": SOURCE_FAQ_LLM_MATCH, "faq_match_result": faq_output,
             })
             return {
                 "messages": [message],
@@ -843,16 +791,6 @@ class CustomerSupportAgent:
         """
         return topic_concluded or len(state["messages"]) > SUMMARIZE_MESSAGE_THRESHOLD
 
-    def route_after_general_faq_eval(self, state: CustomerSupportState) -> str:
-        if self._should_summarize(state, state["general_issue_resolved"]):
-            return "summarize_node"
-        if state["faq_match_evals"]:
-            if state["faq_match_evals"].rapid_fuzz_partial_ratio_match_helpful:
-                return "general_faq_fuzz_match_node"
-            if state["faq_match_evals"].llm_semantic_match_helpful:
-                return "general_faq_llm_match_node"
-        return "summarize_node"
-
     def route_after_general_faq_fuzz_match(self, state: CustomerSupportState) -> str:
         if self._should_summarize(state, state["general_issue_resolved"]):
             return "summarize_node"
@@ -878,7 +816,7 @@ class CustomerSupportAgent:
         # Harnese with RetryPolicy later
         builder.add_conditional_edges(START, self.route_branch,
                                       {"summarize_node": "summarize_node",
-                                       "general_faq": "general_faq_eval_node",
+                                      "general_faq": "general_faq_fuzz_match_node",
                                        "exchange_or_return": "exchange_return_reason_recommendation_node", 
                                        "return_refund_init": "initial_return_refund_decision_node",
                                        "return_refund_process": "return_refund_process_node",
@@ -889,10 +827,6 @@ class CustomerSupportAgent:
         
         builder.add_node("summarize_node", self.summarize_node)
         builder.add_edge("summarize_node", END)
-
-        builder.add_node("general_faq_eval_node", self.general_faq_eval_node)
-        builder.add_conditional_edges("general_faq_eval_node", self.route_after_general_faq_eval,
-            {"summarize_node": "summarize_node", "general_faq_fuzz_match_node": "general_faq_fuzz_match_node", "general_faq_llm_match_node": "general_faq_llm_match_node"})
 
         builder.add_node("general_faq_fuzz_match_node", self.general_faq_fuzz_match_node)
         builder.add_conditional_edges("general_faq_fuzz_match_node", self.route_after_general_faq_fuzz_match,

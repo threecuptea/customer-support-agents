@@ -132,10 +132,6 @@ class RefundRequest(BaseModel):
     customer: Customer
     returned_order: ReturnedOrder
 
-class FAQMatchEvals(BaseModel):
-    rapid_fuzz_partial_ratio_match_helpful: bool = False
-    llm_semantic_match_helpful: bool = False
-
 class FAQMatchResult(BaseModel):
     question: str
     answer: str
@@ -167,7 +163,6 @@ class CustomerSupportState(MessagesState):
     customer_context: CustomerContext
     support_category: Literal["order_inquery", "exchange_or_return", "return_refund", "general_others"] = 'general_others'
     general_inquiry: str
-    faq_match_evals: FAQMatchEvals | None
     escalation_reason: str = None # This is for the future use: escalating and summarizing the reason to slack's CSR channel
     general_issue_resolved: bool = False
     order_number_provided:  int

@@ -1,20 +1,22 @@
 import asyncio
+from email.mime import message
 from fastapi.testclient import TestClient
 from models.demo_data import get_demo_customer
     
 import pytest
 
 from main import app
-from models.customer_support_model import CustomerContext, Order, FAQMatchEvals, OrderRevisitEval, FAQMatchResult, OrderStructuredOutput, ESCALATE_REASON
-from workflow.customer_support import PREFIX_LOST_SHIPMENT, CustomerSupportAgent, ESCALATE_MESSAGE, FUNCTION_FAQ_FUZZY_MATCH, SOURCE_FAQ_FUZZY_MATCH, SOURCE_FAQ_LLM_MATCH, \
-    SOURCE_FAQ_LLM_EVALS, ROLE_FUNCTION, ROLE_AGENT, FAQ_MATCH_THRESHOLD, SYSTEM_ERROR_MESSAGE, SOURCE_ORDER_RETRIEVAL, SOURCE_ORDER_INQUIRY, PREFIX_ANSWER_QUESTION
+from models.customer_support_model import CustomerContext, Order, OrderRevisitEval, FAQMatchResult, OrderStructuredOutput, ESCALATE_REASON
+from workflow.customer_support import ESCALATE_REASON_FAQ, PREFIX_LOST_SHIPMENT, CustomerSupportAgent, ESCALATE_MESSAGE, FUNCTION_FAQ_FUZZY_MATCH, SOURCE_FAQ_FUZZY_MATCH, SOURCE_FAQ_LLM_MATCH, \
+    ROLE_FUNCTION, ROLE_AGENT, FAQ_MATCH_THRESHOLD, SYSTEM_ERROR_MESSAGE, SOURCE_ORDER_RETRIEVAL, SOURCE_ORDER_INQUIRY, PREFIX_ANSWER_QUESTION
     
 from langchain_core.messages import HumanMessage, ChatMessage, AIMessage, RemoveMessage
 import uuid
 
 shared_thread_id = str(uuid.uuid4())
 shared_order_id = 12462
-
+general_question = "If I want a different style or color, should I return or exchange?"
+general_answer = "Exchange when your item has wrong size or fit or you want a different color or style" 
 
 @pytest.fixture(scope="class")
 def auth_client():
@@ -27,6 +29,23 @@ def auth_client():
 @pytest.fixture(scope="class")
 def test_customer_context():
     return CustomerContext(**get_demo_customer("anderson.cooper@cnn.com"))
+
+@pytest.fixture()
+def fake_faq_llm_match_node(auth_client, monkeypatch):
+    """Replace the LLM of "general_faq_llm_match_node" with a fake that return predefined results.
+    The compiled graph does not expose the agent, but its node's bound method does (`__self__`)."""
+    client, _ =auth_client
+    agent = client.app.state.support_graph.nodes["general_faq_llm_match_node"].bound.afunc.__self__
+    queues: list[FAQMatchResult] = []
+    class __FakeFaqMatchLLM:
+        async def ainvoke(self, messages):
+            faq_result = FAQMatchResult(question=general_question, answer=general_answer, confidence_score=1.0)
+            queues.append(faq_result)
+            return {"parsed": faq_result}
+        
+    monkeypatch.setattr(agent, "general_llm_for_faq_match_result", __FakeFaqMatchLLM())
+    return queues
+
 
 
 PSEUDO_CUSTOMER_CONTEXT = {
@@ -48,7 +67,6 @@ def test_general_faq_fuzz_match_node_returns_chat_message():
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     state = {
         "general_inquiry": "What is your return policy?",
-        "faq_match_evals": FAQMatchEvals(rapid_fuzz_partial_ratio_match_helpful=True, llm_semantic_match_helpful=False),
     }
 
     result = asyncio.run(agent.general_faq_fuzz_match_node(state))
@@ -62,56 +80,23 @@ def test_general_faq_fuzz_match_node_returns_chat_message():
     assert result["messages"][0].name == FUNCTION_FAQ_FUZZY_MATCH
     assert result["messages"][0].additional_kwargs['faq_match_result']
     assert result["messages"][0].additional_kwargs['faq_match_result'].confidence_score > FAQ_MATCH_THRESHOLD
-    
+    assert result["messages"][0].additional_kwargs['source'] == SOURCE_FAQ_FUZZY_MATCH
 
-def test_general_faq_fuzz_match_node_escalates_on_low_confidence():
+
+def test_general_faq_fuzz_match_node_returns_issue_not_resolved():
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     state = {
-        "general_inquiry": "asdkjaslkdj not a real question",
-        "faq_match_evals": FAQMatchEvals(rapid_fuzz_partial_ratio_match_helpful=True, llm_semantic_match_helpful=False),
+        "general_inquiry": "asdkjaslkdj not a real question?",
     }
 
     result = asyncio.run(agent.general_faq_fuzz_match_node(state))
-
-    assert result["general_issue_resolved"] is True
-    assert ESCALATE_MESSAGE in result["response"]
-    assert result["messages"][0].role == ROLE_AGENT
-    assert result["messages"][0].additional_kwargs['source'] == SOURCE_FAQ_FUZZY_MATCH
-    
-
-def test_general_faq_llm_match_node_escalates_on_low_confidence():
-    agent = CustomerSupportAgent(checkpointer=None, store=None)
-    state = {
-        "general_inquiry": "asdkjaslkdj not a real question",
-        "faq_match_evals": FAQMatchEvals(rapid_fuzz_partial_ratio_match_helpful=False, llm_semantic_match_helpful=True),
-    }
-    # It comes from mocked llm issue
-    result = asyncio.run(agent.general_faq_llm_match_node(state))
-
-    assert result["general_issue_resolved"] is True
-    assert ESCALATE_MESSAGE in result["response"]
-    assert result["messages"][0].role == ROLE_AGENT
-    assert result["messages"][0].additional_kwargs['source'] == SOURCE_FAQ_LLM_MATCH
-
-def test_general_faq_llm_evals_node_directly_escalates():
-    agent = CustomerSupportAgent(checkpointer=None, store=None)
-    state = {
-        "messages": [HumanMessage(content="asdkjaslkdj not a real question")],
-        "general_inquiry": "asdkjaslkdj not a real question",
-    }
-    # It comes from mocked llm issue
-    result = asyncio.run(agent.general_faq_eval_node(state))
-
-    assert result["general_issue_resolved"] is True
-    assert ESCALATE_MESSAGE in result["response"]
-    assert result["messages"][0].role == ROLE_AGENT
-    assert result["messages"][0].additional_kwargs['source'] == SOURCE_FAQ_LLM_EVALS
+    assert result["general_issue_resolved"] is False
 
 
 # --- End-to-end coverage for POST /api/support/general (also a regression test:
 # the route used to call `GeneralSupportResponse(...)` with positional args, which
 # pydantic BaseModel rejects). K. K, so the flow always escalates. ---
-def test_api_general_support_endpoint_escalates_under_mock_llm(auth_client):
+def test_api_general_support_endpoint_go_to_fuzzy_match(auth_client):
     client, customer_context = auth_client
     # PSEUDO_CUSTOMER_CONTEXT is simple dict without datetime fields can be serialized directly to JSON
     resp = client.post(
@@ -121,16 +106,16 @@ def test_api_general_support_endpoint_escalates_under_mock_llm(auth_client):
     assert resp.status_code == 200
     data = resp.json()
     # It comes from mocked llm issue, always negative
-    assert ESCALATE_MESSAGE in data["response"]
+    # it goes straight to fuzzy.
+    assert "We accept returns within 35 days of delivery for unused items" in data["response"]
     assert data["thread_id"]
     
 
 # --- Verifies multi-round thread continuity directly against the LangGraph checkpoint
 # (via `aget_state`), not just the HTTP response: messages accumulate across rounds via
 # the `add_messages` reducer, `summarize_node` prunes old messages back down via
-# `RemoveMessage`, and it persists a running `summary` each time it fires. Under the
-# mock LLM, `general_faq_eval_node` always escalates, which trips `_should_summarize`
-# after every single round. ---
+# `RemoveMessage`, and it persists a running `summary` each time it fires. 
+# Fuzzy match is able to answer the question ang got `general_issue_resolved`. What if it falls back to faq_llm match
 def test_api_general_support_thread_accumulates_and_summarizes(auth_client):
     client, customer_context = auth_client
     r1 = client.post(
@@ -149,8 +134,9 @@ def test_api_general_support_thread_accumulates_and_summarizes(auth_client):
     # with, so nothing is actually removed on this first round.
     assert len(state_after_r1.values["messages"]) == 2
     assert state_after_r1.values["messages"][0].content == "What is your return policy?"
-    assert ESCALATE_MESSAGE in state_after_r1.values["messages"][1].content
+    assert "We accept returns within 35 days of delivery for unused items" in state_after_r1.values["messages"][1].content
     assert state_after_r1.values["summary"]
+    assert state_after_r1.values["general_issue_resolved"]
 
     r2 = client.post(
         "/api/support/general",
@@ -170,7 +156,7 @@ def test_api_general_support_thread_accumulates_and_summarizes(auth_client):
     messages_after_r2 = state_after_r2.values["messages"]
     assert len(messages_after_r2) == 2
     assert messages_after_r2[0].content == "How long does delivery take?"
-    assert ESCALATE_MESSAGE in messages_after_r2[1].content
+    assert "takes 3 to 5 business days" in messages_after_r2[1].content
     assert state_after_r2.values["summary"]
     assert state_after_r2.values["general_inquiry"] == "How long does delivery take?"
 
@@ -437,7 +423,7 @@ def test_api_order_init_resets_order_turns_and_prior_topic(auth_client):
     assert values["order_prior_topic"] is None
     
 
-def test_faq_llm_match_with_fake_llm():
+def test_faq_llm_match_with_fake_llm_high_confidence():
     question = "what is the company's return policy?"
     answer = "The company's return policy allows returns within 35 days."
     class _FakeFaqMatchLLM:
@@ -453,38 +439,56 @@ def test_faq_llm_match_with_fake_llm():
     message: AIMessage = result["messages"][-1]
     assert message.content == answer
     assert message.additional_kwargs["source"] == SOURCE_FAQ_LLM_MATCH
+    assert message.additional_kwargs["faq_match_result"] == FAQMatchResult(question=question, answer=answer, confidence_score=1.0)
 
 
-def test_irrelevant_question_for_faq_llm_evals_with_fake_llm():
-    question = "What is the company's return policy?"
-    both_are_not_helpful = FAQMatchEvals(rapid_fuzz_partial_ratio_match_helpful= False, llm_semantic_match_helpful=False)
-    class _FakeFaqEvalsLLM:
+def test_faq_llm_match_with_fake_llm_low_confidence():
+    question = "asdkjaslkdj not a real question?"
+    answer = "To be honest, I don't know."
+    class _FakeFaqMatchLLM:
         async def ainvoke(self, messages):
-            return {"parsed": both_are_not_helpful}
+            return {"parsed": FAQMatchResult(question=question, answer=answer, confidence_score=0.0)}
     
     agent = CustomerSupportAgent(checkpointer=None, store=None)
-    agent.general_llm_for_faq_match_evals = _FakeFaqEvalsLLM()
-    result = asyncio.run(agent.general_faq_eval_node({"general_inquiry": question}))
+    agent.general_llm_for_faq_match_result = _FakeFaqMatchLLM()
+    result = asyncio.run(agent.general_faq_llm_match_node({"general_inquiry": question}))
+
     assert result["general_issue_resolved"] is True
-
     assert ESCALATE_MESSAGE in result["response"]
-    assert result["messages"][0].role == ROLE_AGENT
-    assert result["messages"][0].additional_kwargs['source'] == SOURCE_FAQ_LLM_EVALS
-    assert result["faq_match_evals"] == both_are_not_helpful
+    assert result.get("escalation_reason") == f"{ESCALATE_REASON_FAQ}: {question}"
+    assert isinstance(result["messages"][-1], ChatMessage)
+    message: ChatMessage = result["messages"][-1]
+    assert ESCALATE_MESSAGE in message.content
+    assert message.additional_kwargs["source"] == SOURCE_FAQ_LLM_MATCH
+    assert message.additional_kwargs["faq_match_result"] == FAQMatchResult(question=question, answer=answer, confidence_score=0.0)
 
-def test_faq_question_for_faq_llm_evals_with_fake_llm():
-    question = "What is your return policy?"
-    both_are_helpful = FAQMatchEvals(rapid_fuzz_partial_ratio_match_helpful= True, llm_semantic_match_helpful=True)
-    class _FakeFaqEvalsLLM:
-        async def ainvoke(self, messages):
-            return {"parsed": both_are_helpful}
-    
-    agent = CustomerSupportAgent(checkpointer=None, store=None)
-    agent.general_llm_for_faq_match_evals = _FakeFaqEvalsLLM()
-    result = asyncio.run(agent.general_faq_eval_node({"general_inquiry": question}))
-    assert not result.get("general_issue_resolved", False)
-    assert result["faq_match_evals"] == both_are_helpful
-    assert not result.get("response") or ESCALATE_MESSAGE not in result["response"]
+
+def test_api_general_support_fallback_to_llm_match_with_fake_llm(auth_client, fake_faq_llm_match_node):
+    client, customer_context = auth_client
+  
+    resp = client.post(
+        "/api/support/general",
+        json={"customer_context": customer_context.model_dump(mode="json"), "general_inquiry": general_question},
+    )
+    assert resp.status_code == 200
+    thread_id = resp.json()["thread_id"]
+
+    graph = client.app.state.support_graph
+    config = {"configurable": {"thread_id": thread_id}}
+    state = asyncio.run(graph.aget_state(config))
+    assert len(state.values["messages"]) == 2
+    assert state.values["messages"][0].content == general_question
+    assert isinstance(state.values["messages"][1], AIMessage)
+    message: AIMessage = state.values["messages"][1]
+    assert message.content == general_answer
+    assert message.additional_kwargs["source"] == SOURCE_FAQ_LLM_MATCH
+    assert len(fake_faq_llm_match_node) == 1
+    # Inside the AIMessage, it is a string form of the FAQMatchResult in http transport
+    assert FAQMatchResult(**message.additional_kwargs["faq_match_result"])== fake_faq_llm_match_node[0]
+
+    assert state.values["summary"]
+    assert state.values["general_issue_resolved"]
+
 
 def test_simple_question_for_order_continue_chat_with_fake_llm(test_customer_context):
     question = "My order is transit.  How can I track it?"
