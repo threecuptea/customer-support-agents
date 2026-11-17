@@ -51,7 +51,6 @@ def _isolated_redis_db_module():
     os.environ["REDIS_URL"] = TEST_REDIS_URL
     yield
 
-
 @pytest.fixture(autouse=True, scope="class")
 def _isolated_redis_db():
     # The app lifespans (main.py, slack_webhook.py) read REDIS_URL when they start, and modules that run
@@ -59,7 +58,6 @@ def _isolated_redis_db():
     # Re-assert it before every test; autouse fixtures are set up before the class-scoped `client` fixtures.
     os.environ["REDIS_URL"] = TEST_REDIS_URL
     yield
-
 
 @pytest.fixture()
 def redis_client():
@@ -74,6 +72,11 @@ def redis_client():
     except Exception as e:
         print(f"Error cleaning up Redis client: {e}")
 
+# All our tests are in Python test files instead of test classes. Should they be 'module' scope?
+@pytest.fixture(autouse=True, scope="module")
+def disable_langfuse_tracinng():
+    os.environ["LANGFUSE_TRACING_ENABLED"] = "false"
+    yield 
 
 def _llm_tests_enabled() -> tuple[bool, str]:
     if os.getenv("RUN_LLM_TESTS") != "1":

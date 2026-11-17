@@ -48,12 +48,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await app.state.redis_adapter.connect()
 
     # Initialize LangFuse client if available
-    langfuse = get_client()
-    if langfuse.auth_check:
-        app.state.langfuse = langfuse
-        logger.info("LangFuse client initialized successfully.")
+    langfuse_tracing_enabled = os.getenv("LANGFUSE_TRACING_ENABLED", "false").lower() == "true"
+    if langfuse_tracing_enabled:
+        langfuse = get_client()
+        if langfuse.auth_check:
+            app.state.langfuse = langfuse
+            logger.info("LangFuse client initialized successfully.")
+        else:
+            logger.info("Failed to authenticate LangFuse client.")
+            app.state.langfuse = None
     else:
-        logger.info("Failed to authenticate LangFuse client.")
+        logger.info("LangFuse tracing disabled.")
         app.state.langfuse = None
 
     demo_mode = os.getenv("DEMO_MODE", "false").lower() == "true" # we are using demo mode in dev environment.
