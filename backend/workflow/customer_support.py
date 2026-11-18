@@ -73,18 +73,19 @@ class CustomerSupportAgent:
        
         # For LLM with structured_output, it  normally only return `parsed`` one which is the structured output. In order to return 
         # `usage_metadata`, we need to have include_raw=True. result["parsed"].usage_metadata to access it. LangFuse can tell to parse correctly w or w/o 
-        self.general_llm_for_faq_match_result = get_llm(stream_usage=True).with_structured_output(FAQMatchResult, include_raw=True)
+        self.general_llm_for_faq_match_result = get_llm(stream_usage=True).with_structured_output(FAQMatchResult, include_raw=True, method="json_schema", strict=True)
         self.faq_context = "\n".join([f"- 'question': {key}, 'answer': {val} " for key, val in faq_dict.items()])
         # The two free-form chat nodes (order_continue_chat_node, return_refund_chat_node) follow many
         # competing rules in one prompt and are the most model-sensitive (CSA-18 harness), so they use a
         # stronger model than the rest. Override with CHAT_NODE_MODEL; read here, at construction time.
         # gpt-4o-mini looks solid after Claude applied deterministic-situation-block pattern to order_continue-chat_node will
-        # run test_llm_chat_node periodically and switch if seeing model drift  
+        # run test_llm_chat_node periodically and switch if seeing model drift
+        # So far it does not fix the time lag between ChatOpenAI and RunnableWithFallbacks happen only to llm.with_structured_output
         self.chat_node_llm = get_llm(model=os.getenv("CHAT_NODE_MODEL", DEFAULT_CHAT_NODE_MODEL), temperature=0.0, stream_usage=True) if require_stronge_chat_model else get_llm(temperature=0.0, stream_usage=True)
-        self.order_llm_for_inquiry_chat = self.chat_node_llm.with_structured_output(OrderStructuredOutput, include_raw=True)
+        self.order_llm_for_inquiry_chat = self.chat_node_llm.with_structured_output(OrderStructuredOutput, include_raw=True, method="json_schema", strict=True)
         # Classification, not conversation — low temperature for consistency across near-identical inputs.
-        self.order_llm_for_revisit_eval = get_llm(temperature=0.0, stream_usage=True).with_structured_output(OrderRevisitEval, include_raw=True)
-        self.return_refund_llm = self.chat_node_llm.with_structured_output(ReturnRefundStructuredOutput, include_raw=True)
+        self.order_llm_for_revisit_eval = get_llm(temperature=0.0, stream_usage=True).with_structured_output(OrderRevisitEval, include_raw=True, method="json_schema", strict=True)
+        self.return_refund_llm = self.chat_node_llm.with_structured_output(ReturnRefundStructuredOutput, include_raw=True, method="json_schema", strict=True)
 
         
     ###############################################
@@ -178,8 +179,7 @@ class CustomerSupportAgent:
         IMPORTANT: confidence_score is 0.0 - 1.0 and the passing score is 0.80.
         """
         system_msg = SystemMessage(content=SYSTEM_PROMPT)
-        human_msg = HumanMessage(content=state["general_inquiry"])
-        result = await self.general_llm_for_faq_match_result.ainvoke([system_msg, human_msg])
+        result = await self.general_llm_for_faq_match_result.ainvoke([system_msg, state['messages'][-1]])
         faq_output: FAQMatchResult = result["parsed"]
         if faq_output and faq_output.confidence_score >= FAQ_MATCH_THRESHOLD:
             response = faq_output.answer
@@ -216,7 +216,7 @@ class CustomerSupportAgent:
         # same as detect_order_revisit_node.
         
         recent_conversations = "\n".join(
-            [f"- {message.content}" for message in state['messages']]
+            [f"- {message.content}" for message in state['messages'][:-1]]
         )
         logger.debug(f"order_continue_chat_node beginning state for order #{state['order_number_provided']}:\nrecent conversations: {recent_conversations}\nsummary: {state.get('summary')}\nhistory: {state.get('history')}\nhuman_reviews: {state.get('human_reviews')}")
         # Code decides the ONE situation that applies (CSA-19); only that situation's text reaches the LLM,
@@ -253,25 +253,26 @@ class CustomerSupportAgent:
         # Cut down token usage if we don't have content for any of the sections (history, recent conversations, summary, human reviews)
         SYSTEM_PROMPT = f"""
             You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her order.
+
+            Rules that always apply: {always_on_text}
+
+            CURRENT SITUATION (the only situation-specific instructions that apply): {situation_text}
+
+            which is derived from the context below:
             Here is the target order {target_order.model_dump_json()}
             {"Here is the most recent conversations in this visit: " + recent_conversations + "." if recent_conversations else ""}
             {"Here is the summary of the previous conversation in this visit: " + state.get("summary") + "." if state.get("summary") else ""}
             {human_reviews_prompt_block(state.get("human_reviews"))}
             {"Here is what we remember from past visits :"+ state.get('history') + "." if state.get('history') else ""}            
-            The above is the context of this order.
-
+            
             {refund_facts}
 
-            CURRENT SITUATION (the only situation-specific instructions that apply): {situation_text}
-
-            Rules that always apply: {always_on_text}
-
-            The customer's latest message is: {latest_message}
             Set `response` to what you want to reply.
             """
 
         system_msg = SystemMessage(content=SYSTEM_PROMPT)
-        result = await self.order_llm_for_inquiry_chat.ainvoke([system_msg])
+        # Separate Human Message from SystemMessage
+        result = await self.order_llm_for_inquiry_chat.ainvoke([system_msg, state['messages'][-1]])
         order_output: OrderStructuredOutput = result["parsed"]
         # mock llm will return order_output None
         if order_output and order_output.escalate and not escalation_allowed(

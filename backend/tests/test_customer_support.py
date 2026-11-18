@@ -432,7 +432,7 @@ def test_faq_llm_match_with_fake_llm_high_confidence():
     
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     agent.general_llm_for_faq_match_result = _FakeFaqMatchLLM()
-    result = asyncio.run(agent.general_faq_llm_match_node({"general_inquiry": question}))
+    result = asyncio.run(agent.general_faq_llm_match_node({"general_inquiry": question, "messages": [HumanMessage(content=question)]}))
     assert result["general_issue_resolved"] is True
     assert result["response"] == answer
     assert isinstance(result["messages"][-1], AIMessage)
@@ -451,7 +451,7 @@ def test_faq_llm_match_with_fake_llm_low_confidence():
     
     agent = CustomerSupportAgent(checkpointer=None, store=None)
     agent.general_llm_for_faq_match_result = _FakeFaqMatchLLM()
-    result = asyncio.run(agent.general_faq_llm_match_node({"general_inquiry": question}))
+    result = asyncio.run(agent.general_faq_llm_match_node({"general_inquiry": question, "messages": [HumanMessage(content=question)]}))
 
     assert result["general_issue_resolved"] is True
     assert ESCALATE_MESSAGE in result["response"]
