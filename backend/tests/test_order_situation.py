@@ -8,7 +8,7 @@ from models.customer_support_model import OrderStructuredOutput
 from tests.llm_harness.cases import build_order_continue_state
 from workflow.customer_support import CustomerSupportAgent
 from workflow.order_situation import (
-    PRIOR_LOST_SHIPMENT, PRIOR_OTHER, PRIOR_PENDING_CANCEL, PRIOR_TOPICS, OrderSituation, select_order_situation,
+    PRIOR_LOST_SHIPMENT, PRIOR_OTHER, PRIOR_PENDING_CANCEL, PRIOR_TOPICS, OrderSituation, determine_order_situation,
 )
 
 STATUSES = ["pending", "transit", "delivered", None, "weird"]
@@ -16,7 +16,7 @@ PRIORS = [None, *PRIOR_TOPICS]
 
 
 def pick(status, revisit, prior, turns):
-    return select_order_situation(status=status, is_revisit=revisit, prior_topic=prior, turns=turns)
+    return determine_order_situation(status=status, is_revisit=revisit, prior_topic=prior, turns=turns)
 
 
 def test_every_combination_yields_exactly_one_situation():
@@ -69,7 +69,7 @@ def test_counter_increments_on_a_normal_reply():
 
     class FakeLLM:
         async def ainvoke(self, *_a, **_k):
-            return OrderStructuredOutput(response="hi")
+            return {"parsed": OrderStructuredOutput(response="hi")}
 
     agent.order_llm_for_inquiry_chat = FakeLLM()
     state = build_order_continue_state(status="delivered", revisit=False, question="hello")
@@ -83,7 +83,7 @@ def test_counter_increments_on_the_escalate_path_too():
 
     class FakeLLM:
         async def ainvoke(self, *_a, **_k):
-            return OrderStructuredOutput(response="x", escalate=True)
+            return {"parsed": OrderStructuredOutput(response="x", escalate=True)}
 
     agent.order_llm_for_inquiry_chat = FakeLLM()
     state = build_order_continue_state(status="pending", revisit=True, question="cancel it")
@@ -105,7 +105,7 @@ def _revisit_node_result(eval_result):
 
     class FakeLLM:
         async def ainvoke(self, *_a, **_k):
-            return eval_result
+            return {"parsed": eval_result}
 
     agent.order_llm_for_revisit_eval = FakeLLM()
     state = build_order_continue_state(status="delivered", revisit=False, question="Order inquiry: 12462")

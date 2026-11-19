@@ -6,7 +6,7 @@ from models.customer_support_model import ExchangeOrReturnOutput, GeneralSupport
     GenericChatInput, RefundRequest, SummarizeOnExit, OrderToReturn, ExchangeOrReturnInput, GenericResponse, InitialReturnRefundResponse, \
     ReturnRefundProcessRequest, ReturnRefundProcessResponse, ReturnRefundChatResponse
 import logging
-from services.customer_support_service import invoke_general_support_workflow, invoke_order_init_workflow, invoke_order_continue_workflow, \
+from services.customer_support_service import invoke_general_others_workflow, invoke_order_init_workflow, invoke_order_continue_workflow, \
     invoke_exchange_return_recommendation_workflow, invoke_return_refund_init_workflow,  invoke_return_refund_process_workflow, \
     invoke_return_refund_chat_workflow, invoke_summarize_on_exit, retrieve_refund_request, retrieve_refund_requests_by_order
 from routes.role_checker import RoleChecker
@@ -26,7 +26,7 @@ restrict_to_customer = RoleChecker("customer")
 @router.post("/general")
 async def general_support(support: GeneralSupportRequest, request: Request = Depends(restrict_to_customer)) -> GenericResponse:
     logger.info(f"Received general inquiry: {support.general_inquiry} from {support.customer_context.email}")
-    return await invoke_general_support_workflow(support, request)
+    return await invoke_general_others_workflow(support, request)
 
 
 @router.post("/order/init")

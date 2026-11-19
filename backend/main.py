@@ -28,6 +28,7 @@ from routes.customer_support import router as chat_router # noqa: E402
 from routes.auth import router as auth_router # noqa: E402
 from starlette.middleware.sessions import SessionMiddleware
 from adapters.redis_adapter import RefundRequestRedisAdapter
+from langfuse import get_client
 
 
 load_dotenv(override=True)
@@ -41,10 +42,27 @@ from paths import BACKEND_DIR, DATA_DIR, resolve_db_path as _resolve_db_path  # 
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Compile the graphs with a checkpointer (+ store for long-term memory) and attach them to the app state for use in the route handlers."""
     """ Connect to Redis for refund request cache so that both main.py and slack_webhook.py can access the same refund request processing state."""
+    """Add LangFuse tracing observability configuration if available."""
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
     app.state.redis_adapter = RefundRequestRedisAdapter(redis_url=redis_url)
     await app.state.redis_adapter.connect()
-    
+
+    # Initialize LangFuse client if available
+    langfuse_tracing_enabled = os.getenv("LANGFUSE_TRACING_ENABLED", "false").lower() == "true"
+    if langfuse_tracing_enabled:
+        langfuse = get_client()
+        if langfuse.auth_check():
+            app.state.langfuse = langfuse
+            logger.info("LangFuse client initialized successfully.")
+        else:
+            logger.info("Failed to authenticate LangFuse client.")
+            app.state.langfuse = None
+    else:
+        # The SDK (used by @observe, e.g. determine_order_situation) treats unset/empty as enabled, so make it agree.
+        os.environ["LANGFUSE_TRACING_ENABLED"] = "false"
+        logger.info("LangFuse tracing disabled.")
+        app.state.langfuse = None
+
     demo_mode = os.getenv("DEMO_MODE", "false").lower() == "true" # we are using demo mode in dev environment.
     checkpoint_db = _resolve_db_path(os.getenv("CHECKPOINT_DB"))
     store_db = _resolve_db_path(os.getenv("STORE_DB"))
@@ -82,6 +100,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         yield
 
     await app.state.redis_adapter.disconnect()
+    if app.state.langfuse:
+        app.state.langfuse.shutdown()
+        logger.info("LangFuse client closed successfully.")
 
 # FastAPI lifespan manages application startup (before taking the first request)and shutdown logic (after taking the final request). 
 # It requires an asynchronouscontextmanager where code before yield statement runs when the app starts, 

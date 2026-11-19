@@ -132,14 +132,10 @@ class RefundRequest(BaseModel):
     customer: Customer
     returned_order: ReturnedOrder
 
-class FAQMatchEvals(BaseModel):
-    rapid_fuzz_partial_ratio_match_helpful: bool = False
-    llm_semantic_match_helpful: bool = False
-
 class FAQMatchResult(BaseModel):
     question: str
     answer: str
-    confidence_score: Annotated[float, Field(ge=0.0, le=100.0)]
+    confidence_score: Annotated[float, Field(ge=0.0, le=1.0)]
 
 # What the customer's previous visit about THIS order was about. The values must equal
 # workflow.order_situation.PRIOR_TOPICS (checked by a test), which drives the situation choice.
@@ -165,9 +161,8 @@ class CustomerSupportState(MessagesState):
     summary: str = "" # conversation of this visit stored or will be stored in memory
     human_reviews: str = ""
     customer_context: CustomerContext
-    support_category: Literal["order_inquery", "exchange_or_return", "return_refund", "general/ others"] = 'general/ others'
+    support_category: Literal["order_inquery", "exchange_or_return", "return_refund", "general_others"] = 'general_others'
     general_inquiry: str
-    faq_match_evals: FAQMatchEvals | None
     escalation_reason: str = None # This is for the future use: escalating and summarizing the reason to slack's CSR channel
     general_issue_resolved: bool = False
     order_number_provided:  int
