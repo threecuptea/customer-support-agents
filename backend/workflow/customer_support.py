@@ -790,7 +790,7 @@ class CustomerSupportAgent:
         It's possible that the customer will just close browser. That's why I try to summarize whenever
         the customer wrap up a topic.
         """
-        return topic_concluded or len(state["messages"]) > SUMMARIZE_MESSAGE_THRESHOLD
+        return topic_concluded or len(state["messages"]) >= SUMMARIZE_MESSAGE_THRESHOLD
 
     def route_after_general_faq_fuzz_match(self, state: CustomerSupportState) -> str:
         if self._should_summarize(state, state["general_issue_resolved"]):
