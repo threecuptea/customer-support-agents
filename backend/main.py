@@ -51,7 +51,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     langfuse_tracing_enabled = os.getenv("LANGFUSE_TRACING_ENABLED", "false").lower() == "true"
     if langfuse_tracing_enabled:
         langfuse = get_client()
-        if langfuse.auth_check:
+        if langfuse.auth_check():
             app.state.langfuse = langfuse
             logger.info("LangFuse client initialized successfully.")
         else:
@@ -98,6 +98,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         yield
 
     await app.state.redis_adapter.disconnect()
+    if app.state.langfuse:
+        app.state.langfuse.shutdown()
+        logger.info("LangFuse client closed successfully.")
 
 # FastAPI lifespan manages application startup (before taking the first request)and shutdown logic (after taking the final request). 
 # It requires an asynchronouscontextmanager where code before yield statement runs when the app starts, 

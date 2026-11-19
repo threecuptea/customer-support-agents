@@ -56,6 +56,11 @@ scripts/start-mac.sh   # docker compose up --build -d
 scripts/stop-mac.sh    # docker compose down
 ```
 
+### START redis server via docker if it is not running or in dev environment 
+```bash
+docker compose up redis -d
+```
+
 ### START redis-cli to verify refund_request data and purge data for testing
 
 ```bash
@@ -116,11 +121,11 @@ In `customer-support-agents`, a pre-determine the eligibility/ status is decided
 -  `wait_for_manual_review`: Requests exceeding the predefined AMOUNT_THRESHOLD_AUTO require human review and approve.
 -  `auto_reject`: the request passes predefined DAYS_THRESHOLD_AUTO or the request contains a non-refundable item.  However, the customer can request one-time human review of the request via a chat with the AI agent. The request will be changed to `wait_for_manual_review` if the customer decide to do that and process with the reason/ note to reviewers.   
 
-`customer-support-agents` will automatically send the details of `wait_for_manual_review` requests to Slack.  The Slack interactive request will be equipped with `Approve`, `Reject`, and `Flag` buttons and optional `reason` input box [Slack Interactive request](/screenshot_slack_interactive_payload.png).  Once a CSR press a button with or w/o `reason`, a Slack interactive payload will post back to `slack_webhook` that will update the refund request with the new status `manual_approve`, `manual_reject` or `manual_flag` and optional reason and the CSR who made the decision etc.
+`customer-support-agents` will automatically send the details of `wait_for_manual_review` requests to Slack.  The Slack interactive request will be equipped with `Approve`, `Reject`, and `Flag` buttons and optional `reason` input box [Slack Interactive request](/images/screenshot_slack_interactive_payload.png).  Once a CSR press a button with or w/o `reason`, a Slack interactive payload will post back to `slack_webhook` that will update the refund request with the new status `manual_approve`, `manual_reject` or `manual_flag` and optional reason and the CSR who made the decision etc.
 
 `customer-support-agents` will also make the effort to prevent `double click` and `double update` for concurrency reasons.
 - to prevent `double update`, we will only update the request if its status is at `wait_for_manual_review`
-- to prevent `double click`, we will send Slack interactivity replacement w/o any button and `reason` input box plus acknowledge text. [Slack interactive replacement plus acknowledge](/screenshot_post_interactive_text.png) so that a CSR can tell a refund request being reviewed by his/ her colleague from the one not yet reviewed.
+- to prevent `double click`, we will send Slack interactivity replacement w/o any button and `reason` input box plus acknowledge text. [Slack interactive replacement plus acknowledge](/images/screenshot_post_interactive_text.png) so that a CSR can tell a refund request being reviewed by his/ her colleague from the one not yet reviewed.
 
 I mentioned why I design `customer-support-agents` in DEMO_MODE and all demo customer and order objects are in memory for easy adjustment.  Natually, all refund requests should be in memory too.  However, `main.py` and `slack_webhook.py` are separate apps. They live in separate memory spaces. `slack_webhook.py` won't be able to see any refund request that `main.py` store in memory.  `customer-support-agents` use Redis to store refund requests in DEMO_MODE (dev) for cross-app communication.
 

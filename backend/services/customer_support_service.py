@@ -34,7 +34,6 @@ async def invoke_general_others_workflow(support: GeneralSupportRequest, request
             "support_category": "general_others",
             "general_inquiry": support.general_inquiry,
             "escalation_reason": None,
-            "faq_match_evals": None,
             "general_issue_resolved": False,
             "summarize_on_exit": False,
     }
@@ -55,7 +54,6 @@ async def invoke_general_others_workflow(support: GeneralSupportRequest, request
                 metadata={"graph": "customer_support", "invoke_from": "general_others"},
             ):
                 customer_support_state  = await graph.ainvoke(initial_state, config)
-            request.app.state.langfuse.flush()
         else:
             customer_support_state  = await graph.ainvoke(initial_state, config)
         return GenericResponse(
@@ -64,8 +62,6 @@ async def invoke_general_others_workflow(support: GeneralSupportRequest, request
         )
 
     except Exception as exc:
-        if request.app.state.langfuse:
-            request.app.state.langfuse.flush()
         error_msg = "Error starting customer-support general-inquiry"
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
@@ -110,7 +106,6 @@ async def invoke_order_init_workflow(support: OrderInitRequest, request: Request
                 metadata={"graph": "customer_support", "invoke_from": "order_init"},
             ):
                 customer_support_state  = await graph.ainvoke(initial_state, config)
-            request.app.state.langfuse.flush() 
         else:
             customer_support_state  = await graph.ainvoke(initial_state, config)
         return OrderInitResponse(
@@ -119,8 +114,6 @@ async def invoke_order_init_workflow(support: OrderInitRequest, request: Request
             response=customer_support_state["response"],
         )
     except Exception as exc:
-        if request.app.state.langfuse:
-            request.app.state.langfuse.flush()
         error_msg = "Error initializing customer-support order_inquery"
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
@@ -163,7 +156,6 @@ async def invoke_order_continue_workflow(support: GenericChatInput, request: Req
                 metadata={"graph": "customer_support", "invoke_from": "order_continue"},
             ):
                 customer_support_state  = await graph.ainvoke(initial_state, config)
-            request.app.state.langfuse.flush()
         else:
             customer_support_state  = await graph.ainvoke(initial_state, config)
         return GenericResponse(
@@ -173,8 +165,6 @@ async def invoke_order_continue_workflow(support: GenericChatInput, request: Req
     except Exception as exc:
         error_msg = "Error continuing customer-support order_inquiry"
         logger.exception(error_msg)
-        if request.app.state.langfuse:
-            request.app.state.langfuse.flush()
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
 
 async def invoke_exchange_return_recommendation_workflow(exchange_return_reason: ExchangeOrReturnInput, request: Request) -> ExchangeOrReturnOutput:
@@ -213,7 +203,6 @@ async def invoke_exchange_return_recommendation_workflow(exchange_return_reason:
                 metadata={"graph": "customer_support", "invoke_from": "exchange_return_recommendation"},
             ):    
                 customer_support_state  = await graph.ainvoke(initial_state, config)
-            request.app.state.langfuse.flush()
         else:
             customer_support_state  = await graph.ainvoke(initial_state, config)    
         return ExchangeOrReturnOutput(
@@ -224,8 +213,6 @@ async def invoke_exchange_return_recommendation_workflow(exchange_return_reason:
     except Exception as exc:
         error_msg = "Error getting exchange or return recommendation based upon the given reason"
         logger.exception(error_msg)
-        if request.app.state.langfuse:
-            request.app.state.langfuse.flush()
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
 
 
@@ -274,7 +261,6 @@ async def invoke_return_refund_init_workflow(order_to_return: OrderToReturn, req
                 metadata={"graph": "customer_support", "invoke_from": "return_refund_init"},
             ):    
                 customer_support_state  = await graph.ainvoke(initial_state, config)
-            request.app.state.langfuse.flush()
         else:
             customer_support_state  = await graph.ainvoke(initial_state, config)
 
@@ -291,8 +277,6 @@ async def invoke_return_refund_init_workflow(order_to_return: OrderToReturn, req
         logger.exception(error_msg)
         raise HTTPException(status_code=400, detail=f"{error_msg}: {verr}")
     except Exception as exc:
-        if request.app.state.langfuse:
-            request.app.state.langfuse.flush()
         error_msg = f"Error start a return refund request for thread: {order_to_return.thread_id}"
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
@@ -347,8 +331,7 @@ async def invoke_return_refund_process_workflow(request_to_process: ReturnRefund
                 tags=["return_refund", "process"],
                 metadata={"graph": "customer_support", "invoke_from": "return_refund_process"},
             ):
-                customer_support_state  = await graph.ainvoke(initial_state, config)
-            request.app.state.langfuse.flush()    
+                customer_support_state  = await graph.ainvoke(initial_state, config)   
         else:
             customer_support_state  = await graph.ainvoke(initial_state, config)
         
@@ -366,8 +349,6 @@ async def invoke_return_refund_process_workflow(request_to_process: ReturnRefund
             rr_being_processed = customer_support_state["rr_being_processed"],
         )
     except Exception as exc:
-        if request.app.state.langfuse:
-            request.app.state.langfuse.flush()
         error_msg = f"Error process a return refund request for the order: {existing_state.values.get('order_number_provided')}"
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
@@ -405,7 +386,6 @@ async def invoke_return_refund_chat_workflow(support: GenericChatInput, request:
                 metadata={"graph": "customer_support", "invoke_from": "return_refund_chat"},
             ):
                 customer_support_state  = await graph.ainvoke(initial_state, config)
-            request.app.state.langfuse.flush()
         else:
             customer_support_state = await graph.ainvoke(initial_state, config)
         # Re-read after the graph: a Slack decision may have changed the status, and the UI shows this copy.
@@ -417,8 +397,6 @@ async def invoke_return_refund_chat_workflow(support: GenericChatInput, request:
             rr_in_process = rr_in_process,
         )
     except Exception as exc:
-        if request.app.state.langfuse:
-            request.app.state.langfuse.flush()
         error_msg = f"Error chat about a return refund request for thread: {thread_id}"
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
@@ -464,12 +442,9 @@ async def invoke_summarize_on_exit(support: SummarizeOnExit, request: Request):
                 metadata={"graph": "customer_support", "invoke_from": "summarize_on_exit"},
             ):
                 await graph.ainvoke({"summarize_on_exit": True}, config)
-            request.app.state.langfuse.flush()
         else:
             await graph.ainvoke({"summarize_on_exit": True}, config)    
     except Exception as exc:
-        if request.app.state.langfuse:
-            request.app.state.langfuse.flush()
         error_msg = "Error summarize on exit"
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=f"{error_msg}: {exc}")
