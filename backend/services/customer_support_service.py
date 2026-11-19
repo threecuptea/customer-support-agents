@@ -21,6 +21,25 @@ integrate_slack = os.getenv("INTEGRATE_SLACK", "false").lower() == "true"
 LANGFUSE_CSA_TRACE_NAME = "CS-Agents"
 
 
+async def _ainvoke_graph(request: Request, graph_input: dict, config: dict, *, run_name: str, tags: list[str],
+                         invoke_from: str) -> dict:
+    """Invoke the customer-support graph, traced in LangFuse when `app.state.langfuse` is set (see main.py lifespan).
+    One CallbackHandler per request, as LangFuse advises. No flush here: the SDK exports in the background and
+    main.py's lifespan calls `shutdown()` on exit, so a request never waits on LangFuse."""
+    graph = request.app.state.support_graph
+    if not request.app.state.langfuse:
+        return await graph.ainvoke(graph_input, config)
+    config = {**config, "callbacks": [CallbackHandler()], "run_name": run_name}
+    with propagate_attributes(
+        trace_name=LANGFUSE_CSA_TRACE_NAME,
+        user_id=session_email(request),
+        session_id=config["configurable"]["thread_id"],
+        tags=tags,
+        metadata={"graph": "customer_support", "invoke_from": invoke_from},
+    ):
+        return await graph.ainvoke(graph_input, config)
+
+
 async def invoke_general_others_workflow(support: GeneralSupportRequest, request: Request) -> GenericResponse:
     graph = request.app.state.support_graph
     check_context_owner(request, support.customer_context)
@@ -43,19 +62,8 @@ async def invoke_general_others_workflow(support: GeneralSupportRequest, request
     if memory_dict:
         initial_state.update(memory_dict)
     try:
-        if request.app.state.langfuse:
-            config["callbacks"] = [CallbackHandler()] # It is advised to have one callback handler per request
-            config["run_name"] = "general_others"
-            with propagate_attributes(
-                trace_name=LANGFUSE_CSA_TRACE_NAME,
-                user_id=session_email(request),
-                session_id=thread_id,
-                tags=["general_others"],
-                metadata={"graph": "customer_support", "invoke_from": "general_others"},
-            ):
-                customer_support_state  = await graph.ainvoke(initial_state, config)
-        else:
-            customer_support_state  = await graph.ainvoke(initial_state, config)
+        customer_support_state = await _ainvoke_graph(request, initial_state, config, run_name="general_others",
+            tags=["general_others"], invoke_from="general_others")
         return GenericResponse(
            thread_id=thread_id,
            response=customer_support_state["response"],
@@ -95,19 +103,8 @@ async def invoke_order_init_workflow(support: OrderInitRequest, request: Request
     if memory_dict:
         initial_state.update(memory_dict)
     try:
-        if request.app.state.langfuse:
-            config["callbacks"] = [CallbackHandler()] # It is advised to have one callback handler per request
-            config["run_name"] = "order_inquery"
-            with propagate_attributes(
-                trace_name=LANGFUSE_CSA_TRACE_NAME,
-                user_id=session_email(request),
-                session_id=thread_id,
-                tags=["order_inquery", "init"],
-                metadata={"graph": "customer_support", "invoke_from": "order_init"},
-            ):
-                customer_support_state  = await graph.ainvoke(initial_state, config)
-        else:
-            customer_support_state  = await graph.ainvoke(initial_state, config)
+        customer_support_state = await _ainvoke_graph(request, initial_state, config, run_name="order_inquery",
+            tags=["order_inquery", "init"], invoke_from="order_init")
         return OrderInitResponse(
             thread_id=thread_id,
             target_order= customer_support_state["target_order"],
@@ -145,19 +142,8 @@ async def invoke_order_continue_workflow(support: GenericChatInput, request: Req
     if memory_dict:
         initial_state.update(memory_dict)
     try:
-        if request.app.state.langfuse:
-            config["callbacks"] = [CallbackHandler()] # It is advised to have one callback handler per request
-            config["run_name"] = "order_inquery"
-            with propagate_attributes(
-                trace_name=LANGFUSE_CSA_TRACE_NAME,
-                user_id=session_email(request),
-                session_id=thread_id,
-                tags=["order_inquery", "chat"],
-                metadata={"graph": "customer_support", "invoke_from": "order_continue"},
-            ):
-                customer_support_state  = await graph.ainvoke(initial_state, config)
-        else:
-            customer_support_state  = await graph.ainvoke(initial_state, config)
+        customer_support_state = await _ainvoke_graph(request, initial_state, config, run_name="order_inquery",
+            tags=["order_inquery", "chat"], invoke_from="order_continue")
         return GenericResponse(
             thread_id=thread_id,
             response=customer_support_state["response"],
@@ -192,19 +178,8 @@ async def invoke_exchange_return_recommendation_workflow(exchange_return_reason:
         "escalation_reason": None,   
     }     
     try:
-        if request.app.state.langfuse:
-            config["callbacks"] = [CallbackHandler()] # It is advised to have one callback handler per request
-            config["run_name"] = "exchange_or_return"
-            with propagate_attributes(
-                trace_name=LANGFUSE_CSA_TRACE_NAME,
-                user_id=session_email(request),
-                session_id=thread_id,
-                tags=["exchange_or_return"],
-                metadata={"graph": "customer_support", "invoke_from": "exchange_return_recommendation"},
-            ):    
-                customer_support_state  = await graph.ainvoke(initial_state, config)
-        else:
-            customer_support_state  = await graph.ainvoke(initial_state, config)    
+        customer_support_state = await _ainvoke_graph(request, initial_state, config, run_name="exchange_or_return",
+            tags=["exchange_or_return"], invoke_from="exchange_return_recommendation")
         return ExchangeOrReturnOutput(
             thread_id=thread_id,
             response=customer_support_state["response"],
@@ -250,19 +225,8 @@ async def invoke_return_refund_init_workflow(order_to_return: OrderToReturn, req
         memory_dict = await group_memory(store= graph.store, user_id= existing_state.values.get("customer_context").customer_id, thread_id= thread_id, include_history=False)
         if memory_dict:
             initial_state.update(memory_dict)
-        if request.app.state.langfuse:
-            config["callbacks"] = [CallbackHandler()] # It is advised to have one callback handler per request
-            config["run_name"] = "return_refund"
-            with propagate_attributes(
-                trace_name=LANGFUSE_CSA_TRACE_NAME,
-                user_id=session_email(request),
-                session_id=thread_id,
-                tags=["return_refund", "init"],
-                metadata={"graph": "customer_support", "invoke_from": "return_refund_init"},
-            ):    
-                customer_support_state  = await graph.ainvoke(initial_state, config)
-        else:
-            customer_support_state  = await graph.ainvoke(initial_state, config)
+        customer_support_state = await _ainvoke_graph(request, initial_state, config, run_name="return_refund",
+            tags=["return_refund", "init"], invoke_from="return_refund_init")
 
         rr_in_process = await request.app.state.redis_adapter.retrieve_refund_request(customer_support_state["rr_id_in_process"])
         return InitialReturnRefundResponse(
@@ -321,19 +285,8 @@ async def invoke_return_refund_process_workflow(request_to_process: ReturnRefund
             "proceed_to_process_return_refund": True,
             "notes_for_human_review_override": request_to_process.notes_for_human_review_override
         }
-        if request.app.state.langfuse:
-            config["callbacks"] = [CallbackHandler()] # It is advised to have one callback handler per request
-            config["run_name"] = "return_refund"
-            with propagate_attributes(
-                trace_name=LANGFUSE_CSA_TRACE_NAME,
-                user_id=session_email(request),
-                session_id=thread_id,
-                tags=["return_refund", "process"],
-                metadata={"graph": "customer_support", "invoke_from": "return_refund_process"},
-            ):
-                customer_support_state  = await graph.ainvoke(initial_state, config)   
-        else:
-            customer_support_state  = await graph.ainvoke(initial_state, config)
+        customer_support_state = await _ainvoke_graph(request, initial_state, config, run_name="return_refund",
+            tags=["return_refund", "process"], invoke_from="return_refund_process")
         
         rr_in_process = await request.app.state.redis_adapter.retrieve_refund_request(customer_support_state["rr_id_in_process"])
         turn_off_slack_integration_for_test = request_to_process.turn_off_slack_integration_for_test
@@ -375,19 +328,8 @@ async def invoke_return_refund_chat_workflow(support: GenericChatInput, request:
         memory_dict = await group_memory(store= graph.store, user_id= existing_state.values.get("customer_context").customer_id, thread_id= thread_id, include_history=False)
         if memory_dict:
             initial_state.update(memory_dict)
-        if request.app.state.langfuse:
-            config["callbacks"] = [CallbackHandler()] # It is advised to have one callback handler per request
-            config["run_name"] = "return_refund"
-            with propagate_attributes(
-                trace_name=LANGFUSE_CSA_TRACE_NAME,
-                user_id=session_email(request),
-                session_id=thread_id,
-                tags=["return_refund", "chat"],
-                metadata={"graph": "customer_support", "invoke_from": "return_refund_chat"},
-            ):
-                customer_support_state  = await graph.ainvoke(initial_state, config)
-        else:
-            customer_support_state = await graph.ainvoke(initial_state, config)
+        customer_support_state = await _ainvoke_graph(request, initial_state, config, run_name="return_refund",
+            tags=["return_refund", "chat"], invoke_from="return_refund_chat")
         # Re-read after the graph: a Slack decision may have changed the status, and the UI shows this copy.
         rr_in_process = await request.app.state.redis_adapter.retrieve_refund_request(rr_id_in_process)
         return ReturnRefundChatResponse(
@@ -431,19 +373,8 @@ async def invoke_summarize_on_exit(support: SummarizeOnExit, request: Request):
     await check_thread_owner(graph, thread_id, request)
     config = {"configurable": {"thread_id": thread_id}}
     try:
-        if request.app.state.langfuse:
-            config["callbacks"] = [CallbackHandler()] # It is advised to have one callback handler per request
-            config["run_name"] = "summarize"
-            with propagate_attributes(
-                trace_name=LANGFUSE_CSA_TRACE_NAME,
-                user_id=session_email(request),
-                session_id=thread_id,
-                tags=["summarize"],
-                metadata={"graph": "customer_support", "invoke_from": "summarize_on_exit"},
-            ):
-                await graph.ainvoke({"summarize_on_exit": True}, config)
-        else:
-            await graph.ainvoke({"summarize_on_exit": True}, config)    
+        await _ainvoke_graph(request, {"summarize_on_exit": True}, config, run_name="summarize",
+            tags=["summarize"], invoke_from="summarize_on_exit")
     except Exception as exc:
         error_msg = "Error summarize on exit"
         logger.exception(error_msg)

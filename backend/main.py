@@ -58,6 +58,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.info("Failed to authenticate LangFuse client.")
             app.state.langfuse = None
     else:
+        # The SDK (used by @observe, e.g. determine_order_situation) treats unset/empty as enabled, so make it agree.
+        os.environ["LANGFUSE_TRACING_ENABLED"] = "false"
         logger.info("LangFuse tracing disabled.")
         app.state.langfuse = None
 

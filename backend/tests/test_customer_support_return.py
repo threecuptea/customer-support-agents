@@ -2,7 +2,7 @@ import asyncio
 
 from dotenv import load_dotenv
 from fastapi.testclient import TestClient
-from langchain_core.messages import AIMessage, ChatMessage, HumanMessage
+from langchain_core.messages import AIMessage, ChatMessage, HumanMessage, SystemMessage
 
 import pytest
 
@@ -481,8 +481,10 @@ def test_request_human_review_for_return_refund_chat_with_fake_llm():
         response=response,
         request_human_review_return_refund=True,
     )
+    sent = []
     class _FakeReturnRefundChatLLM:
         async def ainvoke(self, messages):
+            sent.append(messages)
             return {"parsed": output}
         
     email_addr = "wolf.blitzer@cnn.com"
@@ -499,7 +501,8 @@ def test_request_human_review_for_return_refund_chat_with_fake_llm():
                 return refund_request
 
     state = {
-        "messages": [HumanMessage(content=question)],
+        "messages": [AIMessage(content="Would you like me to initiate a human review of your request?"),
+                     HumanMessage(content=question)],
         "order_number_provided": target_order.order_id,
         "target_order": target_order,
         "rr_id_in_process": 1001,
@@ -515,6 +518,13 @@ def test_request_human_review_for_return_refund_chat_with_fake_llm():
     assert message.additional_kwargs["source"] == SOURCE_RETURN_REFUND_CHAT
     assert message.content == response
     assert result["request_human_review_return_refund"]
+    # The latest customer message is its own HumanMessage after the SystemMessage, not embedded in the system prompt;
+    # earlier messages stay in the prompt's "recent conversations".
+    system_msg, human_msg = sent[0]
+    assert isinstance(system_msg, SystemMessage) and isinstance(human_msg, HumanMessage)
+    assert human_msg.content == question
+    assert question not in system_msg.content
+    assert "- Would you like me to initiate a human review of your request?" in system_msg.content
 
 def test_api_refund_request_get(client, redis_client):
     # redis client can help cleanup Redis cache after each test.

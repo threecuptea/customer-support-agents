@@ -40,7 +40,7 @@
   IMPORTANT: confidence_score is 0.0 - 1.0 and the passing score is 0.80.
   ```
     to fix the BUG.
-    - Simplify general support workflow: **I removed general_faq_eval_node.**  It will cost us at least one-time LLM token cost of of `general_faq_eval_node` if we keep it. Go straight to `general_faq_fuzz_match_node` which is super cheap then fallback to `general_faq_fuzz_match_node` if the former's `confidence_score` does not the threshold. 
+    - Simplify general support workflow: **I removed general_faq_eval_node.**  It will cost us at least one-time LLM token cost of of `general_faq_eval_node` if we keep it. Go straight to `general_faq_fuzz_match_node` which is super cheap then fallback to `general_faq_llm_match_node` if the former's `confidence_score` does not the threshold. 
     - `Prompt caching` is an optimization technique that stores and reuses the computed attention states (Key-Value or KV pairs) of static prompt prefixes—such as system instructions. Providers like OpenAI handle prefix detection automatically once prompts cross minimum token thresholds (e.g., 1,024 tokens). I move the variable part: state `general_inquiry` out of STSTEM_PROMPT and put in HumanMessage. The SYSTEM_PROMPT with long `RETURN_POLICY` triggered OpenAI prompt caching minimum token thresholds (1,024 tokens).  In [Tokens breakdown by type](/images/screenshot_langfuse_token_breakdown.png), input_cache_read line came from `general_faq_fuzz_match_node`.
     - I did some research on our `order_continue_chat_node`. Here is some stats from LangFuse:
     ```python
@@ -86,3 +86,25 @@
     - **Trim Your Pydantic Schema**. Remove unnecessary nested objects, shorten field names, and keep Field descriptions brief.
     I applied the first. It does not help. Our structured ouput Pydantic is small and flat.
     - [] CSA-27 Fix the BUG: all structured out LLM have 2-4 seconds lag
+      - Update after the CSA-25 review: it is NOT a lag between ChatOpenAI and RunnableWithFallbacks. In LangFuse's tree view
+        the steps are sequential and their durations add up, e.g. `order_continue_chat_node` 2.17s = `ChatOpenAI` 2.15s +
+        `RunnableWithFallbacks`/`RunnableAssign<parsed,parsing_error>` 0.01s each. The table view lists START times, so the
+        parser starting ~2s after ChatOpenAI only reflects ChatOpenAI's own duration. The structured-output wrappers cost ~10ms;
+        the 2-4s is OpenAI's response time (input ~1.1-2.2k tokens + generating the JSON). That is also why `method="json_schema"`
+        did not help. CSA-27 should be re-scoped to reducing model latency: fewer output tokens (short replies, brief field names),
+        fewer/cached input tokens (CSA-26 prompt re-org), streaming `response` to the UI, a faster model for classification nodes.
+        First check: compare ChatOpenAI duration in `summarize_node` (plain string output) vs the chat nodes at similar token counts.
+      - With `include_raw=True` a parse failure no longer raises: it returns `parsed: null` plus the error in `parsing_error`
+        (the nodes already handle `None`). Filter LangFuse traces on a non-null `parsing_error` to measure how often ParsingErrors happen.
+  - Post-review cleanup:
+    - All 8 service entry points now call one helper, `_ainvoke_graph` in `services/customer_support_service.py`, which adds the LangFuse `CallbackHandler` + `propagate_attributes` when `app.state.langfuse` is set. There is no per-request `flush()` (it is a blocking network call inside an async handler); the SDK exports in the background and `lifespan` calls `shutdown()` on exit.
+    - The LangFuse SDK treats an unset/empty `LANGFUSE_TRACING_ENABLED` as enabled, while `main.py` treats it as disabled. When disabled, `lifespan` now sets it to `"false"` so `@observe` spans (`determine_order_situation`) agree. `.env.example` defaults to `false`.
+    - `_should_summarize` now fires at `>= SUMMARIZE_MESSAGE_THRESHOLD` messages (was `>`), i.e. one message earlier.
+    - Privacy: traces carry `user_id` = the customer's session email, plus full prompts (customer names, order details, conversation). That is acceptable for the demo; in production, send a customer id or a hash and check the LangFuse data-retention/masking settings.
+    - `return_refund_chat_node` now also sends the customer's latest message as its own HumanMessage after the SystemMessage (shared
+      helper `split_latest_human_message`, also used by `order_continue_chat_node`). RR-13 regressed (reply no longer said "human review"),
+      fixed by telling the model to confirm that a human review has been initiated. RR + OC harness cases pass 10/10 on gpt-4o-mini and gpt-4.1.
+    - LLM harness bug (pre-existing since CSA-22/24): `LLM_MODEL=gpt-4.1` was silently ignored. `test_api_slack_e2e.py`/`test_slack_webhook.py`
+      do `from tests.conftest import ...`, which executes conftest a second time after .env is loaded and overwrote the captured
+      command-line model/temperature with .env's (gpt-4o-mini, 0.2). conftest now captures them only once. Earlier "gpt-4.1" harness
+      results were really gpt-4o-mini.

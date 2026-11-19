@@ -11,8 +11,13 @@ from tests.llm_harness.harness import RESULTS, format_report
 # Capture what was passed on the command line BEFORE any test module imports workflow.customer_support,
 # whose load_dotenv(override=True) resets LLM_MODEL / LLM_TEMPERATURE from .env.
 # e.g.  LLM_MODEL=gpt-4.1 RUN_LLM_TESTS=1 uv run pytest -m llm
-harness.REQUESTED_MODEL = os.getenv("LLM_MODEL")
-harness.REQUESTED_TEMPERATURE = os.getenv("LLM_TEMPERATURE")
+# Capture only ONCE: pytest imports this file under its own module name, and test modules that do
+# `from tests.conftest import ...` execute it a second time as `tests.conftest` - by then .env has been loaded,
+# so a second capture would silently replace the command-line model/temperature with .env's.
+if not getattr(harness, "_cli_env_captured", False):
+    harness.REQUESTED_MODEL = os.getenv("LLM_MODEL")
+    harness.REQUESTED_TEMPERATURE = os.getenv("LLM_TEMPERATURE")
+    harness._cli_env_captured = True
 
 # tests/test_main.py does os.environ.setdefault("USE_MOCK_LLM", "true") at import, which would
 # silently flip the whole process to the mock model. conftest is imported first, so when real-LLM
@@ -74,7 +79,7 @@ def redis_client():
 
 # All our tests are in Python test files instead of test classes. Should they be 'module' scope?
 @pytest.fixture(autouse=True, scope="module")
-def disable_langfuse_tracinng():
+def disable_langfuse_tracing():
     os.environ["LANGFUSE_TRACING_ENABLED"] = "false"
     yield 
 

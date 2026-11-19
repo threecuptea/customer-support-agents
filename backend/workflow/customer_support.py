@@ -62,6 +62,17 @@ def _flow(text: str) -> str:
     `whitespace-pre-wrap`, which would otherwise show those indents literally)."""
     return " ".join(text.split())
 
+def split_latest_human_message(messages: list) -> tuple[HumanMessage, str]:
+    """Split the conversation for a chat node's LLM call: the customer's latest HumanMessage (found by type, not
+    assumed to be messages[-1]) is sent as its own message after the SystemMessage, and the rest is rendered as the
+    "recent conversations" bullet list for the system prompt. Keeping the per-turn question out of the system prompt
+    also helps the static part of the prompt reach OpenAI's prompt cache."""
+    latest_idx = next((i for i in range(len(messages) - 1, -1, -1) if isinstance(messages[i], HumanMessage)), None)
+    latest_human = messages[latest_idx] if latest_idx is not None else HumanMessage(content="")
+    recent_conversations = "\n".join(f"- {m.content}" for i, m in enumerate(messages) if i != latest_idx)
+    return latest_human, recent_conversations
+
+
 class CustomerSupportAgent:
     def __init__(self, checkpointer, store, redis_adapter: Any = None):
         self.checkpointer = checkpointer
@@ -179,7 +190,8 @@ class CustomerSupportAgent:
         IMPORTANT: confidence_score is 0.0 - 1.0 and the passing score is 0.80.
         """
         system_msg = SystemMessage(content=SYSTEM_PROMPT)
-        result = await self.general_llm_for_faq_match_result.ainvoke([system_msg, state['messages'][-1]])
+        # The question goes in as its own HumanMessage (not in SYSTEM_PROMPT) so the static prefix can hit the prompt cache.
+        result = await self.general_llm_for_faq_match_result.ainvoke([system_msg, HumanMessage(content=state["general_inquiry"])])
         faq_output: FAQMatchResult = result["parsed"]
         if faq_output and faq_output.confidence_score >= FAQ_MATCH_THRESHOLD:
             response = faq_output.answer
@@ -215,9 +227,7 @@ class CustomerSupportAgent:
         # Keep it in its own labeled section rather than folding it into the raw conversation,
         # same as detect_order_revisit_node.
         
-        recent_conversations = "\n".join(
-            [f"- {message.content}" for message in state['messages'][:-1]]
-        )
+        latest_human, recent_conversations = split_latest_human_message(state['messages'])
         logger.debug(f"order_continue_chat_node beginning state for order #{state['order_number_provided']}:\nrecent conversations: {recent_conversations}\nsummary: {state.get('summary')}\nhistory: {state.get('history')}\nhuman_reviews: {state.get('human_reviews')}")
         # Code decides the ONE situation that applies (CSA-19); only that situation's text reaches the LLM,
         # so a rule written for one situation cannot contradict or shift the behaviour of another.
@@ -239,7 +249,6 @@ class CustomerSupportAgent:
         for reason in ESCALATE_REASON:
             situation_text = situation_text.replace(reason.name, f"'{reason.value}'")
             always_on_text = always_on_text.replace(reason.name, f"'{reason.value}'")
-        latest_message = next((m.content for m in reversed(state['messages']) if isinstance(m, HumanMessage)), "")
         # The order's CSA refund request (one per order) is read from Redis, the source of truth, on every turn so a
         # status changed by a Slack review shows up here, also after a logout/ re-login. A Redis outage must not break
         # the order chat: answer without the section.
@@ -272,7 +281,7 @@ class CustomerSupportAgent:
 
         system_msg = SystemMessage(content=SYSTEM_PROMPT)
         # Separate Human Message from SystemMessage
-        result = await self.order_llm_for_inquiry_chat.ainvoke([system_msg, state['messages'][-1]])
+        result = await self.order_llm_for_inquiry_chat.ainvoke([system_msg, latest_human])
         order_output: OrderStructuredOutput = result["parsed"]
         # mock llm will return order_output None
         if order_output and order_output.escalate and not escalation_allowed(
@@ -608,9 +617,7 @@ class CustomerSupportAgent:
         }
 
     async def return_refund_chat_node(self, state: CustomerSupportState) -> dict[str, Any]:
-        recent_conversations = "\n".join(
-            [f"- {message.content}" for message in state['messages']]
-        )
+        latest_human, recent_conversations = split_latest_human_message(state['messages'])
         # Should comment out later once we get LangFuse integration
         logger.debug(f"return_refund_chat_node beginning state for order #{state['order_number_provided']}:\nrecent conversations: {recent_conversations}\nsummary: {state.get('summary')}\nmemory notes: {state.get('history')}\nhuman reviews: {state.get('human_reviews')}")
         # Cut down token usage if we don't have content for any of the sections (history, recent conversations, summary, human reviews)
@@ -657,7 +664,8 @@ class CustomerSupportAgent:
             situation = (
                 "The request is not processed yet. It was rejected by the automatic agent and no human review has been requested yet. "
                 "(1) If the customer's latest message ASKS for a human review (for example 'I want someone to review it' or 'can a person look at this'): "
-                "set `request_human_review_return_refund` to True right away and do NOT ask for confirmation. Tell the customer to input the reason "
+                "set `request_human_review_return_refund` to True right away and do NOT ask for confirmation. Confirm to the customer that a human review "
+                "has been initiated, and tell the customer to input the reason "
                 "why he/ she thinks that the request should be approved in the 'notes to reviewer' input field, then press 'Process the request'. "
                 "(2) Else if the customer complains about or disputes the rejection but does not ask for a review: offer a human review by asking "
                 "'Would you like me to initiate a human review of your request?' and leave the flag False. "
@@ -665,8 +673,6 @@ class CustomerSupportAgent:
             )
         else:
             situation = "The request is not processed yet. No human review has been requested; do not offer one."
-        latest_customer_message = next(
-            (m.content for m in reversed(state['messages']) if isinstance(m, HumanMessage)), "")
         SYSTEM_PROMPT = f"""
             You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her return/ refund request.
             Here is the updated refund request: {refund_request.model_dump_json()}
@@ -698,13 +704,14 @@ class CustomerSupportAgent:
 
             You can just ask if we can help him/ her with anything else if it is the end of the conversation and remind the customer that they can always reach out if they have more questions and press 'Exit' or 'Return to order details/ chat' button as needed.
 
-            The customer's LATEST message, which is what you must answer now: "{latest_customer_message}"
+            The customer's LATEST message, which is what you must answer now, follows this system message.
             Answer exactly what it asks.
 
             set `response` to what you want to reply  
         """
         system_msg = SystemMessage(content=SYSTEM_PROMPT)
-        result = await self.return_refund_llm.ainvoke([system_msg]) # result will have `parsed` and 'raw' has token usage_metadata
+        # The latest customer message goes in as its own HumanMessage, after the SystemMessage (same as order_continue_chat_node).
+        result = await self.return_refund_llm.ainvoke([system_msg, latest_human]) # result will have `parsed` and 'raw' has token usage_metadata
         output: ReturnRefundStructuredOutput = result["parsed"]
         
         # mock llm will return output None; mirrors order_continue_chat_node's same guard.
