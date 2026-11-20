@@ -1,5 +1,6 @@
 """Offline tests of the harness itself (fake nodes, no LLM): the default suite runs these."""
 import asyncio
+import pytest
 
 from tests.llm_harness.cases import ORDER_CONTINUE_CASES, RETURN_REFUND_CASES, REVISIT_CASES
 from tests.llm_harness import harness
@@ -181,3 +182,39 @@ def test_known_issue_cases_run_twenty_trials():
 
     result = asyncio.run(run_case(node, _case(known_issue="x"), trials=5))
     assert result.trials == 20
+
+
+# --- usage/ cost recorder (CSA-26) ---------------------------------------------------------------
+from types import SimpleNamespace
+
+from tests.llm_harness.usage import Call, UsageLog, UsageRecorder, price_for
+
+
+def test_price_for_matches_dated_snapshot_and_prefers_longest_key():
+    assert price_for("gpt-4.1-mini-2025-04-14") == price_for("gpt-4.1-mini")
+    assert price_for("gpt-4.1-2025-04-14") == price_for("gpt-4.1") != price_for("gpt-4.1-mini")
+    assert price_for("unknown-model") is None and price_for(None) is None
+
+
+def test_call_cost_charges_cached_input_at_the_cached_rate():
+    # gpt-4.1: 2.00 in / 0.50 cached / 8.00 out per 1M; 1000 input of which 600 cached, 100 output.
+    call = Call("n", "gpt-4.1", input_tokens=1000, cache_read=600, output_tokens=100)
+    assert call.cost == pytest.approx((400 * 2.00 + 600 * 0.50 + 100 * 8.00) / 1_000_000)
+    assert Call("n", "mystery", 10, 0, 1).cost is None
+
+
+def test_recorder_records_usage_from_raw_and_passes_result_through():
+    raw = SimpleNamespace(usage_metadata={"input_tokens": 1500, "output_tokens": 40,
+                                          "input_token_details": {"cache_read": 1280}},
+                          response_metadata={"model_name": "gpt-4.1-mini-2025-04-14"})
+
+    class Inner:
+        async def ainvoke(self, messages):
+            return {"parsed": "p", "raw": raw}
+
+    log = UsageLog()
+    recorder = UsageRecorder(Inner(), "return_refund_chat_node", "gpt-4.1-mini", log)
+    assert asyncio.run(recorder.ainvoke([]))["parsed"] == "p"
+    assert log.calls == [Call("return_refund_chat_node", "gpt-4.1-mini-2025-04-14", 1500, 1280, 40)]
+    summary, = log.summaries()
+    assert (summary.calls, summary.cache_hit_rate, summary.avg_cache_read) == (1, 1.0, 1280)

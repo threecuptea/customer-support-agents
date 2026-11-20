@@ -124,10 +124,35 @@ ALWAYS_ON_TEXT = (
 )
 
 
+def with_escalation_reason_values(text: str) -> str:
+    """The situation/ rule texts name escalation reasons by ESCALATE_REASON member; give the LLM the exact values."""
+    for reason in ESCALATE_REASON:
+        text = text.replace(reason.name, f"'{reason.value}'")
+    return text
+
+
 def render_situation_text(situation: OrderSituation, *, deadline: str = "", tracking: str = "",
                           delivered_on: str = "") -> str:
-    """The text for `situation` with the order's values filled in."""
-    return SITUATION_TEXT[situation].format(deadline=deadline, tracking=tracking, delivered_on=delivered_on)
+    """The text for `situation` with the order's values (and escalation reason values) filled in."""
+    return with_escalation_reason_values(
+        SITUATION_TEXT[situation].format(deadline=deadline, tracking=tracking, delivered_on=delivered_on))
+
+
+# The static system prompt of order_continue_chat_node (first SystemMessage). Everything per call (the CURRENT
+# SITUATION, the order, the conversation, the refund request facts) goes in a second SystemMessage, then the customer's
+# latest message as a HumanMessage. DO NOT put any per-call value in here.
+# Prompt caching (CSA-26): this prompt is ~330 tokens, below OpenAI's 1,024-token cache minimum, so it is NOT cached.
+# Padding it with background text to cross the minimum was measured and rejected: +5% cost on gpt-4o-mini (cached
+# tokens are only 50% off), -4% on gpt-4.1-mini, +27% on gpt-4.1; even a 100% hit rate would save only ~6% on gpt-4.1.
+# Revisit if static rules ever grow past 1,024 tokens on their own (count with tiktoken as tests/test_prompt_caching.py does).
+ORDER_STATIC_PROMPT = with_escalation_reason_values(
+    "You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her order.\n\n"
+    "The CURRENT SITUATION (the only situation-specific instructions that apply), the target order and the conversation context "
+    "of this customer follow in the next system message.\n\n"
+    f"Rules that always apply: {ALWAYS_ON_TEXT}\n\n"
+    "The customer's LATEST message, which is what you must answer now, follows the system messages.\n"
+    "Set `response` to what you want to reply.\n"
+)
 
 
 _NO_ESCALATION = (OrderSituation.LOST_SHIPMENT_FIRST_REVISIT, OrderSituation.PENDING_CANCEL_FIRST_REVISIT)

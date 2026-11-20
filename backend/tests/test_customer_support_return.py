@@ -518,12 +518,13 @@ def test_request_human_review_for_return_refund_chat_with_fake_llm():
     assert message.additional_kwargs["source"] == SOURCE_RETURN_REFUND_CHAT
     assert message.content == response
     assert result["request_human_review_return_refund"]
-    # The latest customer message is its own HumanMessage after the SystemMessage, not embedded in the system prompt;
-    # earlier messages stay in the prompt's "recent conversations".
-    system_msg, human_msg = sent[0]
-    assert isinstance(system_msg, SystemMessage) and isinstance(human_msg, HumanMessage)
+    # The latest customer message is its own HumanMessage after the SystemMessages, not embedded in the system prompt;
+    # earlier messages stay in the prompt's "recent conversations". The first SystemMessage is the static, cacheable
+    # prefix (CSA-26); the per-call context is in the second.
+    static_msg, system_msg, human_msg = sent[0]
+    assert isinstance(static_msg, SystemMessage) and isinstance(system_msg, SystemMessage) and isinstance(human_msg, HumanMessage)
     assert human_msg.content == question
-    assert question not in system_msg.content
+    assert question not in system_msg.content and question not in static_msg.content
     assert "- Would you like me to initiate a human review of your request?" in system_msg.content
 
 def test_api_refund_request_get(client, redis_client):

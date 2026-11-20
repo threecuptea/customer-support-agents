@@ -206,6 +206,10 @@ def build_agent(model: str | None = None, temperature: str | None = None, redis_
     if info["temperature"] is not None and float(info["temperature"]) != wanted_temp:
         raise RuntimeError(f"asked for temperature {wanted_temp} but the agent uses {info['temperature']}")
     RUN_INFO.update(info)
+    # Record token usage/ cost of the two chat nodes' calls (CSA-26); see tests/llm_harness/usage.py.
+    from tests.llm_harness.usage import UsageRecorder
+    agent.order_llm_for_inquiry_chat = UsageRecorder(agent.order_llm_for_inquiry_chat, "order_continue_chat_node", chat["model"])
+    agent.return_refund_llm = UsageRecorder(agent.return_refund_llm, "return_refund_chat_node", chat["model"])
     return agent
 
 

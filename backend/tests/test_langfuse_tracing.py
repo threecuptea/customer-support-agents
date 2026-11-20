@@ -94,7 +94,7 @@ def test_order_continue_chat_sends_latest_human_message_even_if_not_last():
 
     asyncio.run(agent.order_continue_chat_node(state))
 
-    system_msg, human_msg = sent[0]
+    static_msg, system_msg, human_msg = sent[0]  # static (cacheable) prefix, per-call context, latest message (CSA-26)
     assert isinstance(human_msg, HumanMessage) and human_msg.content == "where is my receipt?"
     assert "function note" in system_msg.content and "agent note" in system_msg.content
-    assert "- where is my receipt?" not in system_msg.content
+    assert "- where is my receipt?" not in system_msg.content and "where is my receipt?" not in static_msg.content

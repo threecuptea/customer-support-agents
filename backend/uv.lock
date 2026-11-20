@@ -471,6 +471,7 @@ dev = [
     { name = "ipython" },
     { name = "ipywidgets" },
     { name = "pytest" },
+    { name = "tiktoken" },
 ]
 
 [package.metadata]
@@ -506,6 +507,7 @@ dev = [
     { name = "ipython", specifier = ">=9.17.1" },
     { name = "ipywidgets", specifier = ">=8.1.9" },
     { name = "pytest", specifier = ">=8.3" },
+    { name = "tiktoken", specifier = ">=0.13.0" },
 ]
 
 [[package]]
