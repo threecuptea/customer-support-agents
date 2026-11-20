@@ -5,10 +5,17 @@ byte-identical across calls. The recorder wraps the agent's structured-output LL
 `input_tokens`, `cache_read` and `output_tokens` from `result["raw"].usage_metadata` without touching node code.
 A run with `LLM_COST_OUT=path.json` writes a per-node summary that `scripts/compare_llm_cost.py` diffs, so the
 same harness command measured before and after a prompt change gives the cost/ cache effect of that change.
+
+CSA-27 adds the wall-clock latency of each call (p50/ p90/ max per node), so a model switch can be judged on quality,
+cost AND latency with the same run: `LLM_MODEL=<model> LLM_COST_OUT=...` once per model, then compare the files.
+Latency is measured client-side around `ainvoke` with up to LLM_CONCURRENCY calls in flight, so compare runs made
+with the same concurrency (and preferably close in time; OpenAI's latency varies with its load).
 """
 from __future__ import annotations
 
 import json
+import math
+import time
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -37,6 +44,8 @@ class Call:
     input_tokens: int
     cache_read: int
     output_tokens: int
+    # Wall-clock seconds of the ainvoke (CSA-27); None when not measured. A measurement, not part of a call's identity.
+    latency_s: float | None = field(default=None, compare=False)
 
     @property
     def cost(self) -> float | None:
@@ -60,6 +69,17 @@ class NodeSummary:
     avg_output_tokens: float
     avg_cost_usd: float | None
     total_cost_usd: float | None
+    p50_latency_s: float | None = None
+    p90_latency_s: float | None = None
+    max_latency_s: float | None = None
+
+
+def percentile(values: list[float], pct: float) -> float | None:
+    """Nearest-rank percentile (pct in 0..100); None for no values."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(pct / 100 * len(ordered)) - 1)]
 
 
 @dataclass
@@ -76,6 +96,7 @@ class UsageLog:
             total_in = sum(c.input_tokens for c in calls)
             costs = [c.cost for c in calls]
             total_cost = None if any(c is None for c in costs) else sum(costs)
+            latencies = [c.latency_s for c in calls if c.latency_s is not None]
             result.append(NodeSummary(
                 node=node, model=model, calls=n,
                 avg_input_tokens=total_in / n,
@@ -85,6 +106,9 @@ class UsageLog:
                 avg_output_tokens=sum(c.output_tokens for c in calls) / n,
                 avg_cost_usd=None if total_cost is None else total_cost / n,
                 total_cost_usd=total_cost,
+                p50_latency_s=percentile(latencies, 50),
+                p90_latency_s=percentile(latencies, 90),
+                max_latency_s=max(latencies) if latencies else None,
             ))
         return result
 
@@ -95,12 +119,14 @@ class UsageLog:
 
     def format_report(self) -> str:
         lines = [f"{'node':<26} {'model':<14} {'calls':>5} {'avg in':>8} {'avg cached':>10} {'hit rate':>8} "
-                 f"{'cached %':>8} {'avg out':>7} {'$/call':>10} {'$ total':>9}"]
+                 f"{'cached %':>8} {'avg out':>7} {'$/call':>10} {'$ total':>9} {'p50 s':>6} {'p90 s':>6} {'max s':>6}"]
+        secs = lambda v: f"{v:.2f}" if v is not None else "n/a"  # noqa: E731
         for s in self.summaries():
             per_call = f"{s.avg_cost_usd:.6f}" if s.avg_cost_usd is not None else "n/a"
             total = f"{s.total_cost_usd:.4f}" if s.total_cost_usd is not None else "n/a"
             lines.append(f"{s.node:<26} {str(s.model):<14} {s.calls:>5} {s.avg_input_tokens:>8.0f} {s.avg_cache_read:>10.0f} "
-                         f"{s.cache_hit_rate:>8.0%} {s.cached_share:>8.0%} {s.avg_output_tokens:>7.0f} {per_call:>10} {total:>9}")
+                         f"{s.cache_hit_rate:>8.0%} {s.cached_share:>8.0%} {s.avg_output_tokens:>7.0f} {per_call:>10} {total:>9} "
+                         f"{secs(s.p50_latency_s):>6} {secs(s.p90_latency_s):>6} {secs(s.max_latency_s):>6}")
         return "\n".join(lines)
 
 
@@ -122,12 +148,14 @@ class UsageRecorder:
         self.inner, self.node, self.model, self.log = inner, node, model, log
 
     async def ainvoke(self, *args: Any, **kwargs: Any) -> Any:
+        started = time.perf_counter()
         result = await self.inner.ainvoke(*args, **kwargs)
+        latency = time.perf_counter() - started
         raw = result.get("raw") if isinstance(result, dict) else None
         if raw is not None:
             # The response names the model actually served (e.g. a dated snapshot); fall back to the configured one.
             served = (getattr(raw, "response_metadata", None) or {}).get("model_name") or self.model
-            self.log.calls.append(Call(self.node, served, *usage_of(raw)))
+            self.log.calls.append(Call(self.node, served, *usage_of(raw), latency_s=latency))
         return result
 
     def __getattr__(self, name: str) -> Any:
