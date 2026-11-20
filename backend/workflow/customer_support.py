@@ -115,7 +115,9 @@ class CustomerSupportAgent:
         # stronger model than the rest. Override with CHAT_NODE_MODEL; read here, at construction time.
         # With the deterministic-situation pattern in both chat nodes, gpt-4o-mini, gpt-4.1-mini and gpt-4.1 all pass the
         # LLM harness (CSA-26); re-run it periodically (with LLM_COST_OUT for cost) and switch if the model drifts.
-        # So far it does not fix the time lag between ChatOpenAI and RunnableWithFallbacks happen only to llm.with_structured_output
+        # CSA-27: the "lag" before RunnableWithFallbacks in Langfuse is the ChatOpenAI call itself (OpenAI's response time;
+        # the parser after it takes ~10 ms), and structured calls are no slower than plain ones. Compare models' latency
+        # with the LLM harness (latency columns next to cost); timeout/ retries are set in get_llm.
         self.chat_node_llm = get_llm(model=os.getenv("CHAT_NODE_MODEL", DEFAULT_CHAT_NODE_MODEL), temperature=0.0, stream_usage=True) if require_stronge_chat_model else get_llm(temperature=0.0, stream_usage=True)
         self.order_llm_for_inquiry_chat = self.chat_node_llm.with_structured_output(OrderStructuredOutput, include_raw=True, method="json_schema", strict=True)
         # Classification, not conversation — low temperature for consistency across near-identical inputs.

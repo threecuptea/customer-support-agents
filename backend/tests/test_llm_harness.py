@@ -218,3 +218,59 @@ def test_recorder_records_usage_from_raw_and_passes_result_through():
     assert log.calls == [Call("return_refund_chat_node", "gpt-4.1-mini-2025-04-14", 1500, 1280, 40)]
     summary, = log.summaries()
     assert (summary.calls, summary.cache_hit_rate, summary.avg_cache_read) == (1, 1.0, 1280)
+
+
+# --- latency (CSA-27) -----------------------------------------------------------------------------
+import json
+
+from scripts import compare_llm_cost
+from tests.llm_harness.usage import percentile
+
+
+def test_percentile_is_nearest_rank():
+    values = [0.5, 4.0, 1.0, 2.0, 3.0]
+    assert (percentile(values, 50), percentile(values, 90), percentile(values, 100)) == (2.0, 4.0, 4.0)
+    assert percentile([], 50) is None
+
+
+def test_recorder_measures_latency_and_summary_reports_percentiles():
+    raw = SimpleNamespace(usage_metadata={"input_tokens": 10, "output_tokens": 2}, response_metadata={})
+
+    class SlowInner:
+        async def ainvoke(self, messages):
+            await asyncio.sleep(0.05)
+            return {"parsed": "p", "raw": raw}
+
+    log = UsageLog()
+    asyncio.run(UsageRecorder(SlowInner(), "order_continue_chat_node", "gpt-4o-mini", log).ainvoke([]))
+    call, = log.calls
+    assert call.latency_s is not None and call.latency_s >= 0.05
+    summary, = log.summaries()
+    assert summary.p50_latency_s == summary.p90_latency_s == summary.max_latency_s == call.latency_s
+    assert "p90 s" in log.format_report()
+
+
+def test_summary_latency_is_none_when_calls_were_not_timed():
+    log = UsageLog(calls=[Call("n", "gpt-4o-mini", 10, 0, 1)])
+    summary, = log.summaries()
+    assert (summary.p50_latency_s, summary.p90_latency_s, summary.max_latency_s) == (None, None, None)
+
+
+def test_compare_lines_up_two_models_by_node(tmp_path, capsys):
+    # Regression: rows used to be keyed by (node, model), so comparing model A with model B matched nothing.
+    def write(name, model, p50, with_latency=True):
+        node = {"node": "return_refund_chat_node", "model": model, "avg_cost_usd": 0.0002, "avg_input_tokens": 1500}
+        if with_latency:
+            node["p50_latency_s"] = p50
+        path = tmp_path / name
+        path.write_text(json.dumps({"run_info": {}, "nodes": [node]}))
+        return str(path)
+
+    compare_llm_cost.main(write("a.json", "gpt-4o-mini-2024-07-18", 2.0, with_latency=False),
+                          write("b.json", "gpt-4.1-mini-2025-04-14", 1.5))
+    out = capsys.readouterr().out
+    assert "gpt-4o-mini-2024-07-18" in out and "gpt-4.1-mini-2025-04-14" in out
+    cost_row = next(line for line in out.splitlines() if "avg_cost_usd" in line)
+    assert cost_row.split()[-1] == "+0.0%"  # both sides present -> a real change, not n/a
+    p50_row = next(line for line in out.splitlines() if "p50_latency_s" in line)
+    assert p50_row.split()[-3:] == ["n/a", "1.50", "n/a"]  # pre-CSA-27 file has no latency

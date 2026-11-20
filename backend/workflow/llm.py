@@ -7,6 +7,8 @@ IBM watsonx, Ollama, ...) by setting a couple of environment variables:
     LLM_MODEL=gpt-4o-mini            # any model id
     LLM_PROVIDER=openai              # optional, inferred from the model when omitted
     LLM_TEMPERATURE=0.7              # optional
+    LLM_TIMEOUT=30                   # optional, seconds per attempt
+    LLM_MAX_RETRIES=2                # optional, retries after the first attempt
 
 If no provider credentials are configured, the template falls back to a small
 built-in ``MockChatModel`` so it runs end-to-end (including token streaming)
@@ -29,6 +31,11 @@ from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 
 logger = logging.getLogger(__name__)
+
+# Per-attempt timeout (seconds) and retries of a real LLM call (CSA-27); override with LLM_TIMEOUT/ LLM_MAX_RETRIES.
+# Worst case per call ~ (1 + retries) * timeout plus backoff. Our calls take ~1-4 s (p90 ~3 s in Langfuse).
+DEFAULT_LLM_TIMEOUT = 30.0
+DEFAULT_LLM_MAX_RETRIES = 2
 
 # API-key environment variables we recognise for auto-detection. When none of
 # these (and no explicit model) are set, we use the mock model for a zero-config
@@ -205,7 +212,15 @@ def get_llm(**overrides: Any) -> BaseChatModel:
     overrides = dict(overrides)
     model = overrides.pop("model", None) or os.getenv("LLM_MODEL", "gpt-4o-mini")
     provider = overrides.pop("provider", None) or os.getenv("LLM_PROVIDER") or None
-    params: dict[str, Any] = {"temperature": float(os.getenv("LLM_TEMPERATURE", "0.7"))}
+    params: dict[str, Any] = {
+        "temperature": float(os.getenv("LLM_TEMPERATURE", "0.7")),
+        # CSA-27: without these, the OpenAI SDK defaults apply: a 600 s read timeout and 2 retries, so one stalled
+        # request could hold a chat turn for ~30 min. `timeout`/`max_retries` are LangChain standard chat-model
+        # params; the SDK retries 408/409/429/5xx and connection errors with backoff, and logs each retry at INFO
+        # ("Retrying request to /chat/completions in ... seconds").
+        "timeout": float(os.getenv("LLM_TIMEOUT", str(DEFAULT_LLM_TIMEOUT))),
+        "max_retries": int(os.getenv("LLM_MAX_RETRIES", str(DEFAULT_LLM_MAX_RETRIES))),
+    }
     params.update(overrides)
 
     try:

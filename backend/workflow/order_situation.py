@@ -120,7 +120,11 @@ ALWAYS_ON_TEXT = (
     "If the conversation reaches a scenario you do not cover or you do not know the answer, set `escalate` to True "
     "and `escalate_reason` to HELP_ANSWER_ORDER_INQUIRY. You can wrap up by saying 'Can I help you with anything else?' when the conversation seems to be at its end. "
     "When the customer replies with an ending signal, set `order_issue_resolved` to True. "
-    "DO NOT REPEAT the same response."
+    "DO NOT REPEAT the same response. "
+    # CSA-27: reply time grows with output length (~60 output tokens/s on every model we measured), so keep replies short.
+    "Keep `response` short and to the point: normally 2-3 sentences. Do not open with a greeting, do not restate the "
+    "customer's question, and do not repeat order details he/ she did not ask about. Only when the CURRENT SITUATION "
+    "gives you several steps to pass on, include every step, each in a few words."
 )
 
 
