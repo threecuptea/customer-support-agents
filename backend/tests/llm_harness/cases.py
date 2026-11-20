@@ -6,13 +6,17 @@ Phrases are loose on purpose (LLM wording varies); the structured fields are exa
 """
 from __future__ import annotations
 
+import itertools
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
 
 from models.customer_support_model import (
     CustomerContext,
-    Order, OrderItem, OrderRefundStatus, ReturnRefundInitialDecision, Customer,
+    Order, OrderItem, OrderRefundStatus, ReturnRefundInitialDecision, Customer, RefundRequest, ReturnedOrder,
+    ReturnedOrderItem,
 )
 from tests.llm_harness.harness import Case
 
@@ -21,6 +25,60 @@ ORDER_ID = 12462
 TEST_CUSTOMER = Customer(
     customer_id=1, title="Mr.", first_name="John", last_name="Doe", email="john.doe@example.com"
 )
+
+
+# Real traffic differs per customer (order, refund request), so only a prompt's STATIC prefix can hit OpenAI's prompt
+# cache. Without this, every trial of a case sends a byte-identical prompt and caches the WHOLE prompt, overstating the
+# cache hit rate (CSA-26: return_refund_chat_node showed ~80-95% cache hits in the harness, 0 in production).
+# A microsecond per call is enough to make the per-call part unique; it changes nothing the LLM is judged on.
+_UNIQUE = itertools.count(1)
+
+
+def per_customer(node):
+    """Wrap an order node so each call's target order is unique (see _UNIQUE)."""
+    async def call(state: dict) -> dict:
+        order = state.get("target_order")
+        if order is not None:
+            state["target_order"] = order.model_copy(update={"order_date": order.order_date + timedelta(microseconds=next(_UNIQUE))})
+        return await node(state)
+    return call
+
+
+def make_refund_request(status: str, notes: str | None = None) -> RefundRequest:
+    """A refund request of TEST_CUSTOMER for ORDER_ID, unique per call (see _UNIQUE)."""
+    return RefundRequest(
+        refund_request_id=1001, request_date=NOW + timedelta(microseconds=next(_UNIQUE)), status=status,
+        notes_for_human_review_override=notes,
+        customer=TEST_CUSTOMER,
+        returned_order=ReturnedOrder(
+            origin_order_id=ORDER_ID, original_delivery_date=NOW - timedelta(days=40), tax_applied_rate=0.085,
+            estimated_amount_refund_incl_tax=108.5,
+            items=[ReturnedOrderItem(product_id="PRD-1", product_name="Wine Glasses", supplier_name="Heritage Brands",
+                                     unit_price=25.0, number_units=4)],
+        ),
+    )
+
+
+class FakeRedisAdapter:
+    """Serves a refund request with `status` the way Redis would (by id and by order); None = the order has none."""
+    def __init__(self, status: str | None):
+        self.status = status
+
+    async def retrieve_refund_request(self, refund_request_id: int) -> RefundRequest | None:
+        return make_refund_request(self.status)
+
+    async def retrieve_refund_requests_by_order(self, origin_order_id: int) -> list[RefundRequest]:
+        return [make_refund_request(self.status)] if self.status else []
+
+
+class FakeStructuredLLM:
+    """Stands in for a `with_structured_output(..., include_raw=True)` LLM: returns `parsed`, records the messages."""
+    def __init__(self, parsed: Any):
+        self.parsed, self.calls = parsed, []
+
+    async def ainvoke(self, messages):
+        self.calls.append(messages)
+        return {"parsed": self.parsed, "raw": SimpleNamespace(usage_metadata=None)}
 
 
 def make_order(status: str = "delivered", **overrides) -> Order:

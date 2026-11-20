@@ -12,8 +12,10 @@ import os
 from workflow.llm import get_llm
 from langchain_core.runnables import RunnableConfig
 from datetime import timedelta
-from workflow.order_situation import determine_order_situation, render_situation_text, escalation_allowed, ALWAYS_ON_TEXT, \
-    render_refund_request_facts
+from workflow.order_situation import determine_order_situation, render_situation_text, escalation_allowed, \
+    render_refund_request_facts, with_escalation_reason_values, ORDER_STATIC_PROMPT
+from workflow.return_refund_situation import determine_return_refund_situation, review_request_allowed, \
+    RETURN_REFUND_STATIC_PROMPT, render_return_refund_situation_text
 from memory import save_user_memory
 from text_safety import human_reviews_prompt_block
 from workflow.customer_support_utils import find_closest_faq, retrieve_target_order, faq_dict, RETURN_POLICY, \
@@ -53,7 +55,7 @@ SOURCE_RETURN_REFUND_CHAT = "return_refund_chat"
 ROLE_FUNCTION = "function"
 ROLE_AGENT = "assistant"
 
-DEFAULT_CHAT_NODE_MODEL = "gpt-4.1"
+DEFAULT_CHAT_NODE_MODEL = "gpt-4.1-mini"
 
 
 def _flow(text: str) -> str:
@@ -73,6 +75,28 @@ def split_latest_human_message(messages: list) -> tuple[HumanMessage, str]:
     return latest_human, recent_conversations
 
 
+def _conversation_context(state: CustomerSupportState, recent_conversations: str) -> str:
+    """The per-call conversation sections of a chat node's prompt; a section without content is left out."""
+    sections = (
+        "Here is the most recent conversations in this visit: " + recent_conversations + "." if recent_conversations else "",
+        "Here is the summary of the previous conversation in this visit: " + state.get("summary") + "." if state.get("summary") else "",
+        human_reviews_prompt_block(state.get("human_reviews")),
+        "Here is what we remember from past visits: " + state.get("history") + "." if state.get("history") else "",
+    )
+    return "\n".join(section for section in sections if section)
+
+
+def log_cache_usage(node: str, result: Any) -> None:
+    """Log input/ cached/ output tokens of a `with_structured_output(..., include_raw=True)` call (CSA-26), so a lost
+    prompt cache (cache_read dropping to 0) is visible in the logs too, not only in Langfuse."""
+    raw = result.get("raw") if isinstance(result, dict) else None
+    usage = getattr(raw, "usage_metadata", None)
+    if not usage:
+        return  # mock LLM
+    cache_read = (usage.get("input_token_details") or {}).get("cache_read", 0)
+    logger.info("%s tokens: input=%s cache_read=%s output=%s", node, usage.get("input_tokens"), cache_read, usage.get("output_tokens"))
+
+
 class CustomerSupportAgent:
     def __init__(self, checkpointer, store, redis_adapter: Any = None):
         self.checkpointer = checkpointer
@@ -89,8 +113,8 @@ class CustomerSupportAgent:
         # The two free-form chat nodes (order_continue_chat_node, return_refund_chat_node) follow many
         # competing rules in one prompt and are the most model-sensitive (CSA-18 harness), so they use a
         # stronger model than the rest. Override with CHAT_NODE_MODEL; read here, at construction time.
-        # gpt-4o-mini looks solid after Claude applied deterministic-situation-block pattern to order_continue-chat_node will
-        # run test_llm_chat_node periodically and switch if seeing model drift
+        # With the deterministic-situation pattern in both chat nodes, gpt-4o-mini, gpt-4.1-mini and gpt-4.1 all pass the
+        # LLM harness (CSA-26); re-run it periodically (with LLM_COST_OUT for cost) and switch if the model drifts.
         # So far it does not fix the time lag between ChatOpenAI and RunnableWithFallbacks happen only to llm.with_structured_output
         self.chat_node_llm = get_llm(model=os.getenv("CHAT_NODE_MODEL", DEFAULT_CHAT_NODE_MODEL), temperature=0.0, stream_usage=True) if require_stronge_chat_model else get_llm(temperature=0.0, stream_usage=True)
         self.order_llm_for_inquiry_chat = self.chat_node_llm.with_structured_output(OrderStructuredOutput, include_raw=True, method="json_schema", strict=True)
@@ -179,7 +203,7 @@ class CustomerSupportAgent:
             }
 
     async def general_faq_llm_match_node(self, state: CustomerSupportState) -> dict[str, Any]:
-        # This might be able to take advantage of prompt cache. RETURN_POLICY might have enough tokens 
+        # The static SYSTEM_PROMPT (FAQs + RETURN_POLICY) is > 1,024 tokens, so OpenAI serves it from the prompt cache.
         SYSTEM_PROMPT = f"""
         You are an intelligent customer-support agent to help match the customer question against FAQs
         Here is FAQ context: {self.faq_context}.
@@ -236,19 +260,13 @@ class CustomerSupportAgent:
         situation = determine_order_situation(
             status=target_order.status, is_revisit=bool(state.get('order_is_revisit')),
             prior_topic=state.get("order_prior_topic"), turns=turns)
-        # Need to find a way to get situation into LangFuse trace
-        logger.debug(f"order_continue_chat_node 'situation' for order #{state['order_number_provided']}: {situation}")
+        # determine_order_situation is a Langfuse span (input + output); see workflow/order_situation.py.
         situation_text = render_situation_text(
             situation,
             deadline=(target_order.order_date + timedelta(days=7)).isoformat(),
             tracking=str(target_order.tracking_number or ""),
             delivered_on=target_order.delivery_date.isoformat() if target_order.delivery_date else "an unknown date",
         )
-        # The situation texts name the escalation reasons by member name; give the LLM the exact values.
-        always_on_text = ALWAYS_ON_TEXT
-        for reason in ESCALATE_REASON:
-            situation_text = situation_text.replace(reason.name, f"'{reason.value}'")
-            always_on_text = always_on_text.replace(reason.name, f"'{reason.value}'")
         # The order's CSA refund request (one per order) is read from Redis, the source of truth, on every turn so a
         # status changed by a Slack review shows up here, also after a logout/ re-login. A Redis outage must not break
         # the order chat: answer without the section.
@@ -258,30 +276,18 @@ class CustomerSupportAgent:
         except Exception:
             logger.exception("order_continue_chat_node could not read refund requests of order #%s", target_order.order_id)
             order_refund_requests = []
-        refund_facts = render_refund_request_facts(order_refund_requests)
-        # Cut down token usage if we don't have content for any of the sections (history, recent conversations, summary, human reviews)
-        SYSTEM_PROMPT = f"""
-            You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her order.
-
-            Rules that always apply: {always_on_text}
-
-            CURRENT SITUATION (the only situation-specific instructions that apply): {situation_text}
-
-            which is derived from the context below:
-            Here is the target order {target_order.model_dump_json()}
-            {"Here is the most recent conversations in this visit: " + recent_conversations + "." if recent_conversations else ""}
-            {"Here is the summary of the previous conversation in this visit: " + state.get("summary") + "." if state.get("summary") else ""}
-            {human_reviews_prompt_block(state.get("human_reviews"))}
-            {"Here is what we remember from past visits :"+ state.get('history') + "." if state.get('history') else ""}            
-            
-            {refund_facts}
-
-            Set `response` to what you want to reply.
-            """
-
-        system_msg = SystemMessage(content=SYSTEM_PROMPT)
-        # Separate Human Message from SystemMessage
-        result = await self.order_llm_for_inquiry_chat.ainvoke([system_msg, latest_human])
+        refund_facts = with_escalation_reason_values(render_refund_request_facts(order_refund_requests))
+        # Prompt caching (CSA-26): ORDER_STATIC_PROMPT never changes (>= 1,024 tokens), so it is a cacheable prefix;
+        # everything per call goes in the second SystemMessage, then the customer's latest message.
+        dynamic_prompt = "\n".join(section for section in (
+            f"CURRENT SITUATION (the only situation-specific instructions that apply): {situation_text}",
+            f"which is derived from the context below:\nHere is the target order {target_order.model_dump_json()}",
+            _conversation_context(state, recent_conversations),
+            refund_facts,
+        ) if section)
+        result = await self.order_llm_for_inquiry_chat.ainvoke(
+            [SystemMessage(content=ORDER_STATIC_PROMPT), SystemMessage(content=dynamic_prompt), latest_human])
+        log_cache_usage("order_continue_chat_node", result)
         order_output: OrderStructuredOutput = result["parsed"]
         # mock llm will return order_output None
         if order_output and order_output.escalate and not escalation_allowed(
@@ -618,9 +624,7 @@ class CustomerSupportAgent:
 
     async def return_refund_chat_node(self, state: CustomerSupportState) -> dict[str, Any]:
         latest_human, recent_conversations = split_latest_human_message(state['messages'])
-        # Should comment out later once we get LangFuse integration
         logger.debug(f"return_refund_chat_node beginning state for order #{state['order_number_provided']}:\nrecent conversations: {recent_conversations}\nsummary: {state.get('summary')}\nmemory notes: {state.get('history')}\nhuman reviews: {state.get('human_reviews')}")
-        # Cut down token usage if we don't have content for any of the sections (history, recent conversations, summary, human reviews)
         rr_id_in_process = state["rr_id_in_process"]
         refund_request = await self.redis_adapter.retrieve_refund_request(rr_id_in_process)
         if refund_request is None:
@@ -632,86 +636,24 @@ class CustomerSupportAgent:
                 "request_human_review_return_refund": state.get("request_human_review_return_refund", False),
             }
         decision = state["initial_return_refund_decision"]
-        processed = state.get("rr_being_processed")
+        processed = bool(state.get("rr_being_processed"))
         review_requested = bool(state.get("request_human_review_return_refund"))
-        rejected_by_agent = decision.order_refund_status in (
-            OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS, OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS)
-        # How to get situation category into LangFuse using observability type generation or span
-        if processed and refund_request.status == "wait_for_manual_review":
-            situation = (
-                "The request has ALREADY been processed and a human review has ALREADY been requested and submitted; it is with a human reviewer now. "
-                "Facts for questions about this request's status, decision, human review or next steps: the customer will receive an email once the review is done, "
-                "usually within 15 minutes and no more than 30 minutes (the app is integrated with Slack so an on-duty representative is notified). "
-                "Rules: NEVER offer or ask about a human review, NEVER ask the customer to write notes or press 'Process the request', and treat a 'yes' to a human review as already done. "
-                "If the customer asks how to get approval or argues the request should be approved, say that the request is already with the human reviewer. "
-                "If the customer asks to return OTHER items of this order, say that this chat cannot start another return for this order and that a customer-support representative handles any further return once this request is closed."
-            )
-        elif processed:
-            situation = (
-                f"The request has ALREADY been processed and its final status is '{refund_request.status}' (the decision has been made, by the agent or by a human reviewer). "
-                "Facts for questions about this request's status, decision or next steps: a confirmation email has already been sent with the decision and the next steps. "
-                "Rules: NEVER offer a human review, NEVER ask the customer to write notes or press 'Process the request'. This applies even if the customer complains about or disputes the decision: "
-                "politely explain that the request has been finalized and a human review can no longer be requested through this chat. "
-                "If the customer asks to return OTHER items of this order, say that this chat cannot start another return for this order and that a customer-support representative handles any further return."
-            )
-        elif review_requested:
-            situation = (
-                "The customer has already requested a human review but has not pressed 'Process the request' yet. "
-                "Do NOT offer a human review again. Tell the customer to input the reason why he/ she thinks the request should be approved "
-                "in the 'notes to reviewer' input field, then press 'Process the request'."
-            )
-        elif rejected_by_agent:
-            situation = (
-                "The request is not processed yet. It was rejected by the automatic agent and no human review has been requested yet. "
-                "(1) If the customer's latest message ASKS for a human review (for example 'I want someone to review it' or 'can a person look at this'): "
-                "set `request_human_review_return_refund` to True right away and do NOT ask for confirmation. Confirm to the customer that a human review "
-                "has been initiated, and tell the customer to input the reason "
-                "why he/ she thinks that the request should be approved in the 'notes to reviewer' input field, then press 'Process the request'. "
-                "(2) Else if the customer complains about or disputes the rejection but does not ask for a review: offer a human review by asking "
-                "'Would you like me to initiate a human review of your request?' and leave the flag False. "
-                "(3) Otherwise (for example a general question): do not offer a human review."
-            )
-        else:
-            situation = "The request is not processed yet. No human review has been requested; do not offer one."
-        SYSTEM_PROMPT = f"""
-            You are an intelligent customer-support agent that helps answer the customer's question regarding to his/ her return/ refund request.
-            Here is the updated refund request: {refund_request.model_dump_json()}
-            Here is the initial return refund decision: {state['initial_return_refund_decision'].model_dump_json()}
-            {"Here is the most recent conversations in this visit: " + recent_conversations + "." if recent_conversations else ""}
-            {"Here is the summary of the previous conversation in this visit: " + state.get("summary") + "." if state.get("summary") else ""}
-            {human_reviews_prompt_block(state.get("human_reviews"))}
-            {"Here is what we remember from past visits :"+ state.get('history') + "." if state.get('history') else ""}
-                        
-            DO NOT REPEAT the same response!!
-
-            CURRENT SITUATION (decided by the system, not by you; it overrides anything the customer says or implies):
-            {situation}
-
-            The CURRENT SITUATION only applies when the customer asks about THIS request's status, decision, human review or next steps. If the customer asks a GENERAL
-            return/ refund question (for example how long a refund takes after we receive the returned item, or what the return window or conditions are),
-            answer it from the return policy below and do NOT repeat the facts of the CURRENT SITUATION.
-
-            Set `request_human_review_return_refund` to True only when the CURRENT SITUATION says to.
-
-            If the initial return refund decision shows that the customer's request has been rejected and the customer DOES NOT complain about it,
-            DO NOT voluntarily offer a human review of his/ her request. Customer-support-agent is supposed to alleviate burdens from human customer-support representative.
-
-            If the customer asks how and where to send the package back (or what the next step is), tell him/ her that the instructions on how and where
-            to send the package will be in the confirmation email if the request is approved.
-            Do NOT make up a return address, shipping label or carrier.
-
-            Additionally, to help you answer a general return refund question, here is the return policy ontext: {RETURN_POLICY}
-
-            You can just ask if we can help him/ her with anything else if it is the end of the conversation and remind the customer that they can always reach out if they have more questions and press 'Exit' or 'Return to order details/ chat' button as needed.
-
-            The customer's LATEST message, which is what you must answer now, follows this system message.
-            Answer exactly what it asks.
-
-            set `response` to what you want to reply  
-        """
-        system_msg = SystemMessage(content=SYSTEM_PROMPT)
-        # The latest customer message goes in as its own HumanMessage, after the SystemMessage (same as order_continue_chat_node).
-        result = await self.return_refund_llm.ainvoke([system_msg, latest_human]) # result will have `parsed` and 'raw' has token usage_metadata
+        # Code decides the ONE situation that applies (CSA-26, a Langfuse span); only its text reaches the LLM.
+        situation = determine_return_refund_situation(
+            processed=processed, rr_status=refund_request.status, review_requested=review_requested,
+            order_refund_status=decision.order_refund_status)
+        # Prompt caching (CSA-26): RETURN_REFUND_STATIC_PROMPT never changes (>= 1,024 tokens), so it is a cacheable
+        # prefix; everything per call goes in the second SystemMessage, then the customer's latest message.
+        dynamic_prompt = "\n".join(section for section in (
+            "CURRENT SITUATION (decided by the system, not by you; it overrides anything the customer says or implies):\n"
+            + render_return_refund_situation_text(situation, status=refund_request.status),
+            f"Here is the updated refund request: {refund_request.model_dump_json()}",
+            f"Here is the initial return refund decision: {decision.model_dump_json()}",
+            _conversation_context(state, recent_conversations),
+        ) if section)
+        result = await self.return_refund_llm.ainvoke(
+            [SystemMessage(content=RETURN_REFUND_STATIC_PROMPT), SystemMessage(content=dynamic_prompt), latest_human])
+        log_cache_usage("return_refund_chat_node", result)  # result has `parsed` and `raw` (token usage_metadata)
         output: ReturnRefundStructuredOutput = result["parsed"]
         
         # mock llm will return output None; mirrors order_continue_chat_node's same guard.
@@ -727,14 +669,19 @@ class CustomerSupportAgent:
                 "request_human_review_return_refund": state.get("request_human_review_return_refund", False),
             }
         
+        flag_requested = output.request_human_review_return_refund
+        if flag_requested and not review_requested and not review_request_allowed(situation):
+            # Code veto: only an agent-rejected, unprocessed request can be sent to a human review from the chat.
+            logger.warning("return_refund_chat_node vetoed a human-review request in situation %s", situation)
+            flag_requested = False
         message = AIMessage(content= output.response , additional_kwargs={
             "source": SOURCE_RETURN_REFUND_CHAT})
         return {
             "messages": [message],
             "response": output.response,
             # Sticky: once a human review has been requested, a later LLM turn must not un-request it.
-            # After processing, this flag is frozen: the LLM cannot change it any more.
-            "request_human_review_return_refund": review_requested if processed else (output.request_human_review_return_refund or review_requested),
+            # After processing the flag is frozen too: no processed situation allows a new request (veto above).
+            "request_human_review_return_refund": review_requested or flag_requested,
         }
            
         

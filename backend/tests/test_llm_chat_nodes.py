@@ -11,11 +11,12 @@ import os
 
 import pytest
 
-from tests.llm_harness.cases import ORDER_CONTINUE_CASES, RETURN_REFUND_CASES, REVISIT_CASES, TEST_CUSTOMER, ORDER_ID, NOW
-from datetime import timedelta
+from tests.llm_harness.cases import ORDER_CONTINUE_CASES, RETURN_REFUND_CASES, REVISIT_CASES, FakeRedisAdapter, per_customer, \
+    build_return_refund_state
 from tests.llm_harness import harness
 from tests.llm_harness.harness import RESULTS, build_agent, run_case
-from models.customer_support_model import RefundRequest, ReturnedOrder, ReturnedOrderItem
+from models.customer_support_model import OrderRefundStatus
+from tests.llm_harness.usage import UsageLog, UsageRecorder
 
 TRIALS = int(os.getenv("LLM_TRIALS", "5"))
 
@@ -47,45 +48,55 @@ def _evaluate(node, case):
         pytest.fail(message)
 
 
-def make_refund_request(status: str, notes: str | None = None) -> RefundRequest:
-    return RefundRequest(
-        refund_request_id=1001, request_date=NOW, status=status,
-        notes_for_human_review_override=notes,
-        customer=TEST_CUSTOMER,
-        returned_order=ReturnedOrder(
-            origin_order_id=ORDER_ID, original_delivery_date=NOW - timedelta(days=40), tax_applied_rate=0.085,
-            estimated_amount_refund_incl_tax=108.5,
-            items=[ReturnedOrderItem(product_id="PRD-1", product_name="Wine Glasses", supplier_name="Heritage Brands",
-                                    unit_price=25.0, number_units=4)],
-        ),
-    )
-
-
-class _FakeRedisAdapter:
-    """Serves the case's refund request the way Redis would (by id and by order)."""
-    def __init__(self, status: str | None):
-        self.status = status
-
-    async def retrieve_refund_request(self, refund_request_id: int) -> RefundRequest | None:
-        return make_refund_request(self.status)
-
-    async def retrieve_refund_requests_by_order(self, origin_order_id: int) -> list[RefundRequest]:
-        return [make_refund_request(self.status)] if self.status else []
-
-
 @pytest.mark.parametrize("case", RETURN_REFUND_CASES, ids=lambda c: c.id)
 def test_return_refund_chat_node(case):
-    agent_with_redis = build_agent(harness.REQUESTED_MODEL, harness.REQUESTED_TEMPERATURE, redis_adapter=_FakeRedisAdapter(case.rr_status))
+    agent_with_redis = build_agent(harness.REQUESTED_MODEL, harness.REQUESTED_TEMPERATURE, redis_adapter=FakeRedisAdapter(case.rr_status))
     _evaluate(agent_with_redis.return_refund_chat_node, case)
 
 
 @pytest.mark.parametrize("case", ORDER_CONTINUE_CASES, ids=lambda c: c.id)
 def test_order_continue_chat_node(case):
     # The order node reads the order's refund request from Redis too; cases without rr_status see none.
-    agent_with_redis = build_agent(harness.REQUESTED_MODEL, harness.REQUESTED_TEMPERATURE, redis_adapter=_FakeRedisAdapter(case.rr_status))
-    _evaluate(agent_with_redis.order_continue_chat_node, case)
+    agent_with_redis = build_agent(harness.REQUESTED_MODEL, harness.REQUESTED_TEMPERATURE, redis_adapter=FakeRedisAdapter(case.rr_status))
+    _evaluate(per_customer(agent_with_redis.order_continue_chat_node), case)
 
 
 @pytest.mark.parametrize("case", REVISIT_CASES, ids=lambda c: c.id)
 def test_detect_order_revisit_node(agent, case):
     _evaluate(agent.detect_order_revisit_node, case)
+
+
+# --- prompt caching against the real API (CSA-26) ------------------------------------------------------------
+
+def test_return_refund_chat_node_hits_the_prompt_cache():
+    """Different customers/ situations share only the static SystemMessage (RETURN_REFUND_STATIC_PROMPT), which must
+    be served from OpenAI's cache. (order_continue_chat_node's static prompt is below the 1,024-token minimum on purpose.)
+
+    Caching is best-effort (a request may land on a machine without the prefix), so after one warm-up call at least
+    one of the next calls must read >= 1,024 cached tokens. Uses its own UsageLog (not the cost report).
+    """
+    log = UsageLog()
+    agent = build_agent(harness.REQUESTED_MODEL, harness.REQUESTED_TEMPERATURE, redis_adapter=FakeRedisAdapter("pending"))
+    agent.return_refund_llm = UsageRecorder(agent.return_refund_llm.inner, "return_refund_chat_node", None, log)
+    states = [build_return_refund_state(rr_being_processed=False, flag=False, question=q, initial=initial)
+              for q, initial in (("hi", OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS),
+                                 ("Why was it rejected?", OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_ITEMS),
+                                 ("When do I get my money?", OrderRefundStatus.ORDER_AUTO_REFUNDABLE),
+                                 ("Can someone review it?", OrderRefundStatus.ORDER_NON_REFUNDABLE_DUE_TO_DAYS),
+                                 ("How long is the return window?", OrderRefundStatus.ORDER_HUMAN_REFUNDABLE_DUE_TO_AMOUNT))]
+
+    async def run_sequentially():
+        for state in states:  # sequential on purpose: the warm-up must finish before the next call
+            for attempt in range(4):  # same transient-error policy as harness.run_case
+                try:
+                    await agent.return_refund_chat_node(state)
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    if not harness.is_transient(exc) or attempt == 3:
+                        raise
+                    await asyncio.sleep(2 ** attempt)
+    asyncio.run(run_sequentially())
+
+    cached = [call.cache_read for call in log.calls]
+    assert len(cached) == len(states)
+    assert max(cached[1:]) >= 1024, f"no prompt-cache hit after warm-up, cache_read per call = {cached}"

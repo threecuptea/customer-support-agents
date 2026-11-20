@@ -25,6 +25,11 @@ USE_MOCK_LLM=true uv run pytest -v   # run all backend tests
 RUN_LLM_TESTS=1 uv run pytest -m llm -s # for LLM harness tests
 # Variants, (default temperature 0; LLM_TRIALS=20 for fewer flukes, and default model is gpt-4o-mini ),    
 LLM_MODEL=gpt-4.1 [LLM_TEMPERATURE=0.7] [LLM_TRIALS=5] RUN_LLM_TESTS=1 uv run pytest -m llm -s  
+# Token usage/ cost of the chat nodes (see "LLM cost harness and prompt caching" below): write a per-node summary,
+# then diff two summaries (e.g. before vs. after a prompt change, or model A vs. model B)
+LLM_MODEL=gpt-4.1-mini LLM_TRIALS=10 LLM_COST_OUT=../data/llm_cost/after_gpt-4.1-mini.json RUN_LLM_TESTS=1 uv run pytest -m llm -s
+uv run python scripts/compare_llm_cost.py ../data/llm_cost/before_gpt-4.1-mini.json ../data/llm_cost/after_gpt-4.1-mini.json
+RUN_LLM_TESTS=1 uv run pytest -m llm -s -k prompt_cache   # real-API prompt-cache hit test only
 
 uv run uvicorn main:app --reload     # dev server on :8000
 uv run uvicorn --port 8080 slack_webhook:app --reload # slack_webhook on :8080
@@ -153,7 +158,18 @@ Fixed by anchoring both at `DATA_DIR = BACKEND_DIR.parent / "data"` in `main.py`
 `.env`/`.env.example` now just use bare filenames (`checkpoints.sqlite`, `stores.sqlite`); leaving both unset still falls back to in-memory `MemorySaver`/`InMemoryStore` as before.
 
 ### LLM Test Harness
-We implement LLM test harness: `test/llm_haness` and `tests/test_chat_nodes.py`.  We add a lot of test cases for both `order_llm_for_inquiry_chat` and `return_refund_llm`. We now have a tool to automate evaluating LLM output quality and ensuring its stability.  Please run LLM test harness whenever we add new test cases against `gpt-4o-mini` as well as `gpt-4.1` with at least 10 trials to make sure all test cases pass 80% passing threshold. I also gear toward making use of prompt caching as possible. 
+We implement LLM test harness: `test/llm_haness` and `tests/test_chat_nodes.py`.  We add a lot of test cases for both `order_llm_for_inquiry_chat` and `return_refund_llm`. We now have a tool to automate evaluating LLM output quality and ensuring its stability.  Please run LLM test harness whenever we add new test cases against `gpt-4o-mini` as well as `gpt-4.1-mini` with at least 10 trials to make sure all test cases pass 80% passing threshold. I also gear toward making use of prompt caching as possible. 
+
+### LLM cost harness and prompt caching (CSA-26)
+- **Prompt layout of the chat nodes**: `[SystemMessage(static), SystemMessage(per-call), HumanMessage(latest customer message)]`. The static part never changes, so OpenAI can serve it from its prompt cache: `RETURN_REFUND_STATIC_PROMPT` (`workflow/return_refund_situation.py`, ~1,220 tokens, cached) and `ORDER_STATIC_PROMPT` (`workflow/order_situation.py`, ~330 tokens, below OpenAI's 1,024-token minimum, so not cached). Everything per call (CURRENT SITUATION, order/ refund request JSON, conversation) goes in the second message. **Never put a per-call value into a static prompt**: one changed character loses the cache.
+- **Situations**: both chat nodes pick ONE situation in code, `determine_order_situation` and `determine_return_refund_situation`, each a Langfuse span (input + output), so a bad reply can be traced to either a wrong situation or a wrong LLM answer.
+- **Cost recorder**: `tests/llm_harness/usage.py` wraps the two chat nodes' LLMs during a harness run and records `input_tokens`, `cache_read` and `output_tokens` from `usage_metadata`. The terminal summary prints a per-node table; `LLM_COST_OUT=path.json` also writes it to a file. `scripts/compare_llm_cost.py before.json after.json` diffs two such files. Keep the files in `data/llm_cost/` (git-ignored).
+- **Prices are hard-coded** in `PRICES` (`tests/llm_harness/usage.py`, USD per 1M tokens: input, cached input, output). Update them when OpenAI changes prices or a new model is used (an unknown model shows `n/a`). A before/after comparison of the same model is still valid when prices change, if both files are compared with the same prices.
+- **Per-call data is unique in the harness** (`tests/llm_harness/cases.py` `_UNIQUE`): without it every trial of a case sends a byte-identical prompt and the WHOLE prompt is cached, overstating cache hits (80-95% in the harness vs. 0 in production before CSA-26).
+- **Cache tests**: `tests/test_prompt_caching.py` (offline) checks the layout, that the static prompt is identical across states, and that `RETURN_REFUND_STATIC_PROMPT` is >= 1,024 tokens (tiktoken). `tests/test_llm_chat_nodes.py::test_return_refund_chat_node_hits_the_prompt_cache` (real API, `-m llm`) checks `cache_read >= 1,024` after a warm-up. Caching is best-effort, so an occasional miss under load is possible.
+- **CSA-26 measurement** (10 trials, cost per call): return_refund_chat_node -38% (gpt-4o-mini), -40% (gpt-4.1-mini), -38% (gpt-4.1) with 70-100% cache hits. Padding `ORDER_STATIC_PROMPT` with background text to pass 1,024 tokens was measured and rejected (+5% gpt-4o-mini, -4% gpt-4.1-mini, +27% gpt-4.1).
+- **Do not use OpenAI's `prompt_cache_key`**: tried in CSA-25 and CSA-26, and cache hits dropped with it. (Also, `.bind(...)` before `.with_structured_output(...)` silently drops bound kwargs.)
+- **Model choice**: if the harness ever shows that `gpt-4.1-mini` is the best balance of quality and cost, switch `DEFAULT_CHAT_NODE_MODEL` in `workflow/customer_support.py` to `gpt-4.1-mini` and run the harness against `gpt-4.1-mini` and `gpt-4o-mini` instead of `gpt-4.1`.
 
 ## Color Scheme
 

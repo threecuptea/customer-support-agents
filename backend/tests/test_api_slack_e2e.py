@@ -47,7 +47,8 @@ def order_chat_prompts(main_client, monkeypatch):
 
     class _EchoOrderChatLLM:
         async def ainvoke(self, messages):
-            prompts.append(str(messages[0].content))
+            # All system messages: the static (cacheable) one and the per-call one (CSA-26); the last is the customer's.
+            prompts.append("\n".join(str(m.content) for m in messages[:-1]))
             return {"parsed": OrderStructuredOutput(response="Noted.", escalate=False, escalation_reason=None)}
 
     monkeypatch.setattr(agent, "order_llm_for_inquiry_chat", _EchoOrderChatLLM())

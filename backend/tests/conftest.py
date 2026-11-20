@@ -109,3 +109,12 @@ def pytest_terminal_summary(terminalreporter):
     if RESULTS:
         terminalreporter.section("real-LLM harness report")
         terminalreporter.write_line(format_report(RESULTS))
+    from tests.llm_harness.usage import USAGE
+    if USAGE.calls:
+        terminalreporter.section("real-LLM token usage and cost (chat nodes)")
+        terminalreporter.write_line(USAGE.format_report())
+        # e.g. LLM_COST_OUT=../data/cost_before_gpt-4.1.json; diff two files with scripts/compare_llm_cost.py
+        out = os.getenv("LLM_COST_OUT")
+        if out:
+            USAGE.write_json(out, dict(harness.RUN_INFO))
+            terminalreporter.write_line(f"usage summary written to {out}")
