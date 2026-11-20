@@ -55,7 +55,7 @@ SOURCE_RETURN_REFUND_CHAT = "return_refund_chat"
 ROLE_FUNCTION = "function"
 ROLE_AGENT = "assistant"
 
-DEFAULT_CHAT_NODE_MODEL = "gpt-4.1"
+DEFAULT_CHAT_NODE_MODEL = "gpt-4.1-mini"
 
 
 def _flow(text: str) -> str:
