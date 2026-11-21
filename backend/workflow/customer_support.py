@@ -151,7 +151,7 @@ class CustomerSupportAgent:
         flags_cleared = {"summarize_due": False, "summarize_on_exit": False}
         newest_message_id = state["messages"][-1].id if state.get("messages") else None
         if newest_message_id is None or newest_message_id == state.get("last_summarized_message_id"):
-            logger.debug("summarize_node: nothing new to summarize since the last summary; skipped")
+            logger.info("summarize_node: nothing new to summarize since the last summary; skipped")
             return flags_cleared
 
         shared_instruction = "Focus on: any order(s) mentioned, order number and product name, and what order/ product issue occurred and what suggestions were given or actions were taken if any." \
