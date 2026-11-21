@@ -2,6 +2,7 @@ import asyncio
 
 from dotenv import load_dotenv
 from fastapi.testclient import TestClient
+from tests.background import SummaryDrainingTestClient
 from langchain_core.messages import AIMessage, ChatMessage, HumanMessage, SystemMessage
 
 import pytest
@@ -24,7 +25,7 @@ shared_order_id = 12462
 @pytest.fixture(scope="class")
 def client():
     # `with` triggers the FastAPI lifespan so app.state.support_graph is built.
-    with TestClient(app) as test_client:
+    with SummaryDrainingTestClient(app) as test_client:
         yield test_client
 
 # `redis_client` fixture lives in conftest.py (dedicated test Redis DB, never the dev DB 0).
@@ -91,9 +92,13 @@ def test_api_invoke_exchange_return_recommendation(client, reason_option, in_res
     graph = client.app.state.support_graph
     config = {"configurable": {"thread_id": thread_id}}
     snapshot = asyncio.run(graph.aget_state(config))
+    # CSA-30: the recommendation summarizes only at the message-count threshold. The summary is still the one written
+    # (in the background) after order init, which covered the 2 init messages; the 2 new ones are kept unsummarized.
     assert snapshot.values.get("summary")
-    assert len(snapshot.values["messages"]) == 2
+    assert not snapshot.values.get("summarize_due")
+    assert len(snapshot.values["messages"]) == 4
     messages = snapshot.values["messages"]
+    assert snapshot.values["last_summarized_message_id"] == messages[1].id
     assert isinstance(messages[-1], ChatMessage)
     chat_message = messages[-1]
     assert chat_message.role == ROLE_AGENT
@@ -163,9 +168,12 @@ def test_api_invoke_return_refund_init_workflow(client, email_addr, expected_ord
     graph = client.app.state.support_graph
     config = {"configurable": {"thread_id": thread_id}}
     snapshot = asyncio.run(graph.aget_state(config))
+    # CSA-30: the initial decision summarizes only at the message-count threshold (see the recommendation test above).
     assert snapshot.values.get("summary")
-    assert len(snapshot.values["messages"]) == 2
+    assert not snapshot.values.get("summarize_due")
+    assert len(snapshot.values["messages"]) == 4
     messages = snapshot.values["messages"]
+    assert snapshot.values["last_summarized_message_id"] == messages[1].id
     assert isinstance(messages[-1], ChatMessage)
     chat_message = messages[-1]
     assert chat_message.role == ROLE_FUNCTION

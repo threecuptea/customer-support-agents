@@ -8,6 +8,7 @@ import os
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.background import SummaryDrainingTestClient
 
 
 os.environ.setdefault("USE_MOCK_LLM", "true")
@@ -18,7 +19,7 @@ from main import app
 @pytest.fixture()
 def client():
     # `with` triggers the FastAPI lifespan so app.state.graph is built.
-    with TestClient(app) as test_client:
+    with SummaryDrainingTestClient(app) as test_client:
         yield test_client
 
 
