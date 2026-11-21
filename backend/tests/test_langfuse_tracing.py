@@ -7,6 +7,7 @@ from langchain_core.messages import AIMessage, ChatMessage, HumanMessage
 from langfuse.langchain import CallbackHandler
 
 import services.customer_support_service as svc
+from services.background_summaries import BackgroundSummaries
 from models.customer_support_model import OrderStructuredOutput
 from tests.llm_harness.cases import build_order_continue_state
 from workflow.customer_support import CustomerSupportAgent
@@ -31,7 +32,7 @@ class _FakeLangfuse:
 
 def _request(langfuse):
     graph = _FakeGraph()
-    state = SimpleNamespace(support_graph=graph, langfuse=langfuse)
+    state = SimpleNamespace(support_graph=graph, langfuse=langfuse, summaries=BackgroundSummaries())
     return SimpleNamespace(app=SimpleNamespace(state=state), session={"email": "a@b.com"}), graph
 
 
@@ -40,7 +41,8 @@ def test_ainvoke_graph_without_langfuse_passes_config_through():
     config = {"configurable": {"thread_id": "t1"}}
     result = asyncio.run(svc._ainvoke_graph(request, {"x": 1}, config, run_name="r", tags=["t"], invoke_from="f"))
     assert result == {"response": "ok"}
-    assert graph.calls == [({"x": 1}, {"configurable": {"thread_id": "t1"}})]
+    # CSA-30: a request flow's input always resets both summary flags
+    assert graph.calls == [({"x": 1, "summarize_due": False, "summarize_on_exit": False}, {"configurable": {"thread_id": "t1"}})]
 
 
 def test_ainvoke_graph_with_langfuse_adds_callback_and_attributes(monkeypatch):

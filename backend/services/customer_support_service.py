@@ -21,23 +21,60 @@ integrate_slack = os.getenv("INTEGRATE_SLACK", "false").lower() == "true"
 LANGFUSE_CSA_TRACE_NAME = "CS-Agents"
 
 
+# invoke_from values of the two summary runs: Exit (invoke_summarize_on_exit) and the background run (CSA-30).
+SUMMARIZE_INVOKES = frozenset({"summarize_on_exit", "summarize_due"})
+
+
 async def _ainvoke_graph(request: Request, graph_input: dict, config: dict, *, run_name: str, tags: list[str],
                          invoke_from: str) -> dict:
-    """Invoke the customer-support graph, traced in LangFuse when `app.state.langfuse` is set (see main.py lifespan).
-    One CallbackHandler per request, as LangFuse advises. No flush here: the SDK exports in the background and
-    main.py's lifespan calls `shutdown()` on exit, so a request never waits on LangFuse."""
-    graph = request.app.state.support_graph
-    if not request.app.state.langfuse:
-        return await graph.ainvoke(graph_input, config)
-    config = {**config, "callbacks": [CallbackHandler()], "run_name": run_name}
-    with propagate_attributes(
-        trace_name=LANGFUSE_CSA_TRACE_NAME,
-        user_id=session_email(request),
-        session_id=config["configurable"]["thread_id"],
-        tags=tags,
-        metadata={"graph": "customer_support", "invoke_from": invoke_from},
-    ):
-        return await graph.ainvoke(graph_input, config)
+    """Invoke the customer-support graph for a request (see `_locked_ainvoke`).
+    CSA-30: a request flow never starts with a summary flag left in the checkpoint (both are reset in its input), and
+    when its run ends in `mark_summarize_due_node`, `summarize_node` is scheduled in the background on the same thread:
+    the response is returned now, the summary is written ~2-3 s later."""
+    if invoke_from not in SUMMARIZE_INVOKES:
+        graph_input = {**graph_input, "summarize_due": False, "summarize_on_exit": False}
+    user_id = session_email(request)
+    state = await _locked_ainvoke(request.app, graph_input, config, run_name=run_name, tags=tags,
+                                  invoke_from=invoke_from, user_id=user_id)
+    if state.get("summarize_due") and invoke_from not in SUMMARIZE_INVOKES:
+        # app and user_id, not request: the task outlives the request.
+        request.app.state.summaries.schedule(_background_summarize(request.app, config, user_id))
+    return state
+
+
+async def _locked_ainvoke(app, graph_input: dict, config: dict, *, run_name: str, tags: list[str],
+                          invoke_from: str, user_id: str | None) -> dict:
+    """The only place the customer-support graph is invoked: under the thread's lock (CSA-30), so a request and a
+    background summary never write the same thread's checkpoint at the same time.
+    Traced in LangFuse when `app.state.langfuse` is set (see main.py lifespan). One CallbackHandler per invoke, as
+    LangFuse advises. No flush here: the SDK exports in the background and main.py's lifespan calls `shutdown()` on
+    exit, so a request never waits on LangFuse."""
+    graph = app.state.support_graph
+    thread_id = config["configurable"]["thread_id"]
+    async with app.state.summaries.thread_lock(thread_id):
+        if not app.state.langfuse:
+            return await graph.ainvoke(graph_input, config)
+        config = {**config, "callbacks": [CallbackHandler()], "run_name": run_name}
+        with propagate_attributes(
+            trace_name=LANGFUSE_CSA_TRACE_NAME,
+            user_id=user_id,
+            session_id=thread_id,
+            tags=tags,
+            metadata={"graph": "customer_support", "invoke_from": invoke_from},
+        ):
+            return await graph.ainvoke(graph_input, config)
+
+
+async def _background_summarize(app, config: dict, user_id: str | None) -> None:
+    """CSA-30: the coroutine run by `asyncio.create_task` after a request flow marked `summarize_due`. It invokes the
+    graph directly (route_branch -> summarize_node), in its own LangFuse trace (input `{"summarize_due": True}`;
+    Exit's is `{"summarize_on_exit": True}`). Errors are logged, never raised: the customer already has the response,
+    and the next summary trigger or Exit summarizes the same messages again."""
+    try:
+        await _locked_ainvoke(app, {"summarize_due": True}, config, run_name="summarize",
+                              tags=["summarize", "background"], invoke_from="summarize_due", user_id=user_id)
+    except Exception:
+        logger.exception("Background summary failed for thread %s", config["configurable"]["thread_id"])
 
 
 async def invoke_general_others_workflow(support: GeneralSupportRequest, request: Request) -> GenericResponse:

@@ -1,12 +1,14 @@
 import asyncio
 from fastapi.testclient import TestClient
+from tests.background import SummaryDrainingTestClient
 from models.demo_data import get_demo_customer
     
 import pytest
 
 from main import app
 from models.customer_support_model import CustomerContext, Order, OrderRevisitEval, FAQMatchResult, OrderStructuredOutput, ESCALATE_REASON
-from workflow.customer_support import ESCALATE_REASON_FAQ, PREFIX_LOST_SHIPMENT, CustomerSupportAgent, ESCALATE_MESSAGE, FUNCTION_FAQ_FUZZY_MATCH, SOURCE_FAQ_FUZZY_MATCH, SOURCE_FAQ_LLM_MATCH, \
+from langgraph.graph import END
+from workflow.customer_support import SUMMARIZE_MESSAGE_THRESHOLD, ESCALATE_REASON_FAQ, PREFIX_LOST_SHIPMENT, CustomerSupportAgent, ESCALATE_MESSAGE, FUNCTION_FAQ_FUZZY_MATCH, SOURCE_FAQ_FUZZY_MATCH, SOURCE_FAQ_LLM_MATCH, \
     ROLE_FUNCTION, ROLE_AGENT, FAQ_MATCH_THRESHOLD, SYSTEM_ERROR_MESSAGE, SOURCE_ORDER_RETRIEVAL, SOURCE_ORDER_INQUIRY, PREFIX_ANSWER_QUESTION
     
 from langchain_core.messages import HumanMessage, ChatMessage, AIMessage, RemoveMessage
@@ -20,7 +22,7 @@ general_answer = "Exchange when your item has wrong size or fit or you want a di
 @pytest.fixture(scope="class")
 def auth_client():
     # `with` triggers the FastAPI lifespan so app.state.support_graph is built.
-    with TestClient(app) as test_client:
+    with SummaryDrainingTestClient(app) as test_client:
         resp = test_client.post("/api/auth", json={"email_addr": "anderson.cooper@cnn.com"})
         customer_context = CustomerContext(**resp.json()[1])
         yield test_client, customer_context
@@ -253,13 +255,15 @@ def test_detect_order_revisit_node_true_when_llm_confirms(test_customer_context)
 
 def test_route_after_retrieve_target_order(test_customer_context):
     agent = CustomerSupportAgent(checkpointer=None, store=None)
-    assert agent.route_after_retrieve_target_order({"target_order": None}) == "summarize_node"
+    # CSA-30: the order-not-found path summarizes only at the message-count threshold
+    assert agent.route_after_retrieve_target_order({"target_order": None, "messages": []}) == END
+    assert agent.route_after_retrieve_target_order({"target_order": None, "messages": [HumanMessage(content="m")] * SUMMARIZE_MESSAGE_THRESHOLD}) == "mark_summarize_due_node"
     assert agent.route_after_retrieve_target_order({"target_order": test_customer_context.latest_orders[0]}) == "detect_order_revisit_node"
     order = test_customer_context.latest_orders[0]
     assert agent.route_after_retrieve_target_order({"target_order": order, "order_has_refund_request": False}) == "detect_order_revisit_node"
     assert agent.route_after_retrieve_target_order({"target_order": order, "order_has_refund_request": True}) == "order_continue_chat_node"
     # Not found wins over the flag
-    assert agent.route_after_retrieve_target_order({"target_order": None, "order_has_refund_request": True}) == "summarize_node"
+    assert agent.route_after_retrieve_target_order({"target_order": None, "messages": [], "order_has_refund_request": True}) == END
 
 
 class _FakeRedis:
@@ -579,6 +583,9 @@ def test_summarize_node_with_fake_llm(test_customer_context):
     result = asyncio.run(agent.summarize_node(state, config=config))
     assert "summary" in result
     assert result["summary"] == response
+    # CSA-30: the newest summarized message is recorded and both summary flags are cleared
+    assert result["last_summarized_message_id"] == "7"
+    assert result["summarize_due"] is False and result["summarize_on_exit"] is False
     assert "messages" in result
     assert len(result["messages"]) == len(messages) - 2
     for i, message in enumerate(result["messages"], start=1):

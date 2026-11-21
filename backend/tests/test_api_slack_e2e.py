@@ -4,6 +4,7 @@ import time
 import urllib.parse
 
 from fastapi.testclient import TestClient
+from tests.background import SummaryDrainingTestClient
 from dotenv import load_dotenv
 import pytest
 from adapters.slack_adapter import slack_client as slack_sdk_client
@@ -25,7 +26,7 @@ TEST_PAYLOAD = {'type': 'block_actions', 'user': {'id': 'U0BGP48TASV', 'username
 
 @pytest.fixture(scope="module")
 def main_client():
-    with TestClient(main_app) as test_client:
+    with SummaryDrainingTestClient(main_app) as test_client:
         # Both apps are started once for the module; make sure they are NOT on the dev Redis DB.
         assert test_client.app.state.redis_adapter.redis_url == TEST_REDIS_URL
         yield test_client

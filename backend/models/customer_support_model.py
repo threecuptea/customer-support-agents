@@ -187,6 +187,10 @@ class CustomerSupportState(MessagesState):
     request_human_review_return_refund: bool = False
     notes_for_human_review_override: str = None
     summarize_on_exit: bool = False
+    # CSA-30: set by mark_summarize_due_node; the service then runs summarize_node in the background, after the response.
+    summarize_due: bool = False
+    # CSA-30: id of the newest message summarize_node has covered; when it is still the newest, there is nothing new to summarize.
+    last_summarized_message_id: str | None = None
     rr_id_in_process: int = 0 # This is the ID of the refund request that we are actively working on.  It exists after a refund request is initiated and before it is fully processed.
     rr_being_processed: bool = False
 
