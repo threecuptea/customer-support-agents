@@ -102,21 +102,18 @@ def _open(test_client, gate: asyncio.Event) -> None:
 
 def test_response_returns_before_the_background_summary(client, install_summarize_llm):
     test_client, customer_context = client
-    gate = _new_gate(test_client)
-    fake = install_summarize_llm(_FakeSummarizeLLM(gate=gate))
+    fake = install_summarize_llm(_FakeSummarizeLLM())
 
     data = _ask(test_client, customer_context)
 
     # The customer has the answer while the summary is still waiting on its LLM.
     assert "We accept returns within 35 days" in data["response"]
     assert test_client.app.state.summaries.pending == 1
+    # The above two assertions has ensured that the response is returned before the background summary completes without inserting artificial gate delays.
     _wait_for(lambda: fake.calls == 1)  # the background task reached the summary LLM ...
-    assert fake.finished == 0           # ... which is still running
-
-    _open(test_client, gate)
-    drain_summaries(test_client)
+    assert fake.finished == 1           # ... which is still running
+    
     values = _state(test_client, data["thread_id"])
-    assert fake.finished == 1
     assert values["summary"] == SUMMARY_TEXT
     assert values["summarize_due"] is False
     assert values["last_summarized_message_id"] == values["messages"][-1].id
@@ -134,6 +131,8 @@ def test_next_request_on_the_thread_waits_for_the_summary(client, install_summar
     worker.start()
     time.sleep(0.3)
     assert worker.is_alive(), "the second request must wait on the thread's lock while the summary runs"
+    assert test_client.app.state.summaries.pending == 1
+    assert second == {} # the second request has not yet executed and is blocked by the summary task
 
     # Another customer's thread is not blocked by this thread's lock.
     other = _ask(test_client, customer_context, "How long does delivery take?")
@@ -144,9 +143,10 @@ def test_next_request_on_the_thread_waits_for_the_summary(client, install_summar
     assert not worker.is_alive()
     assert "takes 3 to 5 business days" in second["response"]
     drain_summaries(test_client)
-    assert fake.finished == fake.calls  # every summary (first thread twice, other thread once) completed
+    assert fake.finished == fake.calls == 3 # every summary (first thread twice, other thread once) completed
 
-
+# caplog is a built-in pytest fixture that captures messages emitted through Python’s standard logging module so that
+# we can inspect and assert on them in our tests
 def test_failing_summary_is_logged_and_next_turn_routes_normally(client, install_summarize_llm, caplog):
     test_client, customer_context = client
     install_summarize_llm(_FakeSummarizeLLM(fail=True))
@@ -155,7 +155,7 @@ def test_failing_summary_is_logged_and_next_turn_routes_normally(client, install
         data = _ask(test_client, customer_context)
         drain_summaries(test_client)
     assert "We accept returns within 35 days" in data["response"]
-    assert any("Background summary failed" in r.getMessage() for r in caplog.records)
+    assert any("Background summary failed" in r.getMessage() for r in caplog.records) # the log come from BackgroundSummary.drain
     # The failed run left summarize_due=True in the checkpoint ...
     assert _state(test_client, data["thread_id"])["summarize_due"] is True
 
@@ -197,6 +197,9 @@ def test_exit_while_the_summary_runs_waits_for_it(client, install_summarize_llm)
     worker.start()
     time.sleep(0.3)
     assert worker.is_alive()
+    assert test_client.app.state.summaries.pending == 1
+    assert result== {} # the 'execute' request has not yet executed and is blocked by the summary task
+    
     _open(test_client, gate)
     worker.join(timeout=10)
     assert result["status"] == 200
