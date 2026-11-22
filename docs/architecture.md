@@ -37,6 +37,7 @@ The decision that I set up slack_webhook as a separate FastAPI app has an unexpe
 - I will simply serialize Pydantic RefundRequest BaseModel into Redis cache as a value and deserialized it back to parse and or modify it.  I am NOT using sophisticated RDBM modeling or referential intetrity.
 - I am using demo data to dynamically adjust orders to meet refund request criteria. I also need to periodically clean up refund requests as a temporary storage for demo purpose. It is pretty easy to use redis-cli to retrieve the data to verify or clean up data.  
 - Redis is well adopted in industries.  I found that it is very easy to implement retrieve, insert, update, update with optimistic locking plus seconday index.
+
 ## Conversation summaries run in the background
 
 `summarize_node` compresses a thread's messages into `summary` and long-term memory. Request flows never wait for it: they end at `mark_summarize_due_node`, and the service runs the summary on the same thread in a background `asyncio` task after the response is returned. A per-thread `asyncio.Lock` makes the next request (or Exit) on that thread wait for an unfinished summary, so two runs never write one thread's checkpoint at the same time. Exit summarizes too, and skips the LLM when nothing is new. Details, rejected options and measurements: [CSA-30](impl/CSA-30-background-summary.md).
