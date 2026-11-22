@@ -14,7 +14,8 @@ When instructed to build a feature:
 2. Develop the feature - do not skip any step from the feature-dev 7 step process
 3. Always use `uv sync` with `pyproject.toml` instead of `pip install` with `requirements.txt` for backend build
 4. Thoroughly test the feature with unit tests and integration tests and fix any issues
-5. Submit a PR using your github tools
+5. Write the ticket's implementation note in `docs/impl/CSA-<n>-<short-name>.md` (why, design, rejected options, measurements, gotchas). Ticket notes are history: never rewrite an old one; when a later ticket overrides it, add `Superseded by CSA-<m>` at its top. Do NOT put implementation notes in CLAUDE.md: only commands, the architecture/data-flow summary and one-line [Invariants](#invariants) with a link to the note. If the ticket changes the current design, update `docs/architecture.md` and the Invariants list (rewrite, don't append)
+6. Submit a PR using your github tools
 
 ## Commands
 
@@ -183,6 +184,10 @@ We implement LLM test harness: `test/llm_haness` and `tests/test_chat_nodes.py`.
   Latency is client-side with `LLM_CONCURRENCY` (default 4) calls in flight and varies with OpenAI's load, so compare runs made with the same concurrency and close in time.
 - **Reducing latency, what was measured** (Nov 2026, off-peak): every model answers the return/refund prompt in ~1 s p50; the 3-4 s calls are busy-hour tails. Decode speed is ~60 output tokens/s on all of them, so **output length is the lever we control**. `ORDER_STATIC_PROMPT` asks for short replies (2-3 sentences, no greeting/ restating; full steps only when the situation gives steps): order-chat output -19%/-16%, p90 -15%/-4%, max -16%/-35% (gpt-4o-mini/ gpt-4.1-mini, 10 trials, all cases pass), cost +1-2%. **OpenAI priority tier was rejected**: it reported 0 cached tokens (loses the CSA-26 savings), -0.17 s p50 on gpt-4o-mini and no gain on gpt-4.1-mini. `gpt-4.1-nano` is retired (404). Streaming the reply to the UI (first text ~0.5 s) is scoped in CSA-28.
 - **Reading trace data back from Langfuse**: use the SDK, `get_client().api.observations.get_many(...)` or the paginated `get_client().iter_observation_pages(from_start_time=..., to_start_time=..., type="GENERATION", fields="core,basic,usage,model")` (`GET /api/public/v2/observations`; the v1 `/api/public/traces` endpoint was removed on 2026-11-16). The public API is rate-limited (30 requests/ window), so page with `limit=1000`.
+
+## Invariants
+Rules future code must keep. One line each; the ticket note (`docs/impl/`) has the why and the measurements. When a ticket changes a rule, update or remove its line here.
+- **Every customer-support graph invoke goes through `_locked_ainvoke`** (`services/customer_support_service.py`), under the thread's `asyncio.Lock` (`app.state.summaries`); never a `threading.Lock`. Request flows end at `mark_summarize_due_node`; the summary runs in a background task; request inputs reset `summarize_due`/ `summarize_on_exit`. API tests that read the checkpoint use `SummaryDrainingTestClient`. → [CSA-30](docs/impl/CSA-30-background-summary.md)
 
 ## Color Scheme
 

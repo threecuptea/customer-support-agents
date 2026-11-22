@@ -1,6 +1,7 @@
 import asyncio
 
 from fastapi.testclient import TestClient
+from tests.background import SummaryDrainingTestClient
 import pytest
 
 from models.customer_support_model import Customer, Order, OrderToReturn, ItemToReturn, CustomerContext, OrderRefundStatus
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 @pytest.fixture(scope="class")
 def client():
     # `with` triggers the FastAPI lifespan so main_app.state.support_graph is built.
-    with TestClient(app) as test_client:
+    with SummaryDrainingTestClient(app) as test_client:
         yield test_client
 
 def test_check_if_order_to_return_in_valid_state(client):

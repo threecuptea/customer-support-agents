@@ -24,7 +24,7 @@ config:
 graph TD;
 	__start__([<p>__start__</p>]):::first
 	summarize_node(summarize_node)
-	general_faq_eval_node(general_faq_eval_node)
+	mark_summarize_due_node(mark_summarize_due_node)
 	general_faq_fuzz_match_node(general_faq_fuzz_match_node)
 	general_faq_llm_match_node(general_faq_llm_match_node)
 	order_continue_chat_node(order_continue_chat_node)
@@ -38,7 +38,7 @@ graph TD;
 	__end__([<p>__end__</p>]):::last
 	__start__ -. &nbsp;return_refund_done_or_unknown&nbsp; .-> __end__;
 	__start__ -. &nbsp;exchange_or_return&nbsp; .-> exchange_return_reason_recommendation_node;
-	__start__ -. &nbsp;general_faq&nbsp; .-> general_faq_eval_node;
+	__start__ -. &nbsp;general_faq&nbsp; .-> general_faq_fuzz_match_node;
 	__start__ -. &nbsp;return_refund_init&nbsp; .-> initial_return_refund_decision_node;
 	__start__ -. &nbsp;order_init_done&nbsp; .-> order_continue_chat_node;
 	__start__ -. &nbsp;order_init&nbsp; .-> retrieve_target_order_node;
@@ -47,22 +47,24 @@ graph TD;
 	__start__ -.-> summarize_node;
 	detect_order_revisit_node -.-> order_continue_chat_node;
 	detect_order_revisit_node -.-> order_init_static_response_node;
-	exchange_return_reason_recommendation_node --> summarize_node;
-	general_faq_eval_node -.-> general_faq_fuzz_match_node;
-	general_faq_eval_node -.-> general_faq_llm_match_node;
-	general_faq_eval_node -.-> summarize_node;
+	exchange_return_reason_recommendation_node -.-> __end__;
+	exchange_return_reason_recommendation_node -.-> mark_summarize_due_node;
 	general_faq_fuzz_match_node -.-> general_faq_llm_match_node;
-	general_faq_fuzz_match_node -.-> summarize_node;
-	general_faq_llm_match_node --> summarize_node;
-	initial_return_refund_decision_node --> summarize_node;
+	general_faq_fuzz_match_node -.-> mark_summarize_due_node;
+	general_faq_llm_match_node --> mark_summarize_due_node;
+	initial_return_refund_decision_node -.-> __end__;
+	initial_return_refund_decision_node -.-> mark_summarize_due_node;
 	order_continue_chat_node -.-> __end__;
-	order_continue_chat_node -.-> summarize_node;
-	order_init_static_response_node --> summarize_node;
+	order_continue_chat_node -.-> mark_summarize_due_node;
+	order_init_static_response_node --> mark_summarize_due_node;
+	retrieve_target_order_node -.-> __end__;
 	retrieve_target_order_node -.-> detect_order_revisit_node;
-	retrieve_target_order_node -.-> summarize_node;
+	retrieve_target_order_node -.-> mark_summarize_due_node;
+	retrieve_target_order_node -.-> order_continue_chat_node;
 	return_refund_chat_node -.-> __end__;
-	return_refund_chat_node -.-> summarize_node;
-	return_refund_process_node --> summarize_node;
+	return_refund_chat_node -.-> mark_summarize_due_node;
+	return_refund_process_node --> mark_summarize_due_node;
+	mark_summarize_due_node --> __end__;
 	summarize_node --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0

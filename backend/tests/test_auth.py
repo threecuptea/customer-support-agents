@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+from tests.background import SummaryDrainingTestClient
 import pytest
 from models.customer_support_model import CustomerContext
 from main import app
@@ -18,7 +19,7 @@ _zoneinfo = ZoneInfo("America/New_York")
 @pytest.fixture(scope="class")
 def client():
     # `with` triggers the FastAPI lifespan so app.state.approval_graph is built. app instead of router should be the entry point.
-    with TestClient(app) as test_client:
+    with SummaryDrainingTestClient(app) as test_client:
         yield test_client
 
 

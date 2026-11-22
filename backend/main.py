@@ -28,6 +28,7 @@ from routes.customer_support import router as chat_router # noqa: E402
 from routes.auth import router as auth_router # noqa: E402
 from starlette.middleware.sessions import SessionMiddleware
 from adapters.redis_adapter import RefundRequestRedisAdapter
+from services.background_summaries import BackgroundSummaries
 from langfuse import get_client
 
 
@@ -63,6 +64,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.info("LangFuse tracing disabled.")
         app.state.langfuse = None
 
+    # CSA-30: per-thread locks + background summary tasks. Pending summaries are drained after each `yield` below,
+    # while the checkpointer/ store are still open and before LangFuse is shut down.
+    app.state.summaries = BackgroundSummaries()
+    summary_drain_timeout = float(os.getenv("SUMMARY_DRAIN_TIMEOUT", "30"))
+
     demo_mode = os.getenv("DEMO_MODE", "false").lower() == "true" # we are using demo mode in dev environment.
     checkpoint_db = _resolve_db_path(os.getenv("CHECKPOINT_DB"))
     store_db = _resolve_db_path(os.getenv("STORE_DB"))
@@ -80,6 +86,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 app.state.approval_graph = build_approval_graph(checkpointer=saver)
                 app.state.support_graph = CustomerSupportAgent(checkpointer=saver, store=store, redis_adapter=app.state.redis_adapter).build_support_graph()
                 yield
+                await app.state.summaries.drain(summary_drain_timeout)
 
     elif not demo_mode and connection_url:
         from langgraph.checkpoint.postgres import AsyncPostgresSaver
@@ -90,6 +97,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 app.state.approval_graph = build_approval_graph(checkpointer=saver)
                 app.state.support_graph = CustomerSupportAgent(checkpointer=saver, store=store, redis_adapter=app.state.redis_adapter).build_support_graph()
                 yield
+                await app.state.summaries.drain(summary_drain_timeout)
 
     else:
         logger.info("Using in-memory MemorySaver and InMemoryStore")
@@ -98,6 +106,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.approval_graph = build_approval_graph(checkpointer=saver)
         app.state.support_graph = CustomerSupportAgent(checkpointer=saver, store=store, redis_adapter=app.state.redis_adapter).build_support_graph()
         yield
+        await app.state.summaries.drain(summary_drain_timeout)
 
     await app.state.redis_adapter.disconnect()
     if app.state.langfuse:

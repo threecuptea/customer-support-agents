@@ -143,7 +143,17 @@ class CustomerSupportAgent:
         this node itself is flow-agnostic and always summarizes when invoked.
         The summary grows richer turn by turn. Token costs stay nearly flat no matter how long
         the conversation runs.
+        CSA-30: request flows no longer route here; they go to `mark_summarize_due_node` and the service runs
+        this node in the background (`summarize_due`), or on Exit (`summarize_on_exit`). Both flags are cleared
+        here. When the newest message is the one the last summary already covered (e.g. Exit right after a
+        background summary), there is nothing new: the LLM call and the memory save are skipped.
         """
+        flags_cleared = {"summarize_due": False, "summarize_on_exit": False}
+        newest_message_id = state["messages"][-1].id if state.get("messages") else None
+        if newest_message_id is None or newest_message_id == state.get("last_summarized_message_id"):
+            logger.info("summarize_node: nothing new to summarize since the last summary; skipped")
+            return flags_cleared
+
         shared_instruction = "Focus on: any order(s) mentioned, order number and product name, and what order/ product issue occurred and what suggestions were given or actions were taken if any." \
         "Record any return request created, processed and chat about if any."
         existing_summary = state.get("summary", "")
@@ -175,7 +185,16 @@ class CustomerSupportAgent:
         return {
             "summary": response.content,
             "messages": messages_to_delete,
+            "last_summarized_message_id": newest_message_id,
+            **flags_cleared,
         }
+
+    async def mark_summarize_due_node(self, state: CustomerSupportState) -> dict[str, Any]:
+        """CSA-30: the request flows end here instead of in `summarize_node`, so the customer gets the response
+        without waiting ~2-3 s for the summary LLM call. The service sees `summarize_due` after the graph returns
+        and runs `summarize_node` in the background on the same thread (see `_ainvoke_graph`).
+        No side effects here: a task started inside a node could not write its result into this thread's checkpoint."""
+        return {"summarize_due": True}
 
     ###############################################
     #               General Nodes
@@ -691,8 +710,9 @@ class CustomerSupportAgent:
     #            Routes after a node
     ###############################################
     def route_branch(self, state: CustomerSupportState) -> str:
-        # Add summarize_on_exit hook so it can be called when the customer press 'Exit'
-        if state.get("summarize_on_exit"):
+        # summarize_on_exit: the customer pressed 'Exit'. summarize_due (CSA-30): the service's background summary run.
+        # Request flows always reset both flags in their input (_ainvoke_graph), so a leftover flag never lands here.
+        if state.get("summarize_on_exit") or state.get("summarize_due"):
             return "summarize_node"
         
         match state['support_category']:
@@ -727,7 +747,7 @@ class CustomerSupportAgent:
     def route_after_retrieve_target_order(self, state: CustomerSupportState) -> str:
         if not state.get("target_order"):
             # retrieve_target_order_node already built the SYSTEM_ERROR_MESSAGE response
-            return "summarize_node"
+            return self.route_by_message_threshold(state)
         if state.get("order_has_refund_request"):
             # Skip the revisit LLM call and the static greeting: order_continue_chat_node reads the request from Redis.
             return "order_continue_chat_node"
@@ -748,20 +768,21 @@ class CustomerSupportAgent:
         """
         return topic_concluded or len(state["messages"]) >= SUMMARIZE_MESSAGE_THRESHOLD
 
+    def route_by_message_threshold(self, state: CustomerSupportState) -> str:
+        """Steps without a 'topic concluded' signal of their own summarize only at the message-count threshold."""
+        if self._should_summarize(state):
+            return "mark_summarize_due_node"
+        return END
+
     def route_after_general_faq_fuzz_match(self, state: CustomerSupportState) -> str:
         if self._should_summarize(state, state["general_issue_resolved"]):
-            return "summarize_node"
+            return "mark_summarize_due_node"
         return "general_faq_llm_match_node"
 
     def route_after_order_continue_chat(self, state: CustomerSupportState) -> str:
         if self._should_summarize(state, state.get("order_issue_escalated") or state.get("order_issue_resolved")):
-            return "summarize_node"
+            return "mark_summarize_due_node"
         return END
-
-    def route_after_return_refund_chat(self, state: CustomerSupportState) -> str:
-        if self._should_summarize(state):
-            return "summarize_node"
-        return END     
          
 
     ###############################################
@@ -782,21 +803,27 @@ class CustomerSupportAgent:
                                        "order_init": "retrieve_target_order_node",
                                        "order_init_done": "order_continue_chat_node"})
         
+        # summarize_node is reached only from START: the background summary run (summarize_due) and Exit (summarize_on_exit).
         builder.add_node("summarize_node", self.summarize_node)
         builder.add_edge("summarize_node", END)
+        # CSA-30: request flows end at mark_summarize_due_node instead of summarize_node; the service then summarizes
+        # in the background, after the response is returned.
+        builder.add_node("mark_summarize_due_node", self.mark_summarize_due_node)
+        builder.add_edge("mark_summarize_due_node", END)
+        summarize_due_or_end = {"mark_summarize_due_node": "mark_summarize_due_node", END: END}
 
         builder.add_node("general_faq_fuzz_match_node", self.general_faq_fuzz_match_node)
         builder.add_conditional_edges("general_faq_fuzz_match_node", self.route_after_general_faq_fuzz_match,
-            {"summarize_node": "summarize_node", "general_faq_llm_match_node": "general_faq_llm_match_node"})
+            {"mark_summarize_due_node": "mark_summarize_due_node", "general_faq_llm_match_node": "general_faq_llm_match_node"})
         
         builder.add_node("general_faq_llm_match_node", self.general_faq_llm_match_node)
-        builder.add_edge("general_faq_llm_match_node", "summarize_node")
+        builder.add_edge("general_faq_llm_match_node", "mark_summarize_due_node")
 
         builder.add_node("order_continue_chat_node", self.order_continue_chat_node)
 
         builder.add_node("retrieve_target_order_node", self.retrieve_target_order_node)
         builder.add_conditional_edges("retrieve_target_order_node", self.route_after_retrieve_target_order,
-            {"summarize_node": "summarize_node", "detect_order_revisit_node": "detect_order_revisit_node",
+            {**summarize_due_or_end, "detect_order_revisit_node": "detect_order_revisit_node",
              "order_continue_chat_node": "order_continue_chat_node"})
 
         builder.add_node("detect_order_revisit_node", self.detect_order_revisit_node)
@@ -805,24 +832,25 @@ class CustomerSupportAgent:
 
         builder.add_node("order_init_static_response_node", self.order_init_static_response_node)
         # It's not cost effcient to inject order_continue_chat_node with long-term memory every time it was invoke.
-        # Instead, I summarize here and include the content long-term memory so that 'order_continue_chat_node' has a good context
-        builder.add_edge("order_init_static_response_node", "summarize_node")
+        # Instead, I summarize here and include the content long-term memory so that 'order_continue_chat_node' has a good context.
+        # CSA-30: the summary runs in the background; the next order chat request waits for it (per-thread lock in the service).
+        builder.add_edge("order_init_static_response_node", "mark_summarize_due_node")
 
-        builder.add_conditional_edges("order_continue_chat_node", self.route_after_order_continue_chat,
-            {"summarize_node": "summarize_node", END: END})
+        builder.add_conditional_edges("order_continue_chat_node", self.route_after_order_continue_chat, summarize_due_or_end)
 
+        # CSA-30: exchange/return recommendation and the initial return/refund decision summarize only at the message-count
+        # threshold (the owner accepts that a customer who stops after these steps is not summarized right away).
         builder.add_node("exchange_return_reason_recommendation_node", self.exchange_return_reason_recommendation_node)
-        builder.add_edge("exchange_return_reason_recommendation_node", "summarize_node")
+        builder.add_conditional_edges("exchange_return_reason_recommendation_node", self.route_by_message_threshold, summarize_due_or_end)
 
         builder.add_node("initial_return_refund_decision_node", self.initial_return_refund_decision_node)
-        builder.add_edge("initial_return_refund_decision_node", "summarize_node")
+        builder.add_conditional_edges("initial_return_refund_decision_node", self.route_by_message_threshold, summarize_due_or_end)
 
         builder.add_node("return_refund_process_node", self.return_refund_process_node)
-        builder.add_edge("return_refund_process_node", "summarize_node")
+        builder.add_edge("return_refund_process_node", "mark_summarize_due_node")
         # Eventually need to move summarize content to customer_support_utils so that we can summarize the result after human review come back from slack
         builder.add_node("return_refund_chat_node", self.return_refund_chat_node)
-        builder.add_conditional_edges("return_refund_chat_node", self.route_after_return_refund_chat,
-            {"summarize_node": "summarize_node", END: END})
+        builder.add_conditional_edges("return_refund_chat_node", self.route_by_message_threshold, summarize_due_or_end)
 
         
         graph = builder.compile(checkpointer = self.checkpointer, store = self.store)
