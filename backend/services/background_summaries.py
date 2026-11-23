@@ -17,7 +17,7 @@ import asyncio
 import logging
 from collections.abc import AsyncGenerator, Coroutine
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +44,8 @@ class BackgroundSummaries:
         entry = self._locks.setdefault(thread_id, _ThreadLock())
         entry.users += 1
         try:
-            # This is where it locks. Not the whole thread_lock. It does allow other invocation of the same thread up to this point.
-            # Acquire the lock for this thread. Other coroutines for the same thread will wait here.
+            # This is where it locks. It does not lock the whole thread_lock. It does allow other invocation of the same thread 
+            # enter up to this point, and increment the user count.
             async with entry.lock:
                 yield
         finally:

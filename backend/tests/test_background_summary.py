@@ -102,18 +102,31 @@ def _open(test_client, gate: asyncio.Event) -> None:
 
 def test_response_returns_before_the_background_summary(client, install_summarize_llm):
     test_client, customer_context = client
-    fake = install_summarize_llm(_FakeSummarizeLLM())
+    # _ainvoke_graph schedules the summary only after _locked_ainvoke has returned the request's state (see the
+    # `summaries.schedule(...)` call there). The gate holds the summary until we open it, so the test can tell
+    # "the response did not wait" from "the summary happened to be fast", and catches a regression that awaits it.
+    gate = _new_gate(test_client)
+    fake = install_summarize_llm(_FakeSummarizeLLM(gate=gate))
 
-    data = _ask(test_client, customer_context)
-
-    # The customer has the answer while the summary is still waiting on its LLM.
-    assert "We accept returns within 35 days" in data["response"]
-    assert test_client.app.state.summaries.pending == 1
-    # The above two assertions has ensured that the response is returned before the background summary completes without inserting artificial gate delays.
+    # The request runs in a worker thread: if it ever waited for the summary, it would block on the gate,
+    # and join(timeout) turns that into a clean failure instead of a hung test.
+    result: dict = {}
+    worker = threading.Thread(target=lambda: result.update(_ask(test_client, customer_context)))
+    worker.start()
+    worker.join(timeout=5)
+    assert not worker.is_alive(), "the response must not wait for the background summary"
+    assert "We accept returns within 35 days" in result["response"]
+    assert test_client.app.state.summaries.pending == 1  # deterministic: the summary is held at the gate
     _wait_for(lambda: fake.calls == 1)  # the background task reached the summary LLM ...
-    assert fake.finished == 1           # ... which is still running
-    
-    values = _state(test_client, data["thread_id"])
+    assert fake.finished == 0           # ... which is still running
+
+    _open(test_client, gate)
+    # The fake LLM returning is not the end of summarize_node: it still saves memory and writes the checkpoint.
+    drain_summaries(test_client)
+    assert fake.finished == 1
+    assert test_client.app.state.summaries.pending == 0
+
+    values = _state(test_client, result["thread_id"])
     assert values["summary"] == SUMMARY_TEXT
     assert values["summarize_due"] is False
     assert values["last_summarized_message_id"] == values["messages"][-1].id
@@ -122,6 +135,7 @@ def test_response_returns_before_the_background_summary(client, install_summariz
 def test_next_request_on_the_thread_waits_for_the_summary(client, install_summarize_llm):
     test_client, customer_context = client
     gate = _new_gate(test_client)
+    # We have to use a gate to control the timing
     fake = install_summarize_llm(_FakeSummarizeLLM(gate=gate))
     thread_id = _ask(test_client, customer_context)["thread_id"]
 
@@ -130,6 +144,7 @@ def test_next_request_on_the_thread_waits_for_the_summary(client, install_summar
         _ask(test_client, customer_context, "How long does delivery take?", thread_id)))
     worker.start()
     time.sleep(0.3)
+    # why the second request is still alive (running): it is blocked by the thread's lock while the summary task runs
     assert worker.is_alive(), "the second request must wait on the thread's lock while the summary runs"
     assert test_client.app.state.summaries.pending == 1
     assert second == {} # the second request has not yet executed and is blocked by the summary task
@@ -140,7 +155,7 @@ def test_next_request_on_the_thread_waits_for_the_summary(client, install_summar
 
     _open(test_client, gate)
     worker.join(timeout=10)
-    assert not worker.is_alive()
+    assert not worker.is_alive() # No longer running and it is done!!
     assert "takes 3 to 5 business days" in second["response"]
     drain_summaries(test_client)
     assert fake.finished == fake.calls == 3 # every summary (first thread twice, other thread once) completed
@@ -155,7 +170,7 @@ def test_failing_summary_is_logged_and_next_turn_routes_normally(client, install
         data = _ask(test_client, customer_context)
         drain_summaries(test_client)
     assert "We accept returns within 35 days" in data["response"]
-    assert any("Background summary failed" in r.getMessage() for r in caplog.records) # the log come from BackgroundSummary.drain
+    assert any("Background summary failed" in r.getMessage() for r in caplog.records) # logged by logger.exception in _background_summarize
     # The failed run left summarize_due=True in the checkpoint ...
     assert _state(test_client, data["thread_id"])["summarize_due"] is True
 
@@ -239,8 +254,11 @@ def test_thread_lock_serializes_a_thread_and_cleans_up():
 
         async def hold(thread_id, name, delay):
             async with summaries.thread_lock(thread_id):
+                # Execute the followings only after acquiring the lock (async with entry.lock and yielding the control.)    
+                # B cannot enter the entry.lock block until A releases it. A does not block C because C is on a different thread.
                 order.append(f"{name}-in")
                 await asyncio.sleep(delay)
+                # asyncio.sleep() pauses a single coroutine without blocking the thread or event loop. b or c can continue running concurrently.
                 order.append(f"{name}-out")
 
         await asyncio.gather(hold("t1", "a", 0.05), hold("t1", "b", 0), hold("t2", "c", 0))

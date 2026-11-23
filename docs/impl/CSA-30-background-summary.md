@@ -1,5 +1,7 @@
 # CSA-30: Run summarize_node in the background, after the response is returned
 
+> Run names changed after merge: `summarize_due` (background) and `summarize_on_exit` (Exit) instead of `summarize`. See [CSA-30 post-adjustment](CSA-30-post-adjustment.md).
+
 - **Status**: current
 - **PR**: #28 (Nov 2026)
 - **Jira**: CSA-30. The agreed design is in the comment "Agreed design (Nov 20)".
