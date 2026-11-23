@@ -34,6 +34,9 @@ async def _ainvoke_graph(request: Request, graph_input: dict, config: dict, *, r
     if invoke_from not in SUMMARIZE_INVOKES:
         graph_input = {**graph_input, "summarize_due": False, "summarize_on_exit": False}
     user_id = session_email(request)
+    # 'A' will finish `mark_summarize_due_node` and return response immediately. The background summary 'S' will be scheduled in the following line.
+    # It's possible that 'B' invocation for the same thread arrives and acquire the thread lock before 'S' does, 'S' will summarize including 'B''s messages. 
+    # It might be out of order, but nothing is lost. The chance is slim ('B' got to arrive pretty fast)
     state = await _locked_ainvoke(request.app, graph_input, config, run_name=run_name, tags=tags,
                                   invoke_from=invoke_from, user_id=user_id)
     if state.get("summarize_due") and invoke_from not in SUMMARIZE_INVOKES:
@@ -51,6 +54,8 @@ async def _locked_ainvoke(app, graph_input: dict, config: dict, *, run_name: str
     exit, so a request never waits on LangFuse."""
     graph = app.state.support_graph
     thread_id = config["configurable"]["thread_id"]
+    # If a summary task and the next request for the same thread arrive, the lock ensures they don't interfere with each other.
+    # it is locked in `async with entry.lock` within the `thread_lock` context manager instead of the whole `thread_lock` function
     async with app.state.summaries.thread_lock(thread_id):
         if not app.state.langfuse:
             return await graph.ainvoke(graph_input, config)
@@ -71,7 +76,8 @@ async def _background_summarize(app, config: dict, user_id: str | None) -> None:
     Exit's is `{"summarize_on_exit": True}`). Errors are logged, never raised: the customer already has the response,
     and the next summary trigger or Exit summarizes the same messages again."""
     try:
-        await _locked_ainvoke(app, {"summarize_due": True}, config, run_name="summarize",
+        # It got to go through _locked_ainvoke, otherwise it neither acquire the thread lock for synchronization nor log langfuse trace
+        await _locked_ainvoke(app, {"summarize_due": True}, config, run_name="summarize_due",
                               tags=["summarize", "background"], invoke_from="summarize_due", user_id=user_id)
     except Exception:
         logger.exception("Background summary failed for thread %s", config["configurable"]["thread_id"])
@@ -410,7 +416,7 @@ async def invoke_summarize_on_exit(support: SummarizeOnExit, request: Request):
     await check_thread_owner(graph, thread_id, request)
     config = {"configurable": {"thread_id": thread_id}}
     try:
-        await _ainvoke_graph(request, {"summarize_on_exit": True}, config, run_name="summarize",
+        await _ainvoke_graph(request, {"summarize_on_exit": True}, config, run_name="summarize_on_exit",
             tags=["summarize"], invoke_from="summarize_on_exit")
     except Exception as exc:
         error_msg = "Error summarize on exit"

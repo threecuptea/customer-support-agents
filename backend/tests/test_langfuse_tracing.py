@@ -33,6 +33,8 @@ class _FakeLangfuse:
 def _request(langfuse):
     graph = _FakeGraph()
     state = SimpleNamespace(support_graph=graph, langfuse=langfuse, summaries=BackgroundSummaries())
+    # CSA-25, it will return app.state.support_graph with _FakeGraph instance and app.state.langfuse with the provided langfuse instance.
+    # CSA-30: app.state.summaries holds the background summaries instance. I also return request.session of email attribute.
     return SimpleNamespace(app=SimpleNamespace(state=state), session={"email": "a@b.com"}), graph
 
 
