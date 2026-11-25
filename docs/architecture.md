@@ -8,12 +8,12 @@ When human-in-the-loop step is needed, issue `interrupt` with key-value dictiona
 
 ### We will implement human-in-the-loop in the manual approve/ reject/ flag return/ refund business workflow. However, we won't use LangGraph's interrupt - Command/ resume fraemwork.
 
-The customer will receive a confirmation email instead.  It's asynchronous and non-blocking in terms of system design.  It's blocking from the business perspective.  A return/ refund request won't move forward until a CSR review it.
+The customer will receive a confirmation email instead.  It's asynchronous and non-blocking in terms of system design.  It's blocking from the business perspective because a return/ refund request won't move forward until a CSR review it.
 
 **Why do I decide not to use Langgraph interrupt - Command resume in return/ refund processing?**
-Once a thread is in `interrupted` state, we need to invoke with Command/ resume in order for the graph to operate normally.  If the app accidentally invoke the graph without Command/ resume, Langraph will issue a fresh `interrupt`. Yes, it will `re-interrupt`.  Customer-support-agent is an interactive app with multiple endpoints.  The customer might like to chat with AI agent after processing the refund request. We shouldn't block the customer from using the app after the interrupt. Then, we have to check if the thread is in `interrupted` state and invoke with Command/ resume for all endoints if it is.  Doing so will unblock the graph and defeat the purpose of `interrupted` which is blocking!!
+Once a thread is in `interrupted` state, we need to invoke with Command/ resume in order for the graph to resume properly.  If the app accidentally invoke the graph without Command/ resume, Langraph will issue a fresh `interrupt`. Yes, it will `re-interrupt`.  Customer-support-agent is an interactive app with multiple support functions and endpoints.  The customer might like to chat with AI agent after processing the refund request. We shouldn't block the customer from using the app after the interrupt. Then, we have to check if the thread is in `interrupted` state and invoke with Command/ resume for all endoints if it is.  Doing so will unblock the graph and defeat the purpose of `interrupted` which is blocking!!
 
-Langgraph interrupt - Command resume framework work well if the person to request LLM's action is also the person to review it like CSR asking LLM tp draft an email.  That works just like chatting. However, Langgraph interrupt - Command will affect the customer/user interaction in the manual approve/ reject/ flag return/ refund business worflow and does not serves its goal.  That's my concern.
+Langgraph interrupt - Command resume framework work well if the person to request LLM's action is also the person to review it like CSR asking LLM tp draft an email.  That works just like chatting. However, the customer is the person requesting a human review and CSR is the reviewer and the customer can continue engaging the interactivity. That's the difference.
 
 ## Integrate with Slack Interactivity
 
@@ -30,7 +30,7 @@ There are two ways to integrate with Slack: **WebSocket** and **HTTP**. Before u
 
 ### Prevent from 'double click' and 'double update' for concurrency
 
-- to prevent `double update`, we will only update the request if its status is at `wait_for_manual_review`
+- to prevent `double update`, we apply [Redis optimistic locking](/images/screenshot_redis_optimistic_locking.png) which is using WATCH, MULTI and EXEC commands which provide check-and-set (CAS) semantics without blocking other clients.  We only modify the refund request when its status is `wait_for_manual_review`.
 - to prevent `double click`, we will send Slack interactivity replacement w/o any button and `reason` input box plus acknowledge text. [Slack interactive replacement plus acknowledge](/images/screenshot_post_interactive_text.png) so that a CSR can tell a refund request being reviewed by his/ her colleague from the one not yet reviewed.
 
 ## To be or not to be: main:app and slack_webhook:app as separate apps or slack_webhook as an APIRouter to main:app
@@ -39,7 +39,7 @@ I made a decision to have slack_webhook as a separate FastAPI app (endpoint `/we
 
 - They serve very different purposes. main:app provides all customer-support-agents APIs and slack_webhook only provides a webhook to the slack app.
 - I want slack_webhook isolated.  I don't want customer-support-agents APIs being affected if slack_webhook went down for some reasons
-- slack_webhook in dev is exposed as a public URL and I like the security risk as limited as possible
+- slack_webhook in dev is exposed as a public URL by `ngrok` and I like the security risk as limited as possible
 
 ## Store refund requests in Redis or persistent stores like Postgres
 
