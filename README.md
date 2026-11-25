@@ -4,6 +4,18 @@
 
 ## Architecture summary & general data flow
 
+```mermaid
+sequenceDiagram
+    participant Client
+    participant API
+    participant Redis
+
+    Client->>API: POST /items
+    API->>Redis: Publish status update
+    Redis-->>API: Ack
+    API-->>Client: 202 Accepted
+```
+
 [UI] -> [API Route] -> [Service] -> [Worflow Entry] -> [Execution Node]
 
 In general, a customer-support request flows through the system following the above path.
