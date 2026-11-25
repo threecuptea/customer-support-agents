@@ -102,14 +102,14 @@ I decide to build `customer-support-agents` in DEMO_MODE because return refund i
 
 In general, a customer-support request flows through the system following the above path.
 - UI: React combined with Next.js for the frontend and enforce RBAC (role-based access control)
-- API Route: build with FastAPI and expose API endpoints and enforce RBAC
+- API Route: build with FastAPI async and expose API endpoints and enforce RBAC
 - Service: validate workflow in a valid `state`, equipped with domain knowledge, then invoke LangGraph workflow
 - Worflow Entry: routes to the desinated LangGraph node based upon the workflow `state`
 - Execution Node: retrieve and update data, execute function, and LLM calling and update `state`
 
 **customer-support-agents** workflows are built upon LangGraph framework. Short-term `state` management/ **checkpoint** and long-term memory are cross-cutting fundamentals to a LangGraph workflow. A session is called `thread` in LangGraph.  When the customer start a customer-support session, we new a `thread_id` for the first request and a workflow(graph) `state` will be created to be associated with that `thread_id`.  Whatever graph nodes that the request traverse, `state` variable updated, messages created would be stored in `state` management.
 
-A following request invokes the workflow using the same `thread_id` can retrieve the existing `state` and know where to pick up - `Worflow Entry `know what node to route to.  That's how multi-step workflow work in LangGraph. That is how its human-in-the-loop interrupt and Command resume is built upon (checkpoint). We will periodically summarize in the background recent conversations/ messages and store in the long-term memory.  When the customer exit/ logout, re-login, we will know what the previous conversation is about so that we can fine-tune the prompt accordingly and LLM can strike an intelligent conversation with the customer.  
+A following request invokes the workflow using the same `thread_id` can retrieve the existing `state` and know where to pick up - `Worflow Entry `know what node to route to.  That's how multi-step workflow work in LangGraph. That is **how its human-in-the-loop interrupt and Command resume is built upon (checkpoint)**. We will periodically summarize in the background recent conversations/ messages and store in the long-term memory.  When the customer exit/ logout, re-login, we will know what the previous conversation is about so that we can fine-tune the prompt accordingly and LLM can strike an intelligent conversation with the customer.  
 
 The main workflow will be like: a customer login in with his/ her account email address. We will lookup the customer and pre-retrieve recent orders if he/ she is a valid customer.  I call it `CustomerContext`.  **customer-support-agents** is an intelligent and friendly application and we do not require the customer to provide the order number to proceed.
 
@@ -131,7 +131,7 @@ A pre-determined eligibility/ status is decided by rules (can be customized) lik
 
 It has integrated with **Slack** for human reviews of requests outside the agent's authority. It integrates with **Redis** to store/ update/ retrieve serialized RefundRequests, It also integrates with **LangFuse** for workflow tracing and LLM-specific tracing and observability. **LangFuse helps us keep track of LLM token usages & breakdowns, cost and latency. Help us answer the question if we make use of prompt caching on LLM callings**.
 
-See @docs/architecture.md for detailed architecture design on human-in-the-loop or other topics.
+See [Architecture design details & trade-off](/docs/architecture.md) for on human-in-the-loop and other topics.
 
 ### Routing guard
 
