@@ -231,11 +231,11 @@ By now, a lot of AI engineers have consensus: LLM is **indeterministic**.  It's 
 
 I built **customer-support-agent** based upon the principle: use **deterministic** codes/ functions whenever possible. I use the 'get_initial_return_refund_decision' function in `initial_return_refund_decision_node`. 'get_initial_return_refund_decision' includes 4 sub functions from validation, populate refund request, calculate refund amount including tax to generate an initial decision based upon pre-defined rules. The node `initial_return_refund_decision_node` is **deterministic**. `return_refund_process_node` is triggered by the customer clicking 'Process the request' button. The processing flow is using codes which is **deterministic**. I and Claude even make our best effort to make  `return_refund_chat_node` as **deterministic** as possible. One AI engineer complained in Medium Digest that his LLM approve a refund request that it should not approve. That would never happen in **customer-support-agent**. 
 
-## Technical design
+## Set Up, Build and Run
 
 I decide to build `customer-support-agents` in DEMO_MODE because return refund involves the product return window. The data in database will be stale and not testable.  I dynamically adjust data in memory in DEMO mode so that they always be testable.
 
-**customer-support-agents** is a substantial project even though it runs in DEMO_MODE.  See [Commands in CLAUDE.md](./CLAUDE.md#commands) and [ Technical design in CLAUDE.md](./CLAUDE.md#technical-design) on how to set it up.
+**customer-support-agents** is a substantial project even though it runs in DEMO_MODE.  See [Commands in CLAUDE.md](./CLAUDE.md#commands) and [Technical design in CLAUDE.md](./CLAUDE.md#technical-design) for the details.
 
 ## LICENSE
 
