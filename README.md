@@ -179,7 +179,7 @@ Poeple have mis-understandings that AI will automate all business workflows.  In
 - For `return_refund_chat_node`, we are able to have prompt prefix > 1,024 tokens and have cut down the cost -38% - -40%. 
 - All chat nodes now follow `[SystemMessage(static), SystemMessage(per-call), HumanMessage(latest)]` formula and keep len(SystemMessage(static)) > 1024 if possible.
 
-#### LLM execution guardrail with retry
+#### LLM execution guardrail with retries
 In LangChain (langchain-openai), there are two primary ways to handle retries for ChatOpenAI. We are using `get_llm()` wrapper that is designed calling AI models agostically. Therefore, we cannot directly access ChatOpenAI instance and its `with_retry` 
 (Runnable-Level) for fine-grained control over backoff and exception types. However, we still can have simple SDK-level retry which automatically retries transient errors (408, 409, 429 rate limits, 5xx server errors, and connection issues) using exponential backoff. However, OpenAI SDK default is a 600s read timeout x 3 attempts.  We customize it with `LLM_TIMEOUT` (default 30 s per attempt) and `LLM_MAX_RETRIES` (default 2).
 
