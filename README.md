@@ -155,15 +155,15 @@ graph TD;
 	classDef last fill:#bfb6fc
 ```
 
-## Key Technical & Business Features
+## Production-ready Features
 
-### Human-in-the-loop Guard Built in the Business Workflow along with Automation Process
+### Human-in-the-loop Gate Built in the Business Workflow along with Automation Process
 Poeple have mis-understandings that AI will automate all business workflows.  In reality, anything out of door involves liability and big financial cost are still guarded with human reviews. I design `customer-support-agents`, and know how difficult to design SYSTEM_PROMPT for `order_continue_chat_node`. There is no script to cover all scenario.  That's why `order_continue_chat_node` and `return_refund_chat_node` both have 'If you cannot answer, escalate it to CSR...' in their SYSTEM_PROMPT. **customer-support-agents** have human-in-the-loop in two fronts:
-- It integrates with Slack Interactivity for async human review of refund requests that can not be automatically authorized, That includes refund amount execeeding auto authorized amount. 
-- It uses LangGraph `interrupt-Command(resume=resume_value)` human-in-the-loop pattern for CSR's email draft `approval` workflow to make sure emails out-of-dooor have never over-promised or said something inappropriate. 
+- It integrates with Slack Interactivity for async human review of refund requests and update them based upon the interactive feedback. 
+- It uses LangGraph `interrupt-Command(resume=resume_value)` human-in-the-loop pattern for CSR's email draft `approval` workflow.
   
 ### Prompt/ Context Engineering, Guardrails
-#### Apply the home-grown 'deterministic-prompt-text-rendered-by-situation' strategy to a system prompt/ instruction. It aims to generate deterministic high-quality output taking the context of business, recent conversation and previous conversation into consideration 
+#### Apply the 'deterministic-prompt-text-rendered-by-situation' strategy to a system prompt/ instruction. It aims to generate deterministic high-quality output taking the context of business, recent conversation and previous conversation into consideration 
 - In principle, system instruction should be specific enough so that LLM will output a predictable response but general enough to cover rules, and guideline
 - `order_continue_chat_node` and `refund_request_chat_node` often deal with multiple `state` variables/ objects. When the prompt says "If the initial_return_refund_decision shows that the customer's request has been rejected by an automatic agent", LLM does not know what variables to look for that situation.
 - Instead of letting LLM guessing what object and what attribute to retrieve to decide the `situation`, we determine the `situation` based upon those variable and attribute values and render only one branch of `situation text` for LLM
@@ -220,10 +220,13 @@ LangFuse helps us keep track of LLM token usages & breakdowns, cost and latency.
 ### Cover multi-step and multi-run workflow
 **customer-support-agents** is complicated as shown in the worflow diagram.  Order inquiry topics can range from a 'pending' order, tracking an order in 'transit', find the whereabouts of a lost shipment to listen to the customer's complaint about items received and more. Each topic might involve multiple-run chats with LLM.  Returns for refunds require multiple steps: validate the state of a return order, fill out the refund request and return order and items, calcualate amount to be refund and convey the initial decision and ask if the customer proceed to process and chat along the way. `customer-support-agents` is a multi-step, multi-run (invocation) AI system overall. I elaborate how I build such an application in [AI System Design & Philosophy](#ai-system-design--philosophy) section.
 
-### A Multi-Tenant application by role
+### A Multi-Tenant application by role (RBAC)
 Users will be assigned to `csr` role if users match predefined CSR_WHITELIST or CSR_DOMAINS. Users will be assigned to `customer` role if we identify the customer as a valid customer in our system. `routes/auth.py` and `services/auth_service` are reponsible to authenticate and authorize a role when an user login and set it in the `request.session.role` variable and clear the session variable when the user fails to authenticate so there won't a security leak. 
 
 UI has guarded **customer-support-agent** by role. It's important for Fast API Route as the gateway to backend components enforces RBAC too so that hacker cannnot bypass UI and hack via OpenAPI or Swagger. All API endpoints in `routes/customer_support.py` are guarded by FastAPI `Depends`: restrict_to_customer RoleCheck and All API endpoints in `routes/approval.py` are guarded by FastAPI `Depends`: restrict_to_csr one. RoleCheck checks against `request.session.role` and return 401 Unauthorized if `request.session.role` does not exist or return 403 Forbidden when the assigned role is not authorized for the service.
+
+### Python Testing
+Automates unit, API, integration and e2e tests (API-> Slack -> CSA Webhook) with FastAPI TestClient, pytest, fixture, customized markers
 
 ## AI System Design & Philosophy
 
