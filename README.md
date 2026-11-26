@@ -205,7 +205,9 @@ Claude also get LLM_MODEL and LLM_TEMPERATURE commmand line override working.
 LangFuse helps us keep track of LLM token usages & breakdowns, cost and latency. Help us answer the question if we make use of prompt caching on LLM callings. Since using LangFuse
 - we implemented prompt-caching for both `general_faq_llm_match_node` and `return_refund_chat_node` so that we can cut down LLM token costs.
 - we implemented `determine_order_situation` and `determine_return_refund_situation` spans, each a Langfuse span (input + output), so a bad reply can be traced to either a wrong situation or a wrong LLM answer.
-- measure the reponse time reduction benefiting from running summarize in the background or not.
+
+### Summarize Conversations into long-term memory in the background
+- Cuts down the response time of major support functions to 0.03 - 0.06 s
   
 | Endpoint | Time |
 | --- | --- |
